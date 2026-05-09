@@ -1,0 +1,20 @@
+log_catch:
+  name: Fang speichern
+  description: Speichert einen Fang im Fishing Tracker.
+log_no_catch:
+  name: Kein Fang speichern
+  description: Speichert eine Session ohne Fang.
+import_csv:
+  name: CSV importieren
+  fields:
+    path:
+      required: false
+      default: /config/www/fishing_tracker.csv
+      selector: {text: null}
+export_csv:
+  name: CSV exportieren
+  fields:
+    path:
+      required: false
+      default: /config/www/fishing_tracker_export.csv
+      selector: {text: null}
