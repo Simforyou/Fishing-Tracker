@@ -1,75 +1,20 @@
 log_catch:
   name: Fang speichern
   description: Speichert einen Fang im Fishing Tracker.
-  fields:
-    fish_type:
-      required: false
-      selector:
-        text:
-    spot:
-      required: false
-      selector:
-        text:
-    bait:
-      required: false
-      selector:
-        text:
-    length_cm:
-      required: false
-      selector:
-        number:
-          min: 0
-          max: 150
-          step: 1
-    notes:
-      required: false
-      selector:
-        text:
-
 log_no_catch:
   name: Kein Fang speichern
   description: Speichert eine Session ohne Fang.
-  fields:
-    fish_type:
-      required: false
-      selector:
-        text:
-    spot:
-      required: false
-      selector:
-        text:
-    bait:
-      required: false
-      selector:
-        text:
-    length_cm:
-      required: false
-      selector:
-        number:
-          min: 0
-          max: 150
-          step: 1
-    notes:
-      required: false
-      selector:
-        text:
-
 import_csv:
   name: CSV importieren
-  description: Importiert die bisherige fishing_tracker.csv.
   fields:
     path:
       required: false
       default: /config/www/fishing_tracker.csv
-      selector:
-        text:
-
+      selector: {text: null}
 export_csv:
   name: CSV exportieren
-  description: Exportiert alle internen Einträge als CSV.
   fields:
     path:
       required: false
       default: /config/www/fishing_tracker_export.csv
-      selector:
-        text:
+      selector: {text: null}
