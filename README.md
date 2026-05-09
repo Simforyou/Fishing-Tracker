@@ -9,7 +9,7 @@ Custom Integration für Fangtagebuch, Weißfisch-Prognose, Historienanalyse und 
 3. Home Assistant neu starten.
 4. Einstellungen → Geräte & Dienste → Integration hinzufügen → `Fishing Tracker`.
 5. Wetter-Entity eintragen, z. B. `weather.home`.
-6. Optional Person-Entity eintragen, z. B. `person.christian_rduch`.
+6. Optional Person-Entity eintragen, z. B. `person.xyz`.
 
 ## Services
 
