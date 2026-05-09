@@ -5,7 +5,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, PERCENTAGE, UnitOfTemperature, UnitOfPressure
+from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -29,6 +29,7 @@ async def async_setup_entry(
         RecommendationSensor(entry, store),
         WaterTemperatureSensor(hass, entry),
     ]
+
     async_add_entities(entities, True)
 
 
@@ -93,10 +94,16 @@ class BestTimeSensor(FishingBaseSensor):
         best_score = 0
         best_time = "--:--"
         points = []
+
         for i in range(0, 24):
             ts = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=i)
             score = _score_for_hour(self.hass, self.entry, self.store.entries, attrs, ts)
-            points.append({"x": int(ts.timestamp() * 1000), "y": score})
+
+            points.append({
+                "x": int(ts.timestamp() * 1000),
+                "y": score,
+            })
+
             if ts.date() == now.date() and score > best_score:
                 best_score = score
                 best_time = ts.strftime("%H:%M")
@@ -114,6 +121,9 @@ class StatsSensor(FishingBaseSensor):
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_icon = "mdi:chart-box"
 
+    def __init__(self, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "statistics", "Statistik")
+
     async def async_update(self) -> None:
         s = stats(self.store.entries)
         self._state = s.get("history_score", 50)
@@ -122,6 +132,9 @@ class StatsSensor(FishingBaseSensor):
 
 class RecommendationSensor(FishingBaseSensor):
     _attr_icon = "mdi:lightbulb-on-outline"
+
+    def __init__(self, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "recommendation", "Angel KI Empfehlung")
 
     async def async_update(self) -> None:
         self._state = recommendation(self.store.entries)[:255]
@@ -157,8 +170,10 @@ def _calculate_now(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[s
     weather = hass.states.get(weather_entity)
     attrs = weather.attributes if weather else {}
     now = datetime.now().astimezone()
+
     score = _score_for_hour(hass, entry, entries, attrs, now)
     s = stats(entries)
+
     return score, {
         "weather_entity": weather_entity,
         "temperature": _float(attrs.get("temperature"), 12),
@@ -183,6 +198,7 @@ def _score_for_hour(
 ) -> int:
     s = stats(entries)
     moon = hass.states.get("sensor.moon")
+
     return current_weather_score(
         temperature=_float(attrs.get("temperature"), 12),
         wind_speed=_float(attrs.get("wind_speed"), 10),
