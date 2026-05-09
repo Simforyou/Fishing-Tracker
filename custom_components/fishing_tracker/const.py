@@ -1,0 +1,52 @@
+DOMAIN = "fishing_tracker"
+
+CONF_WEATHER_ENTITY = "weather_entity"
+CONF_PERSON_ENTITY = "person_entity"
+CONF_NAME = "name"
+
+DEFAULT_NAME = "Fishing Tracker"
+
+PLATFORMS = ["sensor"]
+
+SERVICE_LOG_CATCH = "log_catch"
+SERVICE_LOG_NO_CATCH = "log_no_catch"
+SERVICE_IMPORT_CSV = "import_csv"
+SERVICE_EXPORT_CSV = "export_csv"
+
+STORAGE_VERSION = 1
+STORAGE_KEY = f"{DOMAIN}.data"
+
+SIGNAL_UPDATED = f"{DOMAIN}_updated"
+
+FISH_TYPES = [
+    "Weißfisch",
+    "Brasse",
+    "Rotauge",
+    "Rotfeder",
+    "Karpfen",
+    "Schleie",
+    "Barsch",
+    "Zander",
+    "Hecht",
+    "Aal",
+]
+
+SPOTS = [
+    "Windkante",
+    "Schilfkante",
+    "Kraut",
+    "Flachwasser",
+    "Tiefe Kante",
+    "Steg",
+    "Hafenecke",
+]
+
+BAITS = [
+    "Made",
+    "Pinkies",
+    "Caster",
+    "Mais",
+    "Brot",
+    "Wurm",
+    "Kombi",
+]

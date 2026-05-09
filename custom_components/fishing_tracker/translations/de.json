@@ -1,0 +1,45 @@
+{
+  "title": "Fishing Tracker",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fishing Tracker einrichten",
+        "description": "Wähle deine Wetter-Entity und optional deine Person-Entity für GPS.",
+        "data": {
+          "name": "Name",
+          "weather_entity": "Wetter-Entity",
+          "person_entity": "Person-Entity"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fishing Tracker Optionen",
+        "data": {
+          "weather_entity": "Wetter-Entity",
+          "person_entity": "Person-Entity"
+        }
+      }
+    }
+  },
+  "services": {
+    "log_catch": {
+      "name": "Fang speichern",
+      "description": "Speichert einen Fang."
+    },
+    "log_no_catch": {
+      "name": "Kein Fang speichern",
+      "description": "Speichert eine Session ohne Fang."
+    },
+    "import_csv": {
+      "name": "CSV importieren",
+      "description": "Importiert deine alte CSV-Datei."
+    },
+    "export_csv": {
+      "name": "CSV exportieren",
+      "description": "Exportiert die gespeicherten Daten als CSV."
+    }
+  }
+}

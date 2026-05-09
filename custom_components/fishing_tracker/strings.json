@@ -1,0 +1,27 @@
+{
+  "title": "Fishing Tracker",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fishing Tracker einrichten",
+        "description": "Wähle deine Wetter-Entity und optional deine Person-Entity für GPS.",
+        "data": {
+          "name": "Name",
+          "weather_entity": "Wetter-Entity",
+          "person_entity": "Person-Entity"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fishing Tracker Optionen",
+        "data": {
+          "weather_entity": "Wetter-Entity",
+          "person_entity": "Person-Entity"
+        }
+      }
+    }
+  }
+}
