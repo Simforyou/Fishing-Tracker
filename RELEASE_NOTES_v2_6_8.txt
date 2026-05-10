@@ -1,0 +1,3 @@
+v2.6.8
+- Sidebar Panel Registrierung repariert
+- Nutzt jetzt async_register_panel()

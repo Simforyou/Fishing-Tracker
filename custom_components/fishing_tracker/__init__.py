@@ -58,7 +58,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_install_frontend_files(hass)
 
     # Register own sidebar panel for the auto-dashboard.
-    hass.components.frontend.async_register_built_in_panel(
+    hass.components.frontend.async_register_panel(
         component_name="iframe",
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
