@@ -24,11 +24,11 @@ iframe{width:100%;border:0;border-radius:22px;background:#071018}.map{height:760
 @media(min-width:900px){.grid{grid-template-columns:1fr 1fr}.full{grid-column:1 / -1}.map{height:820px}.log{height:680px}.weather-grid{grid-template-columns:repeat(4,1fr)}}
 </style>
 </head>
-<body>
+<body><div class="app">
 <div class="wrap">
   <div class="header">
     <div style="display:flex;align-items:center;gap:14px;"><img src="/local/fishing_tracker_icon.png" style="width:64px;height:64px;border-radius:18px;box-shadow:0 0 20px rgba(0,140,255,.35);"><h1>Fishing Tracker</h1></div>
-    <div class="sub">Premium Dashboard · v2.6.4 · Intelligence Engine · Fischarten-Ranking · Live-Wetter</div>
+    <div class="sub">Premium Dashboard · v2.6.5 · Intelligence Engine · Fischarten-Ranking · Live-Wetter</div>
   </div>
 
   <div class="grid">
@@ -51,7 +51,7 @@ iframe{width:100%;border:0;border-radius:22px;background:#071018}.map{height:760
     <div class="card green full">
       <div class="title">🧠 Lernende Strategie</div>
       <div class="muted">
-        v2.6.4 analysiert deine Fangdaten nach Mustern, Spot-Score, Gewässerprofilen und persönlicher Strategie.
+        v2.6.5 analysiert deine Fangdaten nach Mustern, Spot-Score, Gewässerprofilen und persönlicher Strategie.
       </div>
       <ul>
         <li>automatische Mustererkennung aus Fangdaten</li>
@@ -98,7 +98,38 @@ iframe{width:100%;border:0;border-radius:22px;background:#071018}.map{height:760
     </div>
 
     <div class="card green">
-      <div class="title">📊 Fangdaten</div>
+      
+<div class="card blue full">
+  <div class="title">📡 Live Binding</div>
+  <div class="live-grid">
+    <div class="live-box">
+      <div class="live-label">Temperatur</div>
+      <div class="live-value" id="ft-temp">--</div>
+    </div>
+    <div class="live-box">
+      <div class="live-label">Luftdruck</div>
+      <div class="live-value" id="ft-pressure">--</div>
+    </div>
+    <div class="live-box">
+      <div class="live-label">Wind</div>
+      <div class="live-value" id="ft-wind">--</div>
+    </div>
+    <div class="live-box">
+      <div class="live-label">Mondphase</div>
+      <div class="live-value" id="ft-moon">--</div>
+    </div>
+    <div class="live-box">
+      <div class="live-label">Top Ranking</div>
+      <div class="live-value" id="ft-ranking">--</div>
+    </div>
+    <div class="live-box">
+      <div class="live-label">Angel KI</div>
+      <div class="live-value" id="ft-ai">--</div>
+    </div>
+  </div>
+</div>
+
+<div class="title">📊 Fangdaten</div>
       <div class="stats">
         <div class="stat"><div class="v" id="total">0</div><div class="l">Einträge</div></div>
         <div class="stat"><div class="v" id="caught">0</div><div class="l">Fänge</div></div>
@@ -148,5 +179,40 @@ async function loadData(){
 }
 loadData();
 </script>
+</div>
+<script>
+async function updateFishingTrackerLive() {
+  if (!window.parent || !window.parent.hass) {
+    return;
+  }
+
+  const hass = window.parent.hass.states;
+
+  function set(id, value){
+    const el = document.getElementById(id);
+    if(el){
+      el.textContent = value ?? "--";
+    }
+  }
+
+  const weatherTemp = hass["sensor.fishing_tracker_weather_temperature"];
+  const pressure = hass["sensor.fishing_tracker_weather_pressure"];
+  const wind = hass["sensor.fishing_tracker_weather_wind"];
+  const moon = hass["sensor.moon_phase"];
+  const ranking = hass["sensor.fishing_tracker_species_ranking"];
+  const ai = hass["sensor.fishing_tracker_advanced_intelligence"];
+
+  set("ft-temp", weatherTemp?.state + " °C");
+  set("ft-pressure", pressure?.state + " hPa");
+  set("ft-wind", wind?.state);
+  set("ft-moon", moon?.state);
+  set("ft-ranking", ranking?.state);
+  set("ft-ai", ai?.state);
+}
+
+setInterval(updateFishingTrackerLive, 3000);
+window.addEventListener("load", updateFishingTrackerLive);
+</script>
+
 </body>
 </html>

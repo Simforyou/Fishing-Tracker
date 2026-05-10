@@ -109,3 +109,16 @@
 
 ### Note
 - Home Assistant integration icon display can depend on HA Brands behavior.
+
+
+## v2.6.5
+### Added
+- Responsive fullscreen dashboard mode
+- internal scrolling
+- Home Assistant live binding
+- dynamic live sensor rendering
+- auto-refresh every 3 seconds
+
+### Improved
+- iframe/mobile scaling
+- dashboard responsiveness
