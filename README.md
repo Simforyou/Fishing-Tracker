@@ -1,13 +1,9 @@
 # Fishing Tracker Home Assistant Integration
 
-Version 0.4.3
+Version 1.0.0
 
-## Stabilitätsupdate
-- Stabilere Entity-Namen
-- Dashboard-Kompatibilität verbessert
-- HACS-Struktur bereinigt
-- Analyse-Sensoren optimiert
-- Vorbereitungen für Karten-/Heatmap-System
+## Schwerpunkt
+Stable Release
 
 ## Enthalten
 - Beißchance
@@ -19,3 +15,4 @@ Version 0.4.3
 - Zeit Analyse
 - Karten Daten
 - Fang speichern / Kein Fang speichern
+- HACS kompatibel
