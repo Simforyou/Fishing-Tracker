@@ -2,10 +2,7 @@
   "name": "Fishing Tracker",
   "render_readme": true,
   "domains": [
-    "sensor",
-    "select",
-    "number",
-    "button"
+    "fishing_tracker"
   ],
   "homeassistant": "2024.6.0"
 }
