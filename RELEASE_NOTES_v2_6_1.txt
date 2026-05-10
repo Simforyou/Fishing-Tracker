@@ -1,0 +1,27 @@
+Fishing Tracker v2.6.1
+
+Neue Funktionen
+- Advanced Intelligence Modul
+- lernende Auswertung aus Fangdaten
+- Gewässerprofile / Spotprofile
+- automatische Mustererkennung
+- Spot-Scoring / Hotspot-Erkennung
+- Kartenanalyse mit GPS-Zonen
+- persönliche Angelstrategie pro Datenbasis
+- neuer Sensor: Advanced Intelligence
+
+Nicht enthalten
+- Fangfoto-System ist bewusst NICHT enthalten.
+
+Details
+- Analyse von Fischart, Spot, Köder, Uhrzeit, Monat und Wettermustern
+- Spot-Scoring kombiniert Fangquote, Datenmenge und Fänge
+- Strategie gibt konkrete Prioritäten:
+  Zielfisch, Spot, Köder/Methode, Zeitfenster
+- Confidence-System:
+  niedrig / mittel / hoch je nach Datenmenge
+- nächstes Lernziel wird automatisch ausgegeben
+
+Dashboard
+- Auto-Dashboard erweitert mit Bereich „Lernende Strategie“
+- Neue Features erscheinen automatisch über fishing_tracker_dashboard.html

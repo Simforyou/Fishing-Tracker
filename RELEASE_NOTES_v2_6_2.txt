@@ -1,0 +1,10 @@
+Fishing Tracker v2.6.2
+
+Fixes
+- Kritischer Startfehler behoben:
+  SERVICE_INSTALL_DASHBOARD fehlte in const.py.
+- Integration kann wieder importiert und gestartet werden.
+- Version auf 2.6.2 gesetzt.
+
+Hinweis
+- Nach Installation Home Assistant vollständig neu starten.

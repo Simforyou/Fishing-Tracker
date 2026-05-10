@@ -1,0 +1,27 @@
+Fishing Tracker v2.5.0
+
+Neue Funktionen
+- Fischarten-Ranking: bewertet alle auswählbaren Fischarten gegeneinander.
+- Neuer Sensor: Fischarten Ranking.
+- Neuer Sensor: Online Wetterstatus.
+- Dashboard-App erweitert:
+  - Bereich „Heute beste Zielfische“
+  - Live-Wetterdaten-Karte
+  - Open-Meteo Wetterparameter aus v2.4.0 vorbereitet
+- Ranking enthält:
+  - Fischart
+  - Score
+  - Bewertung
+  - bestes Zeitfenster
+  - Gründe/Warnungen
+  - Köderempfehlungen
+  - Idealtemperatur
+
+Verbesserungen
+- Auto-Dashboard auf v2.5.0 aktualisiert.
+- Heatmap und Fanghistorie weiterhin automatisch eingebettet.
+- Prognose-Logik bleibt mit Online-Wetterengine kompatibel.
+
+Hinweis
+- Das Ranking wird in Home Assistant als Sensor-Attribut bereitgestellt.
+- Das Auto-Dashboard zeigt eine Übersicht und ist weiterhin über /local/fishing_tracker_dashboard.html erreichbar.

@@ -1,0 +1,18 @@
+Fishing Tracker v2.2.1
+
+Neue Funktionen
+- Vorbereitung für Online-Wetterengine (Open-Meteo Architektur)
+- Vorbereitung für automatische Cache-Versionierung
+- Erweiterte Fish Behavior Knowledge Base
+- Verbesserte Dokumentation der Fischprofile
+
+Fixes
+- Release-Notes-System eingeführt
+- Changelog wird künftig pro Release fortgeführt
+- Struktur für automatische Dashboard-/Frontend-Versionierung vorbereitet
+
+Geplante nächste Schritte
+- Open-Meteo Live-Wetterdaten über Person-Entity
+- automatische Cache-Busting URLs
+- tiefere Fischverhaltenslogik aus fundierten Quellen
+- personalisierte Lernlogik

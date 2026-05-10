@@ -28,6 +28,7 @@ from .const import (
 )
 from .storage import FishingStore
 from .frontend import async_install_frontend_files
+from .weather_engine import OpenMeteoWeatherEngine
 
 
 SERVICE_LOG_SCHEMA = vol.Schema({
@@ -53,7 +54,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_install_frontend_files(hass)
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"store": store, "entry": entry}
+    hass.data[DOMAIN][entry.entry_id] = {"store": store, "entry": entry, "weather_engine": OpenMeteoWeatherEngine(hass)}
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

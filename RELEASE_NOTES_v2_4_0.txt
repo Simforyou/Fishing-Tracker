@@ -1,0 +1,27 @@
+Fishing Tracker v2.4.0
+
+Neue Funktionen
+- Live-Wetterengine über Open-Meteo
+- Standort über konfigurierte Person-Entity
+- Wetterdaten-Cache mit 30 Minuten TTL
+- Online-Wetterwerte für Tages-/Wochenprognose
+- Luftdrucktrend aus stündlichen Open-Meteo-Daten
+- zusätzliche Wetterparameter:
+  - Windrichtung
+  - Böen
+  - Luftfeuchtigkeit
+  - Taupunkt
+  - UV-Index
+  - Niederschlagswahrscheinlichkeit
+  - Sonnenaufgang/Sonnenuntergang
+- Fallback auf lokale Home-Assistant-Wetterintegration
+
+Fixes / Verbesserungen
+- frontend_version.py korrigiert
+- Online-Wetteroption in Konfiguration vorbereitet
+- Forecast-Prognose nutzt bevorzugt Online-Wetter, falls Person-GPS verfügbar ist
+- CHANGELOG/Release Notes aktualisiert
+
+Hinweis
+- Für Online-Wetter muss eine Person-Entity mit Latitude/Longitude konfiguriert sein.
+- Wenn keine GPS-Daten verfügbar sind, nutzt die Integration weiterhin lokale HA-Wetterdaten.
