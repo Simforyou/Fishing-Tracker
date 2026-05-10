@@ -31,26 +31,38 @@ class FishingTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_PERSON_ENTITY, default=""): str,
         })
 
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+        )
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
-        return FishingTrackerOptionsFlow(config_entry)
+        return FishingTrackerOptionsFlow()
 
 
 class FishingTrackerOptionsFlow(config_entries.OptionsFlow):
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
-
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        data = {**self.config_entry.data, **self.config_entry.options}
+        config_entry = self.config_entry
+        data = {**config_entry.data, **config_entry.options}
+
         schema = vol.Schema({
-            vol.Required(CONF_WEATHER_ENTITY, default=data.get(CONF_WEATHER_ENTITY, "weather.home")): str,
-            vol.Optional(CONF_PERSON_ENTITY, default=data.get(CONF_PERSON_ENTITY, "")): str,
+            vol.Required(
+                CONF_WEATHER_ENTITY,
+                default=data.get(CONF_WEATHER_ENTITY, "weather.home"),
+            ): str,
+            vol.Optional(
+                CONF_PERSON_ENTITY,
+                default=data.get(CONF_PERSON_ENTITY, ""),
+            ): str,
         })
 
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=schema,
+        )

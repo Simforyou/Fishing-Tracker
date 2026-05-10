@@ -51,7 +51,7 @@ class FishingStore:
         await self.async_save()
 
     async def async_export_json_files(self) -> None:
-        payload = {"version": 1, "entries": self.entries, "settings": self.settings}
+        payload = {"version": 1, "entries": _fix_payload(self.entries), "settings": _fix_payload(self.settings)}
         config_path = Path(self.hass.config.path())
 
         data_dir = config_path / DATA_DIR
@@ -63,7 +63,7 @@ class FishingStore:
         (www_dir / WWW_JSON_FILE).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     async def async_export_json(self, path: str) -> int:
-        payload = {"version": 1, "entries": self.entries, "settings": self.settings}
+        payload = {"version": 1, "entries": _fix_payload(self.entries), "settings": _fix_payload(self.settings)}
         file_path = Path(path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -135,3 +135,24 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _fix_payload(value):
+    if isinstance(value, list):
+        return [_fix_payload(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _fix_payload(v) for k, v in value.items()}
+    if isinstance(value, str):
+        return _fix_text_encoding(value)
+    return value
+
+
+def _fix_text_encoding(value: str) -> str:
+    replacements = {
+        "ÃŸ": "ß", "Ã¤": "ä", "Ã¶": "ö", "Ã¼": "ü",
+        "Ã„": "Ä", "Ã–": "Ö", "Ãœ": "Ü",
+        "WeiÃŸfisch": "Weißfisch",
+    }
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+    return value
