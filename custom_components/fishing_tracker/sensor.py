@@ -310,6 +310,7 @@ def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, A
     attrs = weather.attributes if weather else {}
     s = stats(entries)
 
+    moon = hass.states.get("sensor.moon")
     points = bite_forecast_series(
         temperature=_float(attrs.get("temperature"), 12),
         wind_speed=_float(attrs.get("wind_speed"), 10),
@@ -318,6 +319,8 @@ def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, A
         precipitation=_float(attrs.get("precipitation"), 0),
         history_score=s.get("history_score", 50),
         hours=hours,
+        moon_phase=moon.state if moon else None,
+        entries=entries,
     )
 
     values = [p["score"] for p in points]
@@ -328,7 +331,7 @@ def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, A
         "best_score": best.get("score"),
         "best_time": best.get("timestamp"),
         "points": points,
-        "note": "v1.2.0 nutzt aktuelle Wetterwerte plus Uhrzeit-/Saisonmodell. Echte stündliche Forecastdaten folgen.",
+        "note": "v1.3.0 nutzt ein natürlicheres Prognosemodell mit Wetterdrift, Tagesfenstern, Mondphase, Fanghistorie und unregelmäßigen Bite-Windows.",
     }
 
 
