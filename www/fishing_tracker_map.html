@@ -1,5 +1,55 @@
 <!DOCTYPE html>
-<html><body style="background:#081018;color:white;font-family:Arial">
-<h1>🎣 Fishing Tracker Heatmap v1.1.0</h1>
-<p>OpenStreetMap / Leaflet Vorbereitung aktiv.</p>
-</body></html>
+<html lang="de">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Fishing Tracker Heatmap</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+html,body{margin:0;height:100%;background:#071018;color:white;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{min-height:100vh;background:radial-gradient(circle at 20% 0%,rgba(0,140,255,.22),transparent 32%),linear-gradient(145deg,#071018,#030507);padding:12px;box-sizing:border-box}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.title{font-size:22px;font-weight:800}
+.pill{font-size:12px;opacity:.8;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.06)}
+.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+select{width:100%;border:0;border-radius:14px;background:rgba(255,255,255,.07);color:white;padding:10px;outline:none}
+option{color:black}
+#map{height:62vh;min-height:360px;border-radius:24px;overflow:hidden;box-shadow:0 0 26px rgba(0,140,255,.14);background:#0b1118}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.stat{border-radius:18px;padding:12px;background:rgba(255,255,255,.055);box-shadow:inset 0 0 0 1px rgba(255,255,255,.035)}
+.stat .v{font-size:20px;font-weight:800}
+.stat .l{font-size:11px;opacity:.65;margin-top:3px}
+.empty{padding:18px;border-radius:20px;background:rgba(255,255,255,.055);margin-top:10px;color:rgba(255,255,255,.75)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="header"><div class="title">🗺️ Fishing Heatmap</div><div class="pill" id="updated">Lade Daten…</div></div>
+<div class="filters">
+<select id="fish"><option value="">Alle Fischarten</option></select>
+<select id="spot"><option value="">Alle Spots</option></select>
+<select id="bait"><option value="">Alle Köder</option></select>
+<select id="status"><option value="">Alle Sessions</option><option value="1">Nur Fang</option><option value="0">Nur kein Fang</option></select>
+</div>
+<div id="map"></div>
+<div class="stats">
+<div class="stat"><div class="v" id="total">0</div><div class="l">Einträge</div></div>
+<div class="stat"><div class="v" id="caught">0</div><div class="l">Fänge</div></div>
+<div class="stat"><div class="v" id="rate">0%</div><div class="l">Fangquote</div></div>
+</div>
+<div class="empty" id="empty" style="display:none">Noch keine GPS-Daten vorhanden. Fänge werden gespeichert, aber Marker erscheinen erst mit Latitude/Longitude.</div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let data=[];
+let map=L.map('map',{zoomControl:false}).setView([51.1657,10.4515],6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
+let layer=L.layerGroup().addTo(map);
+function uniq(arr){return[...new Set(arr.filter(Boolean))].sort();}
+function fill(id,values){const el=document.getElementById(id);const first=el.options[0].outerHTML;el.innerHTML=first+values.map(v=>`<option value="${String(v).replaceAll('"','&quot;')}">${v}</option>`).join('');}
+function filtered(){const f=document.getElementById('fish').value,s=document.getElementById('spot').value,b=document.getElementById('bait').value,st=document.getElementById('status').value;return data.filter(e=>(!f||e.fish_type===f)&&(!s||e.spot===s)&&(!b||e.bait===b)&&(!st||String(e.caught||0)===st));}
+function render(){layer.clearLayers();const rows=filtered();const withGps=rows.filter(e=>e.latitude!=null&&e.longitude!=null&&e.latitude!==""&&e.longitude!=="");document.getElementById('total').textContent=rows.length;const c=rows.filter(e=>Number(e.caught||0)>=1).length;document.getElementById('caught').textContent=c;document.getElementById('rate').textContent=rows.length?Math.round(c/rows.length*100)+"%":"0%";document.getElementById('empty').style.display=withGps.length?"none":"block";const bounds=[];withGps.forEach(e=>{const lat=Number(e.latitude),lon=Number(e.longitude);if(Number.isNaN(lat)||Number.isNaN(lon))return;const good=Number(e.caught||0)>=1;const color=good?"#35ff8c":"#ff4747";const marker=L.circleMarker([lat,lon],{radius:good?9:7,color,fillColor:color,fillOpacity:.55,weight:2});marker.bindPopup(`<b>${good?"🎣 Fang":"❌ Kein Fang"}</b><br>${e.fish_type||"-"} · ${e.spot||"-"}<br>Köder: ${e.bait||"-"}<br>Länge: ${e.length_cm||0} cm<br>Chance: ${e.chance||"-"} %<br><small>${e.timestamp||""}</small>`);marker.addTo(layer);bounds.push([lat,lon]);});if(bounds.length)map.fitBounds(bounds,{padding:[25,25]});}
+fetch('/local/fishing_tracker_data.json?ts='+Date.now()).then(r=>r.json()).then(payload=>{data=payload.entries||[];fill('fish',uniq(data.map(e=>e.fish_type)));fill('spot',uniq(data.map(e=>e.spot)));fill('bait',uniq(data.map(e=>e.bait)));document.getElementById('updated').textContent=data.length+" Einträge";['fish','spot','bait','status'].forEach(id=>document.getElementById(id).addEventListener('change',render));render();}).catch(err=>{document.getElementById('updated').textContent="Keine Daten";document.getElementById('empty').style.display="block";document.getElementById('empty').textContent="Noch keine fishing_tracker_data.json gefunden. Nach dem nächsten Fang wird die Datei automatisch erstellt.";});
+</script>
+</body>
+</html>

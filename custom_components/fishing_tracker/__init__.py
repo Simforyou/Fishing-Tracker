@@ -19,6 +19,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SERVICE_EXPORT_CSV,
+    SERVICE_EXPORT_JSON,
     SERVICE_IMPORT_CSV,
     SERVICE_LOG_CATCH,
     SERVICE_LOG_NO_CATCH,
@@ -38,13 +39,9 @@ SERVICE_LOG_SCHEMA = vol.Schema({
     vol.Optional("notes", default=""): cv.string,
 })
 
-SERVICE_IMPORT_SCHEMA = vol.Schema({
-    vol.Optional("path", default="/config/www/fishing_tracker.csv"): cv.string,
-})
-
-SERVICE_EXPORT_SCHEMA = vol.Schema({
-    vol.Optional("path", default="/config/www/fishing_tracker_export.csv"): cv.string,
-})
+SERVICE_IMPORT_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker.csv"): cv.string})
+SERVICE_EXPORT_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker_export.csv"): cv.string})
+SERVICE_EXPORT_JSON_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker_data.json"): cv.string})
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -52,10 +49,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await store.async_load()
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {
-        "store": store,
-        "entry": entry,
-    }
+    hass.data[DOMAIN][entry.entry_id] = {"store": store, "entry": entry}
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -73,6 +67,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await store.async_export_csv(call.data["path"])
         async_dispatcher_send(hass, SIGNAL_UPDATED)
 
+    async def handle_export_json(call: ServiceCall) -> None:
+        await store.async_export_json(call.data["path"])
+        async_dispatcher_send(hass, SIGNAL_UPDATED)
+
     if not hass.services.has_service(DOMAIN, SERVICE_LOG_CATCH):
         hass.services.async_register(DOMAIN, SERVICE_LOG_CATCH, handle_log_catch, schema=SERVICE_LOG_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_LOG_NO_CATCH):
@@ -81,6 +79,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(DOMAIN, SERVICE_IMPORT_CSV, handle_import_csv, schema=SERVICE_IMPORT_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_EXPORT_CSV):
         hass.services.async_register(DOMAIN, SERVICE_EXPORT_CSV, handle_export_csv, schema=SERVICE_EXPORT_SCHEMA)
+    if not hass.services.has_service(DOMAIN, SERVICE_EXPORT_JSON):
+        hass.services.async_register(DOMAIN, SERVICE_EXPORT_JSON, handle_export_json, schema=SERVICE_EXPORT_JSON_SCHEMA)
 
     return True
 
@@ -92,22 +92,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id, None)
 
     if not hass.data.get(DOMAIN):
-        for service in (SERVICE_LOG_CATCH, SERVICE_LOG_NO_CATCH, SERVICE_IMPORT_CSV, SERVICE_EXPORT_CSV):
+        for service in (SERVICE_LOG_CATCH, SERVICE_LOG_NO_CATCH, SERVICE_IMPORT_CSV, SERVICE_EXPORT_CSV, SERVICE_EXPORT_JSON):
             if hass.services.has_service(DOMAIN, service):
                 hass.services.async_remove(DOMAIN, service)
 
     return unload_ok
 
 
-async def async_log_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    caught: int,
-    data: dict[str, Any] | None = None,
-) -> None:
+async def async_log_entry(hass: HomeAssistant, entry: ConfigEntry, caught: int, data: dict[str, Any] | None = None) -> None:
     data = data or {}
-    domain_data = hass.data[DOMAIN][entry.entry_id]
-    store: FishingStore = domain_data["store"]
+    store: FishingStore = hass.data[DOMAIN][entry.entry_id]["store"]
     settings = store.settings
 
     weather_entity = entry.options.get(CONF_WEATHER_ENTITY) or entry.data.get(CONF_WEATHER_ENTITY)
@@ -131,6 +125,7 @@ async def async_log_entry(
     precipitation = _float(weather_attrs.get("precipitation"), 0)
 
     s = stats(store.entries)
+    moon = hass.states.get("sensor.moon")
     chance = current_weather_score(
         temperature=temperature,
         wind_speed=wind_speed,
@@ -140,7 +135,7 @@ async def async_log_entry(
         pressure_trend=0,
         hour=now.hour,
         month=now.month,
-        moon_phase=(hass.states.get("sensor.moon").state if hass.states.get("sensor.moon") else None),
+        moon_phase=moon.state if moon else None,
         history_score=s.get("history_score", 50),
     )
 

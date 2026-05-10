@@ -10,21 +10,18 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .analytics import current_weather_score, recommendation, stats
+from .analytics import bite_forecast_series, current_weather_score, recommendation, stats
 from .const import CONF_WEATHER_ENTITY, DOMAIN, SIGNAL_UPDATED
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
-    data = hass.data[DOMAIN][entry.entry_id]
-    store = data["store"]
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    store = hass.data[DOMAIN][entry.entry_id]["store"]
 
     async_add_entities([
         BiteChanceSensor(hass, entry, store),
         BestTimeSensor(hass, entry, store),
+        DayForecastSensor(hass, entry, store),
+        WeekForecastSensor(hass, entry, store),
         StatsSensor(entry, store),
         RecommendationSensor(entry, store),
         WaterTemperatureSensor(hass, entry),
@@ -58,9 +55,7 @@ class FishingBaseSensor(SensorEntity):
         return self._attrs
 
     async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            async_dispatcher_connect(self.hass, SIGNAL_UPDATED, self._handle_update)
-        )
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_UPDATED, self._handle_update))
 
     @callback
     def _handle_update(self) -> None:
@@ -91,6 +86,34 @@ class BestTimeSensor(FishingBaseSensor):
     async def async_update(self) -> None:
         result = _calculate_best_time(self.hass, self.entry, self.store.entries)
         self._state = result["zeitfenster"]
+        self._attrs = result
+
+
+class DayForecastSensor(FishingBaseSensor):
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_icon = "mdi:chart-line"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "bite_forecast_day", "Beißprognose Tag")
+        self.hass = hass
+
+    async def async_update(self) -> None:
+        result = _forecast(self.hass, self.entry, self.store.entries, 24)
+        self._state = result["current"]
+        self._attrs = result
+
+
+class WeekForecastSensor(FishingBaseSensor):
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_icon = "mdi:calendar-week"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "bite_forecast_week", "Beißprognose Woche")
+        self.hass = hass
+
+    async def async_update(self) -> None:
+        result = _forecast(self.hass, self.entry, self.store.entries, 168)
+        self._state = result["average"]
         self._attrs = result
 
 
@@ -156,30 +179,26 @@ class MapDataSensor(FishingBaseSensor):
         for item in self.store.entries:
             lat = _float(item.get("latitude"), None)
             lon = _float(item.get("longitude"), None)
-            if lat is None or lon is None:
-                continue
 
-            catch = {
-                "lat": lat,
-                "lon": lon,
-                "timestamp": item.get("timestamp"),
-                "fish_type": item.get("fish_type"),
-                "spot": item.get("spot"),
-                "bait": item.get("bait"),
-                "length_cm": item.get("length_cm"),
-                "caught": item.get("caught", 0),
-                "chance": item.get("chance"),
-            }
-            catches.append(catch)
+            if lat is not None and lon is not None:
+                catch = {
+                    "lat": lat,
+                    "lon": lon,
+                    "timestamp": item.get("timestamp"),
+                    "fish_type": item.get("fish_type"),
+                    "spot": item.get("spot"),
+                    "bait": item.get("bait"),
+                    "length_cm": item.get("length_cm"),
+                    "caught": item.get("caught", 0),
+                    "chance": item.get("chance"),
+                }
+                catches.append(catch)
 
-            if int(item.get("caught", 0)) >= 1:
-                heatmap.append([lat, lon, 0.8])
+                if int(item.get("caught", 0)) >= 1:
+                    heatmap.append([lat, lon, 0.8])
 
             spot = item.get("spot") or "Unbekannt"
-            group = spot_groups.setdefault(
-                spot,
-                {"spot": spot, "lat": lat, "lon": lon, "total": 0, "catches": 0},
-            )
+            group = spot_groups.setdefault(spot, {"spot": spot, "total": 0, "catches": 0})
             group["total"] += 1
             if int(item.get("caught", 0)) >= 1:
                 group["catches"] += 1
@@ -191,11 +210,12 @@ class MapDataSensor(FishingBaseSensor):
             group["success_rate"] = round(catches_count / total * 100, 1) if total else 0
             spots.append(group)
 
-        self._state = len(catches)
+        self._state = len(self.store.entries)
         self._attrs = {
-            "catches": catches[-200:],
-            "heatmap": heatmap[-200:],
+            "catches": catches[-300:],
+            "heatmap": heatmap[-300:],
             "spots": spots,
+            "total_entries": len(self.store.entries),
         }
 
 
@@ -207,7 +227,7 @@ class HistorySensor(FishingBaseSensor):
 
     async def async_update(self) -> None:
         entries = list(self.store.entries)
-        latest = list(reversed(entries))[:10]
+        latest = list(reversed(entries))[:20]
         s = stats(entries)
         self._state = f"{len(entries)} Einträge"
         self._attrs = {
@@ -230,10 +250,7 @@ class SpotAnalysisSensor(FishingBaseSensor):
         s = stats(self.store.entries)
         top = s.get("top_spot", {})
         self._state = top.get("name", "Keine Daten")
-        self._attrs = {
-            "top_spot": top,
-            "ranking": s.get("spot_ranking", []),
-        }
+        self._attrs = {"top_spot": top, "ranking": s.get("spot_ranking", [])}
 
 
 class BaitAnalysisSensor(FishingBaseSensor):
@@ -246,10 +263,7 @@ class BaitAnalysisSensor(FishingBaseSensor):
         s = stats(self.store.entries)
         top = s.get("top_bait", {})
         self._state = top.get("name", "Keine Daten")
-        self._attrs = {
-            "top_bait": top,
-            "ranking": s.get("bait_ranking", []),
-        }
+        self._attrs = {"top_bait": top, "ranking": s.get("bait_ranking", [])}
 
 
 class TimeAnalysisSensor(FishingBaseSensor):
@@ -268,10 +282,7 @@ class TimeAnalysisSensor(FishingBaseSensor):
             except Exception:
                 pass
         self._state = name
-        self._attrs = {
-            "top_hour": top,
-            "time_chart": s.get("time_chart", []),
-        }
+        self._attrs = {"top_hour": top, "time_chart": s.get("time_chart", [])}
 
 
 class LastCatchSensor(FishingBaseSensor):
@@ -293,27 +304,46 @@ class LastCatchSensor(FishingBaseSensor):
         self._attrs = last
 
 
-def _calculate_best_time(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]]) -> dict[str, Any]:
+def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]], hours: int) -> dict[str, Any]:
     weather_entity = entry.options.get(CONF_WEATHER_ENTITY) or entry.data.get(CONF_WEATHER_ENTITY)
     weather = hass.states.get(weather_entity)
     attrs = weather.attributes if weather else {}
-    now = datetime.now().astimezone()
+    s = stats(entries)
 
-    best_score = 0
+    points = bite_forecast_series(
+        temperature=_float(attrs.get("temperature"), 12),
+        wind_speed=_float(attrs.get("wind_speed"), 10),
+        pressure=_float(attrs.get("pressure"), 1015),
+        cloud_coverage=_float(attrs.get("cloud_coverage"), 50),
+        precipitation=_float(attrs.get("precipitation"), 0),
+        history_score=s.get("history_score", 50),
+        hours=hours,
+    )
+
+    values = [p["score"] for p in points]
+    best = max(points, key=lambda p: p["score"]) if points else {}
+    return {
+        "current": values[0] if values else 50,
+        "average": round(sum(values) / len(values), 1) if values else 50,
+        "best_score": best.get("score"),
+        "best_time": best.get("timestamp"),
+        "points": points,
+        "note": "v1.2.0 nutzt aktuelle Wetterwerte plus Uhrzeit-/Saisonmodell. Echte stündliche Forecastdaten folgen.",
+    }
+
+
+def _calculate_best_time(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]]) -> dict[str, Any]:
+    result = _forecast(hass, entry, entries, 24)
     best_time = "--:--"
-    best_dt = now
-    points = []
+    best_dt = datetime.now().astimezone()
+    best_score = result.get("best_score", 50)
 
-    for i in range(0, 24):
-        ts = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=i)
-        score = _score_for_hour(hass, entry, entries, attrs, ts)
-
-        points.append({"x": int(ts.timestamp() * 1000), "y": score})
-
-        if ts.date() == now.date() and score > best_score:
-            best_score = score
-            best_time = ts.strftime("%H:%M")
-            best_dt = ts
+    if result.get("best_time"):
+        try:
+            best_dt = datetime.fromisoformat(result["best_time"])
+            best_time = best_dt.strftime("%H:%M")
+        except Exception:
+            pass
 
     start = best_dt - timedelta(hours=1)
     end = best_dt + timedelta(hours=2)
@@ -340,7 +370,7 @@ def _calculate_best_time(hass: HomeAssistant, entry: ConfigEntry, entries: list[
         "zeitfenster": zeitfenster,
         "aktivitaet": aktivitaet,
         "empfehlung": empfehlung,
-        "tagesprognose": points,
+        "tagesprognose": result.get("points", []),
         "history_score": s.get("history_score", 50),
         "confidence": s.get("confidence"),
         "total_entries": s.get("total"),
@@ -371,16 +401,9 @@ def _calculate_now(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[s
     }
 
 
-def _score_for_hour(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    entries: list[dict[str, Any]],
-    attrs: dict[str, Any],
-    ts: datetime,
-) -> int:
+def _score_for_hour(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]], attrs: dict[str, Any], ts: datetime) -> int:
     s = stats(entries)
     moon = hass.states.get("sensor.moon")
-
     return current_weather_score(
         temperature=_float(attrs.get("temperature"), 12),
         wind_speed=_float(attrs.get("wind_speed"), 10),

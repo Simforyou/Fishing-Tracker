@@ -347,3 +347,43 @@ def recommendation(entries: list[dict[str, Any]]) -> str:
         f"Top Spot: {spot['name']}. Top Köder: {bait['name']}. "
         f"Sicherheit: {s['confidence']}."
     )
+
+
+def bite_forecast_series(
+    temperature: float,
+    wind_speed: float,
+    pressure: float,
+    cloud_coverage: float,
+    precipitation: float,
+    history_score: float,
+    hours: int = 24,
+) -> list[dict[str, Any]]:
+    from datetime import datetime, timedelta
+
+    now = datetime.now().astimezone().replace(minute=0, second=0, microsecond=0)
+    points: list[dict[str, Any]] = []
+
+    for i in range(hours):
+        ts = now + timedelta(hours=i)
+        score = current_weather_score(
+            temperature=temperature,
+            wind_speed=wind_speed,
+            pressure=pressure,
+            cloud_coverage=cloud_coverage,
+            precipitation=precipitation,
+            pressure_trend=0,
+            hour=ts.hour,
+            month=ts.month,
+            moon_phase=None,
+            history_score=history_score,
+        )
+        points.append({
+            "timestamp": ts.isoformat(),
+            "x": int(ts.timestamp() * 1000),
+            "y": score,
+            "score": score,
+            "hour": ts.strftime("%H:%M"),
+            "day": ts.strftime("%Y-%m-%d"),
+        })
+
+    return points

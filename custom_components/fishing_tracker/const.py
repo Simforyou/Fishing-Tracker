@@ -12,42 +12,28 @@ SERVICE_LOG_CATCH = "log_catch"
 SERVICE_LOG_NO_CATCH = "log_no_catch"
 SERVICE_IMPORT_CSV = "import_csv"
 SERVICE_EXPORT_CSV = "export_csv"
+SERVICE_EXPORT_JSON = "export_json"
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.data"
 SIGNAL_UPDATED = f"{DOMAIN}_updated"
 
+DATA_DIR = "fishing_tracker"
+JSON_FILE = "fangdaten.json"
+WWW_JSON_FILE = "fishing_tracker_data.json"
+
 FISH_TYPES = [
-    "Weißfisch",
-    "Brasse",
-    "Rotauge",
-    "Rotfeder",
-    "Karpfen",
-    "Schleie",
-    "Barsch",
-    "Zander",
-    "Hecht",
-    "Aal",
+    "Weißfisch", "Brasse", "Rotauge", "Rotfeder", "Karpfen",
+    "Schleie", "Barsch", "Zander", "Hecht", "Aal",
 ]
 
 SPOTS = [
-    "Windkante",
-    "Schilfkante",
-    "Kraut",
-    "Flachwasser",
-    "Tiefe Kante",
-    "Steg",
-    "Hafenecke",
+    "Windkante", "Schilfkante", "Kraut", "Flachwasser",
+    "Tiefe Kante", "Steg", "Hafenecke",
 ]
 
 BAITS = [
-    "Made",
-    "Pinkies",
-    "Caster",
-    "Mais",
-    "Brot",
-    "Wurm",
-    "Kombi",
+    "Made", "Pinkies", "Caster", "Mais", "Brot", "Wurm", "Kombi", "Boilie",
 ]
 
 DEFAULT_SETTINGS = {

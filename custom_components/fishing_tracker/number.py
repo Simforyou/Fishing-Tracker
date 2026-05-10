@@ -10,11 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN, SIGNAL_UPDATED
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     store = hass.data[DOMAIN][entry.entry_id]["store"]
     async_add_entities([FishLengthNumber(entry, store)], True)
 
@@ -24,7 +20,7 @@ class FishLengthNumber(NumberEntity):
     _attr_name = "Fischlänge"
     _attr_icon = "mdi:ruler"
     _attr_native_min_value = 0
-    _attr_native_max_value = 150
+    _attr_native_max_value = 250
     _attr_native_step = 1
     _attr_native_unit_of_measurement = UnitOfLength.CENTIMETERS
     _attr_mode = NumberMode.BOX
@@ -46,9 +42,7 @@ class FishLengthNumber(NumberEntity):
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            async_dispatcher_connect(self.hass, SIGNAL_UPDATED, self._handle_update)
-        )
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_UPDATED, self._handle_update))
 
     @callback
     def _handle_update(self) -> None:

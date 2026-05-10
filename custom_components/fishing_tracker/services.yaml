@@ -73,3 +73,14 @@ export_csv:
       default: /config/www/fishing_tracker_export.csv
       selector:
         text:
+
+
+export_json:
+  name: JSON exportieren
+  description: Exportiert alle Fangdaten als JSON.
+  fields:
+    path:
+      required: false
+      default: /config/www/fishing_tracker_data.json
+      selector:
+        text:

@@ -9,13 +9,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import BAITS, DOMAIN, FISH_TYPES, SIGNAL_UPDATED, SPOTS
 
 
-async def async_setup_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-) -> None:
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     store = hass.data[DOMAIN][entry.entry_id]["store"]
-
     async_add_entities([
         FishingSelect(entry, store, "fish_type", "Fischart", FISH_TYPES, "mdi:fish"),
         FishingSelect(entry, store, "spot", "Spot", SPOTS, "mdi:map-marker"),
@@ -37,16 +32,17 @@ class FishingSelect(SelectEntity):
 
     @property
     def current_option(self):
-        return self.store.settings.get(self.key)
+        value = self.store.settings.get(self.key)
+        if value in self.options:
+            return value
+        return self.options[0] if self.options else None
 
     async def async_select_option(self, option: str) -> None:
         await self.store.async_set_setting(self.key, option)
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
-        self.async_on_remove(
-            async_dispatcher_connect(self.hass, SIGNAL_UPDATED, self._handle_update)
-        )
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_UPDATED, self._handle_update))
 
     @callback
     def _handle_update(self) -> None:
