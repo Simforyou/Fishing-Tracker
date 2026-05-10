@@ -1,6 +1,6 @@
 # Fishing Tracker Home Assistant Integration
 
-Version 2.0.0
+Version 2.0.1
 
 ## Neu in 1.3.0
 - Natürlichere Tages- und Wochen-Beißprognose
@@ -46,3 +46,11 @@ Version 2.0.0
 - Erklärbarer Smart Score mit Gründen und Warnungen.
 - Neuer Sensor: Fishing Intelligence.
 - Tages-/Wochenprognose nutzt die neue Intelligence Engine.
+
+## Fix in 2.0.1
+- Automatischer www-Installer: HTML-Dateien werden beim Start nach /config/www kopiert.
+- Neue Option: Mondphasen-Entity konfigurierbar.
+- Fallback auf sensor.moon_phase und sensor.moon.
+- KI nutzt die konfigurierte Mond-Entity.
+- Karten-Popup/Tooltip-Design repariert.
+- Schwarzer Balken/kaputte Spot-Label-Darstellung behoben.

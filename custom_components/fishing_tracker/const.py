@@ -2,6 +2,7 @@ DOMAIN = "fishing_tracker"
 
 CONF_WEATHER_ENTITY = "weather_entity"
 CONF_PERSON_ENTITY = "person_entity"
+CONF_MOON_ENTITY = "moon_entity"
 CONF_NAME = "name"
 
 DEFAULT_NAME = "Fishing Tracker"
@@ -42,3 +43,8 @@ DEFAULT_SETTINGS = {
     "bait": "Made",
     "length_cm": 0,
 }
+
+WWW_FILES = [
+    "fishing_tracker_map.html",
+    "fishing_tracker_log.html",
+]

@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .analytics import bite_forecast_series, current_weather_score, recommendation, stats
 from .intelligence import intelligence_recommendation, smart_fishing_score
-from .const import CONF_WEATHER_ENTITY, DOMAIN, SIGNAL_UPDATED
+from .const import CONF_MOON_ENTITY, CONF_WEATHER_ENTITY, DOMAIN, SIGNAL_UPDATED
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -155,7 +155,7 @@ class IntelligenceSensor(FishingBaseSensor):
         weather_entity = self.entry.options.get(CONF_WEATHER_ENTITY) or self.entry.data.get(CONF_WEATHER_ENTITY)
         weather = self.hass.states.get(weather_entity)
         attrs = weather.attributes if weather else {}
-        moon = self.hass.states.get("sensor.moon")
+        moon = _get_moon_state(self.hass, self.entry)
         s = stats(self.store.entries)
         fish_type = self.store.settings.get("fish_type", "Weißfisch")
 
@@ -362,7 +362,7 @@ def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, A
     attrs = weather.attributes if weather else {}
     s = stats(entries)
 
-    moon = hass.states.get("sensor.moon")
+    moon = _get_moon_state(hass, entry)
     points = bite_forecast_series(
         temperature=_float(attrs.get("temperature"), 12),
         wind_speed=_float(attrs.get("wind_speed"), 10),
@@ -464,7 +464,7 @@ def _calculate_now(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[s
 
 def _score_for_hour(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]], attrs: dict[str, Any], ts: datetime) -> int:
     s = stats(entries)
-    moon = hass.states.get("sensor.moon")
+    moon = _get_moon_state(hass, entry)
     return current_weather_score(
         temperature=_float(attrs.get("temperature"), 12),
         wind_speed=_float(attrs.get("wind_speed"), 10),
@@ -477,6 +477,21 @@ def _score_for_hour(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[
         moon_phase=moon.state if moon else None,
         history_score=s.get("history_score", 50),
     )
+
+
+def _get_moon_state(hass: HomeAssistant, entry: ConfigEntry):
+    moon_entity = (
+        entry.options.get(CONF_MOON_ENTITY)
+        or entry.data.get(CONF_MOON_ENTITY)
+        or "sensor.moon_phase"
+    )
+
+    moon = hass.states.get(moon_entity)
+    if moon is not None:
+        return moon
+
+    # Fallbacks for common Home Assistant installations.
+    return hass.states.get("sensor.moon") or hass.states.get("sensor.moon_phase")
 
 
 def _float(value: Any, default: Any = 0.0) -> Any:

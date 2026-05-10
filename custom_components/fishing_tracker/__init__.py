@@ -26,6 +26,7 @@ from .const import (
     SIGNAL_UPDATED,
 )
 from .storage import FishingStore
+from .frontend import async_install_frontend_files
 
 
 SERVICE_LOG_SCHEMA = vol.Schema({
@@ -47,6 +48,7 @@ SERVICE_EXPORT_JSON_SCHEMA = vol.Schema({vol.Optional("path", default="/config/w
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = FishingStore(hass)
     await store.async_load()
+    await async_install_frontend_files(hass)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {"store": store, "entry": entry}
