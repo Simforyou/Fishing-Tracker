@@ -14,21 +14,19 @@ h1{margin:0;font-size:30px;line-height:1.1}.sub{opacity:.72;margin-top:6px}
 .card.blue{background:radial-gradient(circle at 0% 0%,rgba(0,140,255,.22),transparent 35%),linear-gradient(145deg,rgba(15,24,34,.96),rgba(5,8,13,.98))}
 .card.green{background:radial-gradient(circle at 0% 0%,rgba(0,255,120,.16),transparent 35%),linear-gradient(145deg,rgba(9,25,18,.96),rgba(4,8,6,.98))}
 .card.gold{background:radial-gradient(circle at 0% 0%,rgba(255,210,60,.15),transparent 35%),linear-gradient(145deg,rgba(27,24,15,.96),rgba(7,7,5,.98))}
-.card.red{background:radial-gradient(circle at 0% 0%,rgba(255,80,80,.16),transparent 35%),linear-gradient(145deg,rgba(26,12,12,.96),rgba(7,4,4,.98))}
 .title{font-weight:850;font-size:20px;margin-bottom:10px}.big{font-size:42px;font-weight:900}.muted{opacity:.68}.row{display:flex;justify-content:space-between;gap:10px;margin:7px 0}.value{font-weight:800}
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{border-radius:18px;padding:12px;background:rgba(255,255,255,.06)}.stat .v{font-size:22px;font-weight:900}.stat .l{font-size:12px;opacity:.65}
-iframe{width:100%;border:0;border-radius:22px;background:#071018}.map{height:760px}.log{height:620px}
-.rank{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid rgba(255,255,255,.07)}.rank:first-child{border-top:0}.rank b{font-size:16px}.rank small{opacity:.68}.score{font-size:22px;font-weight:900}.good{color:#78ffb0}.mid{color:#ffd166}.bad{color:#ff8b8b}
-.weather-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.weather-item{border-radius:16px;background:rgba(255,255,255,.06);padding:10px}.weather-item small{opacity:.62}.weather-item div{font-weight:850;margin-top:3px}
+iframe{width:100%;border:0;border-radius:22px;background:#071018}.map{height:720px}.log{height:620px}
+.reasons li{margin:6px 0}.good{color:#78ffb0}.warn{color:#ffd166}
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.btn{height:88px;border-radius:24px;display:flex;align-items:center;justify-content:space-around;font-size:42px;font-weight:900;box-shadow:0 0 22px rgba(0,0,0,.20)}.btn.fang{background:radial-gradient(circle,rgba(0,255,120,.20),rgba(3,18,10,.98));color:#78ffb0}.btn.nofang{background:radial-gradient(circle,rgba(255,50,50,.20),rgba(18,3,3,.98));color:#ff7b7b}
-@media(min-width:900px){.grid{grid-template-columns:1fr 1fr}.full{grid-column:1 / -1}.map{height:820px}.log{height:680px}.weather-grid{grid-template-columns:repeat(4,1fr)}}
+@media(min-width:900px){.grid{grid-template-columns:1fr 1fr}.full{grid-column:1 / -1}.map{height:760px}.log{height:680px}}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="header">
     <h1>🎣 Fishing Tracker</h1>
-    <div class="sub">Premium Dashboard · v2.6.1 · Intelligence Engine · Fischarten-Ranking · Live-Wetter</div>
+    <div class="sub">Premium Dashboard · Intelligence Engine · Heatmap</div>
   </div>
 
   <div class="grid">
@@ -41,60 +39,9 @@ iframe{width:100%;border:0;border-radius:22px;background:#071018}.map{height:760
 
     <div class="card gold">
       <div class="title">🧠 Angel KI</div>
-      <div id="kiText" class="muted">Fishing Intelligence Engine aktiv.</div>
+      <div id="kiText" class="muted">Wird aus Home Assistant Sensoren gelesen.</div>
       <div class="row"><span>Smart Score</span><span class="value" id="smartScore">--</span></div>
       <div class="row"><span>Bewertung</span><span class="value" id="level">--</span></div>
-    </div>
-
-    
-    
-    <div class="card green full">
-      <div class="title">🧠 Lernende Strategie</div>
-      <div class="muted">
-        v2.6.1 analysiert deine Fangdaten nach Mustern, Spot-Score, Gewässerprofilen und persönlicher Strategie.
-      </div>
-      <ul>
-        <li>automatische Mustererkennung aus Fangdaten</li>
-        <li>Spot-Scoring und Hotspot-Erkennung</li>
-        <li>Gewässer-/Spotprofile</li>
-        <li>persönliche Angelstrategie ohne Fangfoto-System</li>
-        <li>Kartenanalyse mit GPS-Zonen</li>
-      </ul>
-    </div>
-
-    <div class="card gold full">
-      <div class="title">🎣 Taktik & Gerät</div>
-      <div class="muted">
-        Das Dashboard wird ab jetzt automatisch erweitert.<br>
-        Neue Releases erscheinen direkt hier – ohne manuelle Dashboard-Anpassungen.
-      </div>
-      <ul>
-        <li>🪝 Köderempfehlungen je Fischart</li>
-        <li>🎣 Rutenempfehlungen (Feeder, Match, Dropshot, Spinnrute …)</li>
-        <li>🐟 Predator Intelligence für Hecht, Zander und Barsch</li>
-        <li>🌦️ Wetterbasierte Taktikvorschläge</li>
-      </ul>
-    </div>
-
-    <div class="card green full">
-      <div class="title">🏆 Heute beste Zielfische</div>
-      <div id="speciesRanking">
-        <div class="muted">Ranking wird aus Home-Assistant-Sensor „Fischarten Ranking“ gelesen. Im HA-Dashboard als Entity anzeigen.</div>
-      </div>
-    </div>
-
-    <div class="card blue full">
-      <div class="title">🌦️ Live-Wetterdaten</div>
-      <div class="weather-grid" id="weatherGrid">
-        <div class="weather-item"><small>Quelle</small><div id="wSource">--</div></div>
-        <div class="weather-item"><small>Temperatur</small><div id="wTemp">--</div></div>
-        <div class="weather-item"><small>Luftdruck</small><div id="wPressure">--</div></div>
-        <div class="weather-item"><small>Trend</small><div id="wTrend">--</div></div>
-        <div class="weather-item"><small>Wind</small><div id="wWind">--</div></div>
-        <div class="weather-item"><small>Böen</small><div id="wGusts">--</div></div>
-        <div class="weather-item"><small>Regen</small><div id="wRain">--</div></div>
-        <div class="weather-item"><small>UV</small><div id="wUv">--</div></div>
-      </div>
     </div>
 
     <div class="card green">
@@ -112,22 +59,28 @@ iframe{width:100%;border:0;border-radius:22px;background:#071018}.map{height:760
         <div class="btn fang">🐟 ✓</div>
         <div class="btn nofang">🐟 ✕</div>
       </div>
-      <p class="muted">Aktionen bleiben sicher im Home-Assistant-Dashboard. Diese App ist die automatische Übersicht.</p>
+      <p class="muted">Aktionen bleiben aus Sicherheitsgründen im Home-Assistant-Dashboard. Diese App ist die automatische Übersicht.</p>
     </div>
 
     <div class="card full">
       <div class="title">🗺️ Heatmap & Spot-Intelligenz</div>
-      <iframe class="map" src="/local/fishing_tracker_map.html?v=250"></iframe>
+      <iframe class="map" src="/local/fishing_tracker_map.html?v=210"></iframe>
     </div>
 
     <div class="card full">
       <div class="title">📋 Fanghistorie</div>
-      <iframe class="log" src="/local/fishing_tracker_log.html?v=250"></iframe>
+      <iframe class="log" src="/local/fishing_tracker_log.html?v=210"></iframe>
+    </div>
+
+    <div class="card full">
+      <div class="title">🌦️ Wetter & Mond</div>
+      <div id="weather" class="muted">Wetterdaten werden in Home Assistant über den Sensor „Fishing Intelligence“ bereitgestellt.</div>
     </div>
   </div>
 </div>
 
 <script>
+function fixText(v){return typeof v==="string"?v.replaceAll("ÃŸ","ß").replaceAll("Ã¤","ä").replaceAll("Ã¶","ö").replaceAll("Ã¼","ü").replaceAll("Ã„","Ä").replaceAll("Ã–","Ö").replaceAll("Ãœ","Ü"):v}
 async function loadData(){
   try{
     const r=await fetch('/local/fishing_tracker_data.json?ts='+Date.now(),{cache:'no-store'});
@@ -144,7 +97,9 @@ async function loadData(){
       if(last.chance!==undefined) document.getElementById('chance').textContent=last.chance + '%';
       if(last.temperature!==undefined) document.getElementById('waterTemp').textContent=Math.round((Number(last.temperature)*0.65+5)*10)/10 + ' °C';
     }
-  }catch(e){ console.warn(e); }
+  }catch(e){
+    console.warn(e);
+  }
 }
 loadData();
 </script>

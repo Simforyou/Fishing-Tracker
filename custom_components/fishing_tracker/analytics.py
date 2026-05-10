@@ -1,6 +1,5 @@
 from __future__ import annotations
 from .intelligence import smart_fishing_score
-from .fish_profiles import normalize_fish_name
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
@@ -371,7 +370,6 @@ def bite_forecast_series(
     import random
 
     entries = entries or []
-    fish_type = normalize_fish_name(fish_type)
     now = datetime.now().astimezone().replace(minute=0, second=0, microsecond=0)
     points: list[dict[str, Any]] = []
 

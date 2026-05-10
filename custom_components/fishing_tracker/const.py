@@ -3,7 +3,6 @@ DOMAIN = "fishing_tracker"
 CONF_WEATHER_ENTITY = "weather_entity"
 CONF_PERSON_ENTITY = "person_entity"
 CONF_MOON_ENTITY = "moon_entity"
-CONF_USE_ONLINE_WEATHER = "use_online_weather"
 CONF_NAME = "name"
 
 DEFAULT_NAME = "Fishing Tracker"
