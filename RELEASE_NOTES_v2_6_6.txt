@@ -1,0 +1,25 @@
+Fishing Tracker v2.6.6
+
+Neue Funktionen
+- komplett überarbeitetes Premium Auto-Dashboard
+- Tagesgraph: Beißprognose heute
+- Wochengraph: 7-Tage Vorschau
+- Zielfisch-Prognose mit Auswahlfeld
+- dynamischer Zielfisch-Graph
+- Zielfisch-Ranking-Block
+- Live-Wetterkarten
+- Mondphase
+- Smart Spot Map / Hotspot Preview
+- bessere responsive App-Ansicht
+- internes Scrollen für iframe-Nutzung
+
+Verbessert
+- Dashboard wirkt wie native App
+- deutlich bessere Mobile-Darstellung
+- Fallback-Daten, falls HA-Live-Binding nicht verfügbar ist
+- Auto-Update alle 3 Sekunden
+- Heatmap und Fanghistorie bleiben eingebettet
+
+Hinweis
+- Live-Werte werden bevorzugt aus Home Assistant Sensoren gelesen.
+- Wenn Sensoren im iframe nicht erreichbar sind, nutzt das Dashboard Fallback-/JSON-Daten.

@@ -53,3 +53,8 @@ WWW_FILES = [
 ]
 
 SERVICE_INSTALL_DASHBOARD = "install_dashboard"
+
+PANEL_URL = "/local/fishing_tracker_dashboard.html"
+PANEL_TITLE = "Fishing Tracker"
+PANEL_ICON = "mdi:fish"
+PANEL_NAME = "fishing_tracker"

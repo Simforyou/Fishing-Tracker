@@ -122,3 +122,28 @@
 ### Improved
 - iframe/mobile scaling
 - dashboard responsiveness
+
+## v2.6.6
+### Added
+- Premium Auto-Dashboard redesign
+- Daily forecast graph
+- Weekly forecast graph
+- Target fish forecast selector
+- Target fish graph
+- Smart Spot Preview
+- Live weather cards
+- Moon phase card
+
+### Improved
+- Responsive iframe behavior
+- Mobile app-like dashboard layout
+- Fallback rendering when HA live binding is unavailable
+
+## v2.6.7
+### Added
+- Home Assistant sidebar panel
+- Auto-dashboard as dedicated app entry
+- No manual dashboard card required anymore
+
+### Changed
+- Dashboard version display updated to v2.6.7

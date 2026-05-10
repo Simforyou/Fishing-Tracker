@@ -2,7 +2,7 @@
 
 # Fishing Tracker Home Assistant Integration
 
-Version 2.6.4
+Version 2.6.7
 
 ## Neu in 1.3.0
 - Natürlichere Tages- und Wochen-Beißprognose
@@ -94,3 +94,10 @@ Version 2.6.4
 - `custom_components/fishing_tracker/icon.png`
 - `custom_components/fishing_tracker/logo.png`
 - `/www/fishing_tracker_icon.png` für Dashboard/Frontend.
+
+## Neu in 2.6.6
+- Premium Auto-Dashboard mit Tages-/Wochen-Graphen, Zielfisch-Prognose und Smart Spot Preview.
+
+## Neu in 2.6.7
+- Eigenes Home-Assistant-Sidebar-Panel: Fishing Tracker.
+- Auto-Dashboard direkt ohne manuelle Dashboard-Karte erreichbar.

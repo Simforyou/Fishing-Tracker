@@ -25,6 +25,10 @@ from .const import (
     SERVICE_LOG_CATCH,
     SERVICE_LOG_NO_CATCH,
     SIGNAL_UPDATED,
+    PANEL_ICON,
+    PANEL_NAME,
+    PANEL_TITLE,
+    PANEL_URL,
 )
 from .storage import FishingStore
 from .frontend import async_install_frontend_files
@@ -52,6 +56,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = FishingStore(hass)
     await store.async_load()
     await async_install_frontend_files(hass)
+
+    # Register own sidebar panel for the auto-dashboard.
+    hass.components.frontend.async_register_built_in_panel(
+        component_name="iframe",
+        sidebar_title=PANEL_TITLE,
+        sidebar_icon=PANEL_ICON,
+        frontend_url_path=PANEL_NAME,
+        config={"url": PANEL_URL},
+        require_admin=False,
+    )
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {"store": store, "entry": entry, "weather_engine": OpenMeteoWeatherEngine(hass)}
@@ -100,6 +114,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
+        hass.components.frontend.async_remove_panel(PANEL_NAME)
         hass.data[DOMAIN].pop(entry.entry_id, None)
 
     if not hass.data.get(DOMAIN):
