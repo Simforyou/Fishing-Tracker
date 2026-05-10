@@ -95,3 +95,17 @@
 ### Fixed
 - Missing constant `SERVICE_INSTALL_DASHBOARD` in `const.py`.
 - Startup/import failure of the custom integration.
+
+## v2.6.3
+### Fixed
+- Broken service registration for `export_json`.
+- `install_dashboard` service separated correctly from `export_json`.
+
+## v2.6.4
+### Added
+- Integration icon/logo assets
+- Dashboard icon
+- README logo reference
+
+### Note
+- Home Assistant integration icon display can depend on HA Brands behavior.

@@ -49,6 +49,7 @@ WWW_FILES = [
     "fishing_tracker_map.html",
     "fishing_tracker_log.html",
     "fishing_tracker_dashboard.html",
+    "fishing_tracker_icon.png",
 ]
 
 SERVICE_INSTALL_DASHBOARD = "install_dashboard"

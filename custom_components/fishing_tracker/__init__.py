@@ -89,8 +89,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, SERVICE_EXPORT_CSV):
         hass.services.async_register(DOMAIN, SERVICE_EXPORT_CSV, handle_export_csv, schema=SERVICE_EXPORT_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_EXPORT_JSON):
-        hass.services.async_register(DOMAIN, SERVICE_EXPORT_JSON,
-            SERVICE_INSTALL_DASHBOARD, handle_export_json, schema=SERVICE_EXPORT_JSON_SCHEMA)
+        hass.services.async_register(DOMAIN, SERVICE_EXPORT_JSON, handle_export_json, schema=SERVICE_EXPORT_JSON_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_INSTALL_DASHBOARD):
         hass.services.async_register(DOMAIN, SERVICE_INSTALL_DASHBOARD, handle_install_dashboard)
 

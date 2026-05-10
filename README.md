@@ -1,6 +1,8 @@
+![Fishing Tracker Logo](logo.png)
+
 # Fishing Tracker Home Assistant Integration
 
-Version 2.6.2
+Version 2.6.4
 
 ## Neu in 1.3.0
 - Natürlichere Tages- und Wochen-Beißprognose
@@ -83,3 +85,12 @@ Version 2.6.2
 
 ## Fix in 2.6.2
 - Startfehler wegen fehlender SERVICE_INSTALL_DASHBOARD-Konstante behoben.
+
+## Fix in 2.6.3
+- Service-Registrierung für export_json/install_dashboard repariert.
+
+## Fix/Neu in 2.6.4
+- Icon/Logo-Dateien ergänzt.
+- `custom_components/fishing_tracker/icon.png`
+- `custom_components/fishing_tracker/logo.png`
+- `/www/fishing_tracker_icon.png` für Dashboard/Frontend.

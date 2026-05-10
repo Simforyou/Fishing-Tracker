@@ -1,3 +1,3 @@
 from __future__ import annotations
 
-FRONTEND_VERSION = "2.6.2"
+FRONTEND_VERSION = "2.6.3"
