@@ -1,17 +1,21 @@
-
 # Fishing Tracker Home Assistant Integration
 
-Version 0.3.0
+Version 0.4.1
+
+## Stabilitätsupdate
+- Stabilere Entity-Namen
+- Dashboard-Kompatibilität verbessert
+- HACS-Struktur bereinigt
+- Analyse-Sensoren optimiert
+- Vorbereitungen für Karten-/Heatmap-System
 
 ## Enthalten
-- Beißchance Sensor
+- Beißchance
 - Beste Angelzeit
-- KI Empfehlung
 - Fanghistorie
-- Wassertemperatur
-- Fang speichern / Kein Fang
-- Fischart / Spot / Köder Auswahl
-- HACS kompatibel
-
-## Installation
-Über HACS als benutzerdefiniertes Repository installieren.
+- Letzter Fang
+- Spot Analyse
+- Köder Analyse
+- Zeit Analyse
+- Karten Daten
+- Fang speichern / Kein Fang speichern
