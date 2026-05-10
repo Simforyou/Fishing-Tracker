@@ -1,0 +1,21 @@
+
+Fishing Tracker v2.6.0
+
+Neu
+- Predator Intelligence Basis
+- Köder-Wissensbasis
+- Ruten-Wissensbasis
+- Auto-Dashboard erweitert
+- Dashboard als zentrale Oberfläche empfohlen
+
+Enthalten
+- Hecht-/Zander-/Barsch-Logik
+- Friedfisch-Rutenarten:
+  Feederrute, Matchrute, Kopfrute, Stellfischrute
+- Raubfisch-Rutenarten:
+  Spinnrute, Zanderrute, Hechtrute, Finesse, Dropshot
+- Köderklassen für Fried- und Raubfisch
+
+Dashboard
+- Neue Bereiche erscheinen künftig automatisch
+- empfohlen: Dashboard per iframe/webpage einbetten

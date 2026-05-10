@@ -8,7 +8,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 
-from .const import CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_WEATHER_ENTITY, DEFAULT_NAME, DOMAIN
+from .const import CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER, CONF_WEATHER_ENTITY, DEFAULT_NAME, DOMAIN
 
 
 class FishingTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -30,6 +30,7 @@ class FishingTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_WEATHER_ENTITY, default="weather.home"): str,
             vol.Optional(CONF_PERSON_ENTITY, default=""): str,
             vol.Optional(CONF_MOON_ENTITY, default="sensor.moon_phase"): str,
+            vol.Optional(CONF_USE_ONLINE_WEATHER, default=True): bool,
         })
 
         return self.async_show_form(
@@ -65,6 +66,10 @@ class FishingTrackerOptionsFlow(config_entries.OptionsFlow):
                 CONF_MOON_ENTITY,
                 default=data.get(CONF_MOON_ENTITY, "sensor.moon_phase"),
             ): str,
+            vol.Optional(
+                CONF_USE_ONLINE_WEATHER,
+                default=data.get(CONF_USE_ONLINE_WEATHER, True),
+            ): bool,
         })
 
         return self.async_show_form(

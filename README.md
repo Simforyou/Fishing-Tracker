@@ -1,6 +1,6 @@
 # Fishing Tracker Home Assistant Integration
 
-Version 2.0.1
+Version 2.6.1
 
 ## Neu in 1.3.0
 - Natürlichere Tages- und Wochen-Beißprognose
@@ -54,3 +54,29 @@ Version 2.0.1
 - KI nutzt die konfigurierte Mond-Entity.
 - Karten-Popup/Tooltip-Design repariert.
 - Schwarzer Balken/kaputte Spot-Label-Darstellung behoben.
+
+## Neu in 2.1.0
+- Automatische Dashboard-App: `/local/fishing_tracker_dashboard.html`
+- Dashboard-Datei wird automatisch nach `/config/www` installiert.
+- Service `fishing_tracker.install_dashboard` zum erneuten Kopieren der Dashboard-Dateien.
+- Heatmap und Fanghistorie werden in der Dashboard-App eingebettet.
+
+## Neu in 2.2.0
+- Fish Behavior Knowledge Base (`fish_profiles.py`).
+- Fischartspezifische Profile für Weißfisch, Brasse, Rotauge, Rotfeder, Karpfen, Schleie, Barsch, Zander, Hecht und Aal.
+- Prognose nutzt je Fischart eigene Temperaturbereiche, Aktivitätsfenster, Saison, Wetter- und Mondgewichtung.
+- Smart Score erklärt bessere Gründe/Warnungen je Fischart.
+- Köderempfehlungen je Fischart in der Intelligence-Auswertung.
+- Tages-/Wochenprognose realistischer durch Artprofile.
+
+## Neu in 2.5.0
+- Fischarten-Ranking
+- Online Wetterstatus Sensor
+- Auto-Dashboard mit Zielfisch-Ranking und Wetterdaten
+
+## Neu in 2.6.1
+- Advanced Intelligence
+- Spot-Scoring
+- Mustererkennung
+- Gewässerprofile
+- persönliche Angelstrategie

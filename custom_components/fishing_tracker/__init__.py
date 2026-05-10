@@ -20,6 +20,7 @@ from .const import (
     PLATFORMS,
     SERVICE_EXPORT_CSV,
     SERVICE_EXPORT_JSON,
+            SERVICE_INSTALL_DASHBOARD,
     SERVICE_IMPORT_CSV,
     SERVICE_LOG_CATCH,
     SERVICE_LOG_NO_CATCH,
@@ -27,6 +28,7 @@ from .const import (
 )
 from .storage import FishingStore
 from .frontend import async_install_frontend_files
+from .weather_engine import OpenMeteoWeatherEngine
 
 
 SERVICE_LOG_SCHEMA = vol.Schema({
@@ -43,6 +45,7 @@ SERVICE_LOG_SCHEMA = vol.Schema({
 SERVICE_IMPORT_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker.csv"): cv.string})
 SERVICE_EXPORT_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker_export.csv"): cv.string})
 SERVICE_EXPORT_JSON_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker_data.json"): cv.string})
+SERVICE_INSTALL_DASHBOARD = "install_dashboard"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -51,7 +54,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await async_install_frontend_files(hass)
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"store": store, "entry": entry}
+    hass.data[DOMAIN][entry.entry_id] = {"store": store, "entry": entry, "weather_engine": OpenMeteoWeatherEngine(hass)}
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -73,6 +76,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await store.async_export_json(call.data["path"])
         async_dispatcher_send(hass, SIGNAL_UPDATED)
 
+    async def handle_install_dashboard(call: ServiceCall) -> None:
+        await async_install_frontend_files(hass)
+        async_dispatcher_send(hass, SIGNAL_UPDATED)
+
     if not hass.services.has_service(DOMAIN, SERVICE_LOG_CATCH):
         hass.services.async_register(DOMAIN, SERVICE_LOG_CATCH, handle_log_catch, schema=SERVICE_LOG_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_LOG_NO_CATCH):
@@ -82,7 +89,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, SERVICE_EXPORT_CSV):
         hass.services.async_register(DOMAIN, SERVICE_EXPORT_CSV, handle_export_csv, schema=SERVICE_EXPORT_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_EXPORT_JSON):
-        hass.services.async_register(DOMAIN, SERVICE_EXPORT_JSON, handle_export_json, schema=SERVICE_EXPORT_JSON_SCHEMA)
+        hass.services.async_register(DOMAIN, SERVICE_EXPORT_JSON,
+            SERVICE_INSTALL_DASHBOARD, handle_export_json, schema=SERVICE_EXPORT_JSON_SCHEMA)
+    if not hass.services.has_service(DOMAIN, SERVICE_INSTALL_DASHBOARD):
+        hass.services.async_register(DOMAIN, SERVICE_INSTALL_DASHBOARD, handle_install_dashboard)
 
     return True
 

@@ -84,3 +84,8 @@ export_json:
       default: /config/www/fishing_tracker_data.json
       selector:
         text:
+
+
+install_dashboard:
+  name: Dashboard installieren
+  description: Kopiert die Fishing-Tracker-Dashboard-Dateien erneut nach /config/www.

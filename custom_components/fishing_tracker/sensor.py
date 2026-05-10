@@ -12,7 +12,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .analytics import bite_forecast_series, current_weather_score, recommendation, stats
 from .intelligence import intelligence_recommendation, smart_fishing_score
-from .const import CONF_MOON_ENTITY, CONF_WEATHER_ENTITY, DOMAIN, SIGNAL_UPDATED
+from .fish_profiles import profile_summary
+from .species_ranking import rank_species
+from .advanced_intelligence import advanced_analysis
+from .const import CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER, CONF_WEATHER_ENTITY, DOMAIN, SIGNAL_UPDATED
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
@@ -33,6 +36,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         BaitAnalysisSensor(entry, store),
         TimeAnalysisSensor(entry, store),
         LastCatchSensor(entry, store),
+        SpeciesRankingSensor(hass, entry, store),
+        OnlineWeatherStatusSensor(hass, entry, store),
+        AdvancedIntelligenceSensor(entry, store),
     ], True)
 
 
@@ -86,7 +92,7 @@ class BestTimeSensor(FishingBaseSensor):
         self.hass = hass
 
     async def async_update(self) -> None:
-        result = _calculate_best_time(self.hass, self.entry, self.store.entries)
+        result = await _calculate_best_time(self.hass, self.entry, self.store.entries)
         self._state = result["zeitfenster"]
         self._attrs = result
 
@@ -100,7 +106,7 @@ class DayForecastSensor(FishingBaseSensor):
         self.hass = hass
 
     async def async_update(self) -> None:
-        result = _forecast(self.hass, self.entry, self.store.entries, 24)
+        result = await _forecast(self.hass, self.entry, self.store.entries, 24)
         self._state = result["current"]
         self._attrs = result
 
@@ -114,7 +120,7 @@ class WeekForecastSensor(FishingBaseSensor):
         self.hass = hass
 
     async def async_update(self) -> None:
-        result = _forecast(self.hass, self.entry, self.store.entries, 168)
+        result = await _forecast(self.hass, self.entry, self.store.entries, 168)
         self._state = result["average"]
         self._attrs = result
 
@@ -347,6 +353,138 @@ class LastCatchSensor(FishingBaseSensor):
         self._attrs = last
 
 
+
+class SpeciesRankingSensor(FishingBaseSensor):
+    _attr_icon = "mdi:podium-gold"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "species_ranking", "Fischarten Ranking")
+        self.hass = hass
+
+    async def async_update(self) -> None:
+        weather_entity = self.entry.options.get(CONF_WEATHER_ENTITY) or self.entry.data.get(CONF_WEATHER_ENTITY)
+        weather = self.hass.states.get(weather_entity)
+        attrs = weather.attributes if weather else {}
+        attrs = await _async_weather_context(self.hass, self.entry, attrs)
+
+        moon = _get_moon_state(self.hass, self.entry)
+        s = stats(self.store.entries)
+
+        ranking = rank_species(
+            weather=attrs,
+            history_score=s.get("history_score", 50),
+            moon_phase=moon.state if moon else None,
+        )
+
+        best = ranking[0] if ranking else {}
+        self._state = f"{best.get('fish_type', 'Keine Daten')} · {best.get('score', '--')}%"
+        self._attrs = {
+            "ranking": ranking,
+            "best": best,
+            "weather_source": attrs.get("weather_source", "home_assistant"),
+            "fetched_at": attrs.get("fetched_at"),
+        }
+
+
+async def _async_weather_context(hass: HomeAssistant, entry: ConfigEntry, fallback_attrs: dict[str, Any] | None = None) -> dict[str, Any]:
+    fallback_attrs = fallback_attrs or {}
+    use_online = entry.options.get(CONF_USE_ONLINE_WEATHER, entry.data.get(CONF_USE_ONLINE_WEATHER, True))
+
+    if not use_online:
+        return fallback_attrs
+
+    person_entity = entry.options.get(CONF_PERSON_ENTITY) or entry.data.get(CONF_PERSON_ENTITY)
+    person_state = hass.states.get(person_entity) if person_entity else None
+    person_attrs = person_state.attributes if person_state else {}
+
+    lat = person_attrs.get("latitude")
+    lon = person_attrs.get("longitude")
+
+    if lat is None or lon is None:
+        return fallback_attrs
+
+    try:
+        engine = hass.data[DOMAIN][entry.entry_id].get("weather_engine")
+        if engine is None:
+            return fallback_attrs
+        weather = await engine.async_get_weather(float(lat), float(lon))
+        if weather is None:
+            return fallback_attrs
+
+        data = weather.as_dict()
+        return {
+            "temperature": data.get("temperature", fallback_attrs.get("temperature")),
+            "pressure": data.get("pressure", fallback_attrs.get("pressure")),
+            "pressure_trend": data.get("pressure_trend", fallback_attrs.get("pressure_trend", 0)),
+            "wind_speed": data.get("wind_speed", fallback_attrs.get("wind_speed")),
+            "wind_bearing": data.get("wind_bearing", fallback_attrs.get("wind_bearing")),
+            "wind_gusts": data.get("wind_gusts"),
+            "precipitation": data.get("precipitation", fallback_attrs.get("precipitation")),
+            "precipitation_probability": data.get("precipitation_probability"),
+            "cloud_coverage": data.get("cloud_coverage", fallback_attrs.get("cloud_coverage")),
+            "humidity": data.get("humidity", fallback_attrs.get("humidity")),
+            "dew_point": data.get("dew_point", fallback_attrs.get("dew_point")),
+            "uv_index": data.get("uv_index", fallback_attrs.get("uv_index")),
+            "sunrise": data.get("sunrise"),
+            "sunset": data.get("sunset"),
+            "hourly": data.get("hourly"),
+            "weather_source": data.get("source"),
+            "fetched_at": data.get("fetched_at"),
+        }
+    except Exception:
+        return fallback_attrs
+
+
+
+
+class AdvancedIntelligenceSensor(FishingBaseSensor):
+    _attr_icon = "mdi:brain"
+
+    def __init__(self, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "advanced_intelligence", "Advanced Intelligence")
+
+    async def async_update(self) -> None:
+        analysis = advanced_analysis(self.store.entries)
+        strategy = analysis.get("strategy", {})
+        plan = strategy.get("primary_plan", [])
+        self._state = plan[0][:255] if plan else "Keine Daten"
+        self._attrs = analysis
+
+
+class OnlineWeatherStatusSensor(FishingBaseSensor):
+    _attr_icon = "mdi:weather-cloudy-clock"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "online_weather_status", "Online Wetterstatus")
+        self.hass = hass
+
+    async def async_update(self) -> None:
+        weather_entity = self.entry.options.get(CONF_WEATHER_ENTITY) or self.entry.data.get(CONF_WEATHER_ENTITY)
+        weather = self.hass.states.get(weather_entity)
+        attrs = weather.attributes if weather else {}
+        attrs = await _async_weather_context(self.hass, self.entry, attrs)
+
+        self._state = attrs.get("weather_source", "home_assistant")
+        self._attrs = {
+            "source": attrs.get("weather_source", "home_assistant"),
+            "fetched_at": attrs.get("fetched_at"),
+            "temperature": attrs.get("temperature"),
+            "pressure": attrs.get("pressure"),
+            "pressure_trend": attrs.get("pressure_trend"),
+            "wind_speed": attrs.get("wind_speed"),
+            "wind_bearing": attrs.get("wind_bearing"),
+            "wind_gusts": attrs.get("wind_gusts"),
+            "precipitation": attrs.get("precipitation"),
+            "precipitation_probability": attrs.get("precipitation_probability"),
+            "cloud_coverage": attrs.get("cloud_coverage"),
+            "humidity": attrs.get("humidity"),
+            "dew_point": attrs.get("dew_point"),
+            "uv_index": attrs.get("uv_index"),
+            "sunrise": attrs.get("sunrise"),
+            "sunset": attrs.get("sunset"),
+        }
+
+
 def self_or_entry_fish_type(entry: ConfigEntry, entries: list[dict[str, Any]]) -> str:
     # Fallback for forecasts before store context is available here.
     if entries:
@@ -356,10 +494,11 @@ def self_or_entry_fish_type(entry: ConfigEntry, entries: list[dict[str, Any]]) -
     return "Weißfisch"
 
 
-def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]], hours: int) -> dict[str, Any]:
+async def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]], hours: int) -> dict[str, Any]:
     weather_entity = entry.options.get(CONF_WEATHER_ENTITY) or entry.data.get(CONF_WEATHER_ENTITY)
     weather = hass.states.get(weather_entity)
     attrs = weather.attributes if weather else {}
+    attrs = await _async_weather_context(hass, entry, attrs)
     s = stats(entries)
 
     moon = _get_moon_state(hass, entry)
@@ -389,12 +528,12 @@ def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, A
         "best_score": best.get("score"),
         "best_time": best.get("timestamp"),
         "points": points,
-        "note": "v2.0.0 nutzt die Fishing Intelligence Engine mit Fischverhalten, Wetterfaktoren, Mondphase, Fanghistorie und unregelmäßigen Bite-Windows.",
+        "note": "v2.5.0 nutzt Live-Wetterdaten, Fischprofile, Fischarten-Ranking, Mondphase, Fanghistorie und unregelmäßige Bite-Windows.",
     }
 
 
-def _calculate_best_time(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]]) -> dict[str, Any]:
-    result = _forecast(hass, entry, entries, 24)
+async def _calculate_best_time(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]]) -> dict[str, Any]:
+    result = await _forecast(hass, entry, entries, 24)
     best_time = "--:--"
     best_dt = datetime.now().astimezone()
     best_score = result.get("best_score", 50)
