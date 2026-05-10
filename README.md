@@ -1,6 +1,6 @@
 # Fishing Tracker Home Assistant Integration
 
-Version 1.3.2
+Version 1.4.0
 
 ## Neu in 1.3.0
 - Natürlichere Tages- und Wochen-Beißprognose
@@ -20,3 +20,20 @@ Version 1.3.2
 - Statistik zählt JSON-Einträge.
 - UTF-8 Fix für Umlaute.
 - Robuster JSON-Parser.
+
+## Fix in 1.3.3
+- Stabiler Abschlussstand nach Karten-/Heatmap-Fix.
+- Leaflet-Karte mit JSON-Daten repariert.
+- Fanghistorie mit JSON-Daten repariert.
+- UTF-8/Mojibake-Fix für Umlaute konsolidiert.
+- HACS-Struktur geprüft.
+- manifest.json auf 1.3.3 gesetzt.
+- hacs.json korrekt mit domains: ["fishing_tracker"].
+- Dashboard-kompatibel mit Cache-Busting URLs wie ?v=20.
+
+## Neu in 1.4.0
+- Echte Heatmap-Intensität nach Spot-Fangquote.
+- Spot-Intelligenz-Panel in der Karte.
+- Spot-Ranking mit Sessions, Fängen, Fangquote, Top-Köder und KI-Chance.
+- Spot-Labels direkt auf der Karte.
+- bessere Filter- und Kartenlogik für viele Einträge.
