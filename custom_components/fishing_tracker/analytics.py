@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from .intelligence import smart_fishing_score
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
@@ -358,6 +358,12 @@ def bite_forecast_series(
     hours: int = 24,
     moon_phase: str | None = None,
     entries: list[dict[str, Any]] | None = None,
+    fish_type: str = "Weißfisch",
+    humidity: float | None = None,
+    dew_point: float | None = None,
+    apparent_temperature: float | None = None,
+    uv_index: float | None = None,
+    wind_bearing: float | None = None,
 ) -> list[dict[str, Any]]:
     from datetime import datetime, timedelta
     import math
@@ -370,62 +376,58 @@ def bite_forecast_series(
     seed_base = int(now.strftime("%Y%m%d")) + int(temperature * 10) + int(pressure) + len(entries) * 17
     rng = random.Random(seed_base)
 
-    daily_temp_shift = {}
-    daily_pressure_shift = {}
-    daily_wind_shift = {}
-    daily_cloud_shift = {}
-    daily_rain_shift = {}
-
+    daily = {}
     for i in range(hours):
         ts = now + timedelta(hours=i)
         day_key = ts.strftime("%Y-%m-%d")
-
-        if day_key not in daily_temp_shift:
-            day_rng = random.Random(seed_base + int(ts.strftime("%j")) * 31)
-            daily_temp_shift[day_key] = day_rng.uniform(-2.2, 2.2)
-            daily_pressure_shift[day_key] = day_rng.uniform(-7.5, 7.5)
-            daily_wind_shift[day_key] = day_rng.uniform(-4.0, 4.5)
-            daily_cloud_shift[day_key] = day_rng.uniform(-22, 22)
-            daily_rain_shift[day_key] = day_rng.uniform(-0.7, 1.4)
+        if day_key not in daily:
+            d = random.Random(seed_base + int(ts.strftime("%j")) * 31)
+            daily[day_key] = {
+                "temp": d.uniform(-2.4, 2.4),
+                "pressure": d.uniform(-8.0, 8.0),
+                "wind": d.uniform(-4.0, 5.0),
+                "cloud": d.uniform(-24, 24),
+                "rain": d.uniform(-0.7, 1.5),
+            }
 
         hour_angle = 2 * math.pi * (ts.hour / 24)
         slow_angle = 2 * math.pi * (i / 53.0)
         micro_angle = 2 * math.pi * (i / 11.0)
 
-        temp_sim = temperature + daily_temp_shift[day_key] + math.sin(hour_angle - 1.2) * 2.4 + math.sin(slow_angle) * 0.8
-        pressure_sim = pressure + daily_pressure_shift[day_key] + math.sin(slow_angle + 1.1) * 4.8 + math.sin(micro_angle) * 1.1
-        wind_sim = max(0, wind_speed + daily_wind_shift[day_key] + math.sin(hour_angle + 0.7) * 3.2 + math.sin(micro_angle + 2.2) * 1.4)
-        cloud_sim = min(100, max(0, cloud_coverage + daily_cloud_shift[day_key] + math.sin(slow_angle - 0.4) * 18 + math.sin(hour_angle * 2) * 9))
-        rain_sim = max(0, precipitation + daily_rain_shift[day_key] + max(0, math.sin(slow_angle + 2.8)) * 1.1 - max(0, math.sin(hour_angle - 0.6)) * 0.4)
-        pressure_trend = math.cos(slow_angle + 1.1) * 2.8 + math.cos(micro_angle) * 0.6 + daily_pressure_shift[day_key] * 0.10
+        temp_sim = temperature + daily[day_key]["temp"] + math.sin(hour_angle - 1.2) * 2.4 + math.sin(slow_angle) * 0.8
+        pressure_sim = pressure + daily[day_key]["pressure"] + math.sin(slow_angle + 1.1) * 4.8 + math.sin(micro_angle) * 1.1
+        wind_sim = max(0, wind_speed + daily[day_key]["wind"] + math.sin(hour_angle + 0.7) * 3.2 + math.sin(micro_angle + 2.2) * 1.4)
+        cloud_sim = min(100, max(0, cloud_coverage + daily[day_key]["cloud"] + math.sin(slow_angle - 0.4) * 18 + math.sin(hour_angle * 2) * 9))
+        rain_sim = max(0, precipitation + daily[day_key]["rain"] + max(0, math.sin(slow_angle + 2.8)) * 1.1 - max(0, math.sin(hour_angle - 0.6)) * 0.4)
+        pressure_trend = math.cos(slow_angle + 1.1) * 2.8 + math.cos(micro_angle) * 0.6 + daily[day_key]["pressure"] * 0.10
 
-        base_score = current_weather_score(
+        score, explanation = smart_fishing_score(
+            fish_type=fish_type,
             temperature=temp_sim,
-            wind_speed=wind_sim,
             pressure=pressure_sim,
-            cloud_coverage=cloud_sim,
-            precipitation=rain_sim,
             pressure_trend=pressure_trend,
+            wind_speed=wind_sim,
+            wind_bearing=wind_bearing,
+            precipitation=rain_sim,
+            cloud_coverage=cloud_sim,
+            humidity=humidity,
+            dew_point=dew_point,
+            apparent_temperature=apparent_temperature,
+            uv_index=uv_index,
+            moon_phase=moon_phase,
             hour=ts.hour,
             month=ts.month,
-            moon_phase=moon_phase,
             history_score=history_score,
         )
 
-        morning_peak = math.exp(-((ts.hour - 7.0) ** 2) / 10.0) * rng.uniform(3.0, 8.5)
-        evening_peak = math.exp(-((ts.hour - 19.0) ** 2) / 12.0) * rng.uniform(4.0, 10.0)
-        midday_penalty = math.exp(-((ts.hour - 13.0) ** 2) / 18.0) * rng.uniform(0.5, 5.0)
+        # Small irregular bite windows
+        pulse_wave = math.sin((i + rng.uniform(-2, 2)) / rng.uniform(3.8, 8.0))
+        if pulse_wave > 0.75:
+            score += rng.uniform(2.0, 6.0)
+        elif pulse_wave < -0.82:
+            score -= rng.uniform(2.0, 5.5)
 
-        short_window = math.sin((i + rng.uniform(-2, 2)) / rng.uniform(3.5, 7.5))
-        if short_window > 0.68:
-            bite_pulse = rng.uniform(2.5, 7.5)
-        elif short_window < -0.78:
-            bite_pulse = -rng.uniform(2.0, 6.0)
-        else:
-            bite_pulse = 0
-
-        score = base_score + morning_peak + evening_peak - midday_penalty + bite_pulse + rng.uniform(-2.2, 2.2)
-        score = int(max(5, min(99, round(score))))
+        score = int(max(5, min(99, round(score + rng.uniform(-1.8, 1.8)))))
 
         points.append({
             "timestamp": ts.isoformat(),
@@ -440,6 +442,9 @@ def bite_forecast_series(
             "cloud_coverage": round(cloud_sim, 0),
             "precipitation": round(rain_sim, 1),
             "pressure_trend": round(pressure_trend, 2),
+            "level": explanation.get("level"),
+            "reasons": explanation.get("reasons", []),
+            "warnings": explanation.get("warnings", []),
         })
 
     if len(points) >= 3:
@@ -447,7 +452,7 @@ def bite_forecast_series(
         for idx, p in enumerate(points):
             prev_score = points[idx - 1]["score"] if idx > 0 else p["score"]
             next_score = points[idx + 1]["score"] if idx < len(points) - 1 else p["score"]
-            smooth_score = round((prev_score * 0.22) + (p["score"] * 0.56) + (next_score * 0.22))
+            smooth_score = round((prev_score * 0.18) + (p["score"] * 0.64) + (next_score * 0.18))
             q = dict(p)
             q["score"] = int(max(5, min(99, smooth_score)))
             q["y"] = q["score"]

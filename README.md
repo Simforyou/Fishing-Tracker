@@ -1,6 +1,6 @@
 # Fishing Tracker Home Assistant Integration
 
-Version 1.4.0
+Version 2.0.0
 
 ## Neu in 1.3.0
 - Natürlichere Tages- und Wochen-Beißprognose
@@ -37,3 +37,12 @@ Version 1.4.0
 - Spot-Ranking mit Sessions, Fängen, Fangquote, Top-Köder und KI-Chance.
 - Spot-Labels direkt auf der Karte.
 - bessere Filter- und Kartenlogik für viele Einträge.
+
+## Neu in 2.0.0
+- Erste Fishing Intelligence Engine.
+- Fischarten-Verhalten für Hecht, Zander, Barsch, Karpfen und Weißfisch.
+- Wetterfaktoren: Luftdruck, Luftdrucktrend, Wind, Bewölkung, Regen, Temperatur, Feuchte/Taupunkt/UV soweit verfügbar.
+- Mondphase wird im Score berücksichtigt.
+- Erklärbarer Smart Score mit Gründen und Warnungen.
+- Neuer Sensor: Fishing Intelligence.
+- Tages-/Wochenprognose nutzt die neue Intelligence Engine.

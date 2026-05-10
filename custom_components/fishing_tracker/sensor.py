@@ -11,6 +11,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .analytics import bite_forecast_series, current_weather_score, recommendation, stats
+from .intelligence import intelligence_recommendation, smart_fishing_score
 from .const import CONF_WEATHER_ENTITY, DOMAIN, SIGNAL_UPDATED
 
 
@@ -24,6 +25,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         WeekForecastSensor(hass, entry, store),
         StatsSensor(entry, store),
         RecommendationSensor(entry, store),
+        IntelligenceSensor(hass, entry, store),
         WaterTemperatureSensor(hass, entry),
         MapDataSensor(entry, store),
         HistorySensor(entry, store),
@@ -139,6 +141,47 @@ class RecommendationSensor(FishingBaseSensor):
     async def async_update(self) -> None:
         self._state = recommendation(self.store.entries)[:255]
         self._attrs = stats(self.store.entries)
+
+
+
+class IntelligenceSensor(FishingBaseSensor):
+    _attr_icon = "mdi:brain"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "fishing_intelligence", "Fishing Intelligence")
+        self.hass = hass
+
+    async def async_update(self) -> None:
+        weather_entity = self.entry.options.get(CONF_WEATHER_ENTITY) or self.entry.data.get(CONF_WEATHER_ENTITY)
+        weather = self.hass.states.get(weather_entity)
+        attrs = weather.attributes if weather else {}
+        moon = self.hass.states.get("sensor.moon")
+        s = stats(self.store.entries)
+        fish_type = self.store.settings.get("fish_type", "Weißfisch")
+
+        score, explanation = smart_fishing_score(
+            fish_type=fish_type,
+            temperature=_float(attrs.get("temperature"), 12),
+            pressure=_float(attrs.get("pressure"), 1015),
+            pressure_trend=_float(attrs.get("pressure_trend"), 0),
+            wind_speed=_float(attrs.get("wind_speed"), 10),
+            wind_bearing=_float(attrs.get("wind_bearing"), None),
+            precipitation=_float(attrs.get("precipitation"), 0),
+            cloud_coverage=_float(attrs.get("cloud_coverage"), 50),
+            humidity=_float(attrs.get("humidity"), None),
+            dew_point=_float(attrs.get("dew_point"), None),
+            apparent_temperature=_float(attrs.get("apparent_temperature"), None),
+            uv_index=_float(attrs.get("uv_index"), None),
+            moon_phase=moon.state if moon else None,
+            history_score=s.get("history_score", 50),
+        )
+
+        self._state = intelligence_recommendation(score, explanation)
+        self._attrs = {
+            "score": score,
+            **explanation,
+            "history": s,
+        }
 
 
 class WaterTemperatureSensor(SensorEntity):
@@ -304,6 +347,15 @@ class LastCatchSensor(FishingBaseSensor):
         self._attrs = last
 
 
+def self_or_entry_fish_type(entry: ConfigEntry, entries: list[dict[str, Any]]) -> str:
+    # Fallback for forecasts before store context is available here.
+    if entries:
+        last = entries[-1].get("fish_type")
+        if last:
+            return last
+    return "Weißfisch"
+
+
 def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, Any]], hours: int) -> dict[str, Any]:
     weather_entity = entry.options.get(CONF_WEATHER_ENTITY) or entry.data.get(CONF_WEATHER_ENTITY)
     weather = hass.states.get(weather_entity)
@@ -321,6 +373,12 @@ def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, A
         hours=hours,
         moon_phase=moon.state if moon else None,
         entries=entries,
+        fish_type=self_or_entry_fish_type(entry, entries),
+        humidity=_float(attrs.get("humidity"), None),
+        dew_point=_float(attrs.get("dew_point"), None),
+        apparent_temperature=_float(attrs.get("apparent_temperature"), None),
+        uv_index=_float(attrs.get("uv_index"), None),
+        wind_bearing=_float(attrs.get("wind_bearing"), None),
     )
 
     values = [p["score"] for p in points]
@@ -331,7 +389,7 @@ def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[str, A
         "best_score": best.get("score"),
         "best_time": best.get("timestamp"),
         "points": points,
-        "note": "v1.3.0 nutzt ein natürlicheres Prognosemodell mit Wetterdrift, Tagesfenstern, Mondphase, Fanghistorie und unregelmäßigen Bite-Windows.",
+        "note": "v2.0.0 nutzt die Fishing Intelligence Engine mit Fischverhalten, Wetterfaktoren, Mondphase, Fanghistorie und unregelmäßigen Bite-Windows.",
     }
 
 
