@@ -10,6 +10,11 @@ CONF_NAME = "name"
 # Beispiel: https://wassertemperatur.site/flusse/water-temp-in-dinkel
 CONF_WATER_TEMP_URL = "water_temp_url"
 
+# Pegelonline WSV – UUID der nächsten Pegelstation (kostenlos, kein API-Key)
+# Stationen: https://pegelonline.wsv.de/webservices/rest-api/v2/stations.json
+CONF_PEGEL_UUID = "pegel_uuid"
+CONF_PEGEL_NAME = "pegel_name"
+
 # Koordinaten des Angelplatzes (für Solunar-Berechnung)
 CONF_LATITUDE = "fishing_latitude"
 CONF_LONGITUDE = "fishing_longitude"

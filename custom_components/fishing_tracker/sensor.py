@@ -17,10 +17,13 @@ from .species_ranking import rank_species
 from .advanced_intelligence import advanced_analysis
 from .solunar import solunar_times
 from .water_temperature import WaterTemperatureEngine, estimate_oxygen, oxygen_level_label
+from .water_level import WaterLevelEngine, turbidity_score_modifier
 from .spawning import spawning_status
+from .bait_advisor import full_bait_recommendation, wettermethode_color
 from .const import (
     CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER,
     CONF_WEATHER_ENTITY, CONF_WATER_TEMP_URL, CONF_LATITUDE, CONF_LONGITUDE,
+    CONF_PEGEL_UUID, CONF_PEGEL_NAME,
     DOMAIN, SIGNAL_UPDATED,
 )
 
@@ -45,10 +48,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         SpeciesRankingSensor(hass, entry, store),
         OnlineWeatherStatusSensor(hass, entry, store),
         AdvancedIntelligenceSensor(entry, store),
-        # Neue Sensoren
+        # Neue Sensoren v2.8
         SolunarSensor(hass, entry),
         WaterTempDetailSensor(hass, entry),
         SpawningSensor(hass, entry),
+        # Neue Sensoren v2.9
+        WaterLevelSensor(hass, entry),
+        BaitAdvisorSensor(hass, entry),
     ], True)
 
 
@@ -796,4 +802,141 @@ class SpawningSensor(SensorEntity):
 def entry_val(entry: ConfigEntry, key: str, default: Any = None) -> Any:
     """Liest Wert aus entry.options (bevorzugt) oder entry.data."""
     return entry.options.get(key) or entry.data.get(key) or default
+
+
+# ── Water Level Sensor (Pegelonline) ─────────────────────────────────────────
+
+class WaterLevelSensor(SensorEntity):
+    """Pegelstand von PEGELONLINE (WSV) – Wasserstand + Trübung."""
+
+    _attr_icon = "mdi:waves"
+    _attr_has_entity_name = True
+    _attr_name = "Pegelstand"
+    _attr_native_unit_of_measurement = "cm"
+    _attr_should_poll = True
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_water_level"
+        self._state: float | None = None
+        self._attrs: dict[str, Any] = {}
+
+    @property
+    def native_value(self) -> float | None:
+        return self._state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attrs
+
+    async def async_update(self) -> None:
+        engine: WaterLevelEngine | None = (
+            self.hass.data.get(DOMAIN, {})
+            .get(self.entry.entry_id, {})
+            .get("water_level_engine")
+        )
+        if engine is None:
+            return
+        data = await engine.async_get_water_level()
+        self._state = data.get("value_cm")
+        self._attrs = data
+
+
+# ── Bait Advisor Sensor (Wettermethode + Saisonal) ───────────────────────────
+
+class BaitAdvisorSensor(SensorEntity):
+    """Köderfarben-Empfehlung basierend auf Wettermethode + aktuellen Bedingungen."""
+
+    _attr_icon = "mdi:hook"
+    _attr_has_entity_name = True
+    _attr_name = "Köderempfehlung"
+    _attr_should_poll = True
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_bait_advisor"
+        self._state: str = "–"
+        self._attrs: dict[str, Any] = {}
+
+    @property
+    def native_value(self) -> str:
+        return self._state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attrs
+
+    async def async_update(self) -> None:
+        now = datetime.now().astimezone()
+
+        # Wetterdaten holen
+        weather_entity = entry_val(self.entry, CONF_WEATHER_ENTITY) or "weather.home"
+        ws = self.hass.states.get(weather_entity)
+        attrs = ws.attributes if ws else {}
+        cloud = _float(attrs.get("cloud_coverage"), 50.0)
+        precip = _float(attrs.get("precipitation"), 0.0)
+        uv = _float(attrs.get("uv_index"), None)
+
+        # Pegeltrübung (wenn vorhanden)
+        level_engine: WaterLevelEngine | None = (
+            self.hass.data.get(DOMAIN, {})
+            .get(self.entry.entry_id, {})
+            .get("water_level_engine")
+        )
+        turb_ntu = None
+        if level_engine:
+            level_data = await level_engine.async_get_water_level()
+            turb_ntu = level_data.get("turbidity_ntu")
+
+        # Trübungsstufe bestimmen
+        if turb_ntu is not None:
+            if turb_ntu < 5:
+                turb_level = "klar"
+            elif turb_ntu < 20:
+                turb_level = "leicht_trüb"
+            elif turb_ntu < 100:
+                turb_level = "trüb"
+            else:
+                turb_level = "sehr_trüb"
+        elif precip > 10:
+            turb_level = "sehr_trüb"
+        elif precip > 3:
+            turb_level = "trüb"
+        elif precip > 0.5:
+            turb_level = "leicht_trüb"
+        else:
+            turb_level = "klar"
+
+        # Zielfischart aus Settings
+        data_store = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+        store = data_store.get("store")
+        fish_type = "Zander"
+        if store and hasattr(store, "settings"):
+            fish_type = store.settings.get("fish_type", "Zander")
+
+        try:
+            rec = full_bait_recommendation(
+                fish_type=fish_type,
+                cloud_coverage=cloud,
+                turbidity_level=turb_level,
+                hour=now.hour,
+                month=now.month,
+                uv_index=uv,
+            )
+            self._state = rec.get("farbe", "Naturfarben")
+            self._attrs = {
+                **rec,
+                "fish_type": fish_type,
+                "turbidity_level": turb_level,
+                "turbidity_ntu": turb_ntu,
+                "cloud_coverage": cloud,
+                "hour": now.hour,
+                "month": now.month,
+            }
+        except Exception:
+            self._state = "Naturfarben"
+            self._attrs = {}
+
 

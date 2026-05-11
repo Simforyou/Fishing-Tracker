@@ -53,20 +53,11 @@ class FishingStore:
     async def async_export_json_files(self) -> None:
         payload = {"version": 1, "entries": _fix_payload(self.entries), "settings": _fix_payload(self.settings)}
         config_path = Path(self.hass.config.path())
-
-        data_dir = config_path / DATA_DIR
-        data_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / JSON_FILE).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        www_dir = config_path / "www"
-        www_dir.mkdir(parents=True, exist_ok=True)
-        (www_dir / WWW_JSON_FILE).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        await self.hass.async_add_executor_job(_write_json_files, payload, config_path)
 
     async def async_export_json(self, path: str) -> int:
         payload = {"version": 1, "entries": _fix_payload(self.entries), "settings": _fix_payload(self.settings)}
-        file_path = Path(path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        await self.hass.async_add_executor_job(_write_json, payload, path)
         return len(self.entries)
 
     async def async_import_csv(self, path: str) -> int:
@@ -113,6 +104,26 @@ class FishingStore:
                     e.get("wind_speed", ""), e.get("temperature", ""), e.get("length_cm", 0),
                 ])
         return len(self.entries)
+
+
+
+def _write_json_files(payload: dict, config_path: Path) -> None:
+    """Schreibt JSON-Dateien im Executor (non-blocking)."""
+    from .const import DATA_DIR, JSON_FILE, WWW_JSON_FILE
+    data = json.dumps(payload, ensure_ascii=False, indent=2)
+    data_dir = config_path / DATA_DIR
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / JSON_FILE).write_text(data, encoding="utf-8")
+    www_dir = config_path / "www"
+    www_dir.mkdir(parents=True, exist_ok=True)
+    (www_dir / WWW_JSON_FILE).write_text(data, encoding="utf-8")
+
+
+def _write_json(payload: dict, path: str) -> None:
+    """Schreibt eine einzelne JSON-Datei im Executor (non-blocking)."""
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _none(value: Any) -> Any:

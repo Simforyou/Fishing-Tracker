@@ -1,114 +1,190 @@
 ![Fishing Tracker Logo](logo.png)
 
-# Fishing Tracker Home Assistant Integration
+# Fishing Tracker – Home Assistant Integration
 
-Version 2.7.1
+**Version 2.9.0** | Custom Integration für Home Assistant
 
-## Neu in 1.3.0
-- Natürlichere Tages- und Wochen-Beißprognose
-- Weniger regelmäßiges künstliches Muster
-- Wetterdrift-Simulation für Temperatur, Wind, Luftdruck, Bewölkung und Regen
-- Mondphase wird in Prognose berücksichtigt
-- Fanghistorie fließt weiter in die Gewichtung ein
-- Unregelmäßige Bite-Windows statt starrer Kurve
-- JSON Storage und Heatmap aus v1.2.0 bleiben erhalten
+Eine intelligente Angelassistent-Integration mit 22-Faktor-Beißchancen-Prognose, Live-Wetterdaten, Solunar-Theorie, Pegelstand und Fangbuch.
 
-## Fix in 1.3.1
-- Options-/Konfigurationsdialog für neuere Home-Assistant-Versionen repariert.
+---
 
-## Fix in 1.3.2
-- Markeranzeige in Leaflet repariert.
-- Fanghistorie repariert.
-- Statistik zählt JSON-Einträge.
-- UTF-8 Fix für Umlaute.
-- Robuster JSON-Parser.
+## Features
 
-## Fix in 1.3.3
-- Stabiler Abschlussstand nach Karten-/Heatmap-Fix.
-- Leaflet-Karte mit JSON-Daten repariert.
-- Fanghistorie mit JSON-Daten repariert.
-- UTF-8/Mojibake-Fix für Umlaute konsolidiert.
-- HACS-Struktur geprüft.
-- manifest.json auf 1.3.3 gesetzt.
-- hacs.json korrekt mit domains: ["fishing_tracker"].
-- Dashboard-kompatibel mit Cache-Busting URLs wie ?v=20.
+### Prognose-Engine (22 Faktoren)
+| Faktor | Quelle |
+|---|---|
+| Lufttemperatur, Luftdruck, Wind, Bewölkung, Regen, UV | Open-Meteo (Live) |
+| Wassertemperatur | wassertemperatur.site (Live) |
+| Sauerstoffgehalt O₂ | Berechnet aus Wassertemp. |
+| Solunar Mondtransit-Uhrzeiten | Astronomieberechnung (kein API) |
+| Mondphase (artspezifisch) | HA moon_phase Entity |
+| Laichzeiten (10 Fischarten) | Interner Kalender |
+| Pegelstand + Wassertrübung | PEGELONLINE WSV (Live) |
+| Saisonal-Tageszeit je Fischart | Praxiswissen-Datenbank |
+| Herbst-Fresswelle | Oktober/November Bonus |
+| Temperaturwechsel-Geschwindigkeit | Δ Wassertemp/Tag |
+| Lichtintensitätswechsel | Bewölkungsänderung |
+| Wetterfront-Erkennung | Druck + Wind + Wolken |
+| Windrichtung | Süd/West günstig |
+| Fanghistorie (lernend) | Eigene Fangdaten |
 
-## Neu in 1.4.0
-- Echte Heatmap-Intensität nach Spot-Fangquote.
-- Spot-Intelligenz-Panel in der Karte.
-- Spot-Ranking mit Sessions, Fängen, Fangquote, Top-Köder und KI-Chance.
-- Spot-Labels direkt auf der Karte.
-- bessere Filter- und Kartenlogik für viele Einträge.
+### Sensoren (22 Stück)
+- Beißchance, Beste Zeit, Tages-/Wochenprognose
+- Fishing Intelligence (Smart Score + Gründe)
+- Wassertemperatur (Gewässer), Solunar Beißzeiten, Laichzeiten
+- Pegelstand (cm + Trend), Köderempfehlung (Wettermethode)
+- Fischarten-Ranking, Online Wetterstatus, Advanced Intelligence
+- Statistiken, Empfehlung, Fanghistorie, Spots, Köder, Zeiten, Letzter Fang
 
-## Neu in 2.0.0
-- Erste Fishing Intelligence Engine.
-- Fischarten-Verhalten für Hecht, Zander, Barsch, Karpfen und Weißfisch.
-- Wetterfaktoren: Luftdruck, Luftdrucktrend, Wind, Bewölkung, Regen, Temperatur, Feuchte/Taupunkt/UV soweit verfügbar.
-- Mondphase wird im Score berücksichtigt.
-- Erklärbarer Smart Score mit Gründen und Warnungen.
-- Neuer Sensor: Fishing Intelligence.
-- Tages-/Wochenprognose nutzt die neue Intelligence Engine.
+### Fangbuch
+- Services: `log_catch`, `log_no_catch`
+- Import/Export CSV und JSON
+- GPS-Koordinaten, Spot, Köder, Länge, Notizen
 
-## Fix in 2.0.1
-- Automatischer www-Installer: HTML-Dateien werden beim Start nach /config/www kopiert.
-- Neue Option: Mondphasen-Entity konfigurierbar.
-- Fallback auf sensor.moon_phase und sensor.moon.
-- KI nutzt die konfigurierte Mond-Entity.
-- Karten-Popup/Tooltip-Design repariert.
-- Schwarzer Balken/kaputte Spot-Label-Darstellung behoben.
+### Dashboard
+- Native Lovelace Custom Card `custom:fishing-tracker-card`
+- 9 Views: Übersicht, Prognosen, Zielfische, Spots, Fangbuch, Statistiken, Köder, Wetter, Einstellungen
+- Schnellaktionen (Fang/Kein Fang direkt aus dem Dashboard)
+- Auto-Dashboard unter `/local/fishing_tracker_dashboard.html`
 
-## Neu in 2.1.0
-- Automatische Dashboard-App: `/local/fishing_tracker_dashboard.html`
-- Dashboard-Datei wird automatisch nach `/config/www` installiert.
-- Service `fishing_tracker.install_dashboard` zum erneuten Kopieren der Dashboard-Dateien.
-- Heatmap und Fanghistorie werden in der Dashboard-App eingebettet.
+---
 
-## Neu in 2.2.0
-- Fish Behavior Knowledge Base (`fish_profiles.py`).
-- Fischartspezifische Profile für Weißfisch, Brasse, Rotauge, Rotfeder, Karpfen, Schleie, Barsch, Zander, Hecht und Aal.
-- Prognose nutzt je Fischart eigene Temperaturbereiche, Aktivitätsfenster, Saison, Wetter- und Mondgewichtung.
-- Smart Score erklärt bessere Gründe/Warnungen je Fischart.
-- Köderempfehlungen je Fischart in der Intelligence-Auswertung.
-- Tages-/Wochenprognose realistischer durch Artprofile.
+## Installation
 
-## Neu in 2.5.0
-- Fischarten-Ranking
-- Online Wetterstatus Sensor
-- Auto-Dashboard mit Zielfisch-Ranking und Wetterdaten
+### Manuelle Installation
+1. Ordner `custom_components/fishing_tracker` nach `/config/custom_components/` kopieren
+2. Ordner `www/` Inhalt nach `/config/www/` kopieren
+3. Home Assistant neu starten
+4. Einstellungen → Integrationen → **Fishing Tracker** hinzufügen
 
-## Neu in 2.6.1
-- Advanced Intelligence
-- Spot-Scoring
-- Mustererkennung
-- Gewässerprofile
-- persönliche Angelstrategie
+### HACS
+In HACS als Custom Repository hinzufügen:
+- URL: `https://github.com/Simforyou/Fishing-Tracker`
+- Kategorie: Integration
 
-## Fix in 2.6.2
-- Startfehler wegen fehlender SERVICE_INSTALL_DASHBOARD-Konstante behoben.
+### Lovelace Custom Card
+In `configuration.yaml` oder Lovelace Resources:
+```yaml
+resources:
+  - url: /local/fishing-tracker-card.js?v=290
+    type: module
+```
 
-## Fix in 2.6.3
-- Service-Registrierung für export_json/install_dashboard repariert.
+Card-Konfiguration:
+```yaml
+type: custom:fishing-tracker-card
+title: Fishing Tracker
+default_view: overview
+show_sidebar: true
+```
 
-## Fix/Neu in 2.6.4
-- Icon/Logo-Dateien ergänzt.
-- `custom_components/fishing_tracker/icon.png`
-- `custom_components/fishing_tracker/logo.png`
-- `/www/fishing_tracker_icon.png` für Dashboard/Frontend.
+---
 
-## Neu in 2.6.6
-- Premium Auto-Dashboard mit Tages-/Wochen-Graphen, Zielfisch-Prognose und Smart Spot Preview.
+## Konfiguration
 
-## Neu in 2.6.7
-- Eigenes Home-Assistant-Sidebar-Panel: Fishing Tracker.
-- Auto-Dashboard direkt ohne manuelle Dashboard-Karte erreichbar.
+### Pflichtfelder
+| Feld | Beschreibung |
+|---|---|
+| Name | Name der Integration |
+| Weather Entity | z.B. `weather.home` |
 
-## Fix in 2.6.9
-- Startfehler durch Sidebar-Panel-Registrierung behoben.
-- Auto-Dashboard bleibt über `/local/fishing_tracker_dashboard.html` verfügbar.
+### Optionale Felder
+| Feld | Beschreibung | Beispiel |
+|---|---|---|
+| Person Entity | GPS-Position des Anglers | `person.max` |
+| Moon Entity | Mondphasen-Sensor | `sensor.moon_phase` |
+| Online Wetter | Open-Meteo aktivieren | `true` |
+| Wassertemperatur URL | wassertemperatur.site URL | `https://wassertemperatur.site/flusse/water-temp-in-dinkel` |
+| Angelplatz Latitude | Für Solunar-Berechnung | `52.211` |
+| Angelplatz Longitude | Für Solunar-Berechnung | `7.022` |
+| Pegelstation UUID | PEGELONLINE UUID | `abc123...` |
+| Pegelstation Name | Anzeigename | `Gronau/Dinkel` |
 
-## Neu in 2.7.0
-- Native Lovelace Custom Card: `custom:fishing-tracker-card`
-- Premium App-Menü mit Übersicht, Prognosen, Zielfischen, Spots, Fangbuch, Statistiken, Köder, Wetter und Einstellungen.
+### Pegelstation finden
+```
+https://pegelonline.wsv.de/webservices/rest-api/v2/stations.json
+```
+Nach Gewässer suchen, UUID kopieren und in den Options eintragen.
 
-## Fix in 2.7.1
-- Schnellaktion-Buttons funktionieren in der Lovelace Card.
+### Gewässer-Wassertemperatur
+Auf [wassertemperatur.site](https://wassertemperatur.site) dein Gewässer suchen:
+- Flüsse: `/flusse/water-temp-in-[NAME]`
+- Seen: `/seen/water-temp-in-[NAME]`
+
+---
+
+## Services
+
+| Service | Beschreibung | Parameter |
+|---|---|---|
+| `fishing_tracker.log_catch` | Fang speichern | fish_type, spot, bait, length_cm, notes |
+| `fishing_tracker.log_no_catch` | Kein Fang speichern | fish_type, spot, bait, notes |
+| `fishing_tracker.export_csv` | Fangdaten als CSV | path |
+| `fishing_tracker.export_json` | Fangdaten als JSON | path |
+| `fishing_tracker.import_csv` | CSV importieren | path |
+| `fishing_tracker.install_dashboard` | Dashboard neu installieren | – |
+
+---
+
+## Wettermethode (Köderfarbe)
+
+Die Köderempfehlung basiert auf der Wettermethode (Lieblingsköder):
+
+| Wasser | Licht | Empfehlung |
+|---|---|---|
+| Klar | Sonne | Naturfarben (Sunny, Whisky) |
+| Klar | Wolken | Naturfarben / dezente Kontraste |
+| Leicht trüb | Sonne | Kontraste / Firetiger ⭐ optimal |
+| Leicht trüb | Wolken | Kontraste (Firetiger, Pinky) |
+| Trüb | – | Schockfarben (Pinky, Mr. White) |
+| Sehr trüb | – | UV-aktiv (Sheriff, Neo) |
+
+---
+
+## Projektstruktur
+
+```
+custom_components/fishing_tracker/
+├── __init__.py              # Setup, Services
+├── analytics.py             # Beißprognose-Berechnungen
+├── advanced_intelligence.py # Lernende KI-Engine
+├── bait_advisor.py          # Köderempfehlung, Wettermethode  ← NEU 2.9
+├── button.py                # HA Button-Entities
+├── config_flow.py           # Konfigurationsdialog
+├── const.py                 # Konstanten
+├── fish_profiles.py         # 10 Fischarten-Profile
+├── fishing_knowledge.py     # Köder-/Ruten-Wissen
+├── frontend.py              # www-Installer
+├── intelligence.py          # Smart Score Engine (22 Faktoren)
+├── manifest.json            # HA Integration Manifest
+├── ml.py                    # ML-Grundlage
+├── number.py                # HA Number-Entities
+├── select.py                # HA Select-Entities
+├── sensor.py                # 22 Sensoren
+├── solunar.py               # Solunar Astronomie            ← NEU 2.8
+├── spawning.py              # Laichzeiten-Kalender          ← NEU 2.8
+├── species_ranking.py       # Fischarten-Ranking
+├── storage.py               # JSON-Datenspeicher
+├── water_level.py           # PEGELONLINE Wasserstand       ← NEU 2.9
+├── water_temperature.py     # Wassertemperatur-Scraper      ← NEU 2.8
+└── weather_engine.py        # Open-Meteo Engine
+www/
+├── fishing-tracker-card.js       # Lovelace Custom Card
+├── fishing_tracker_dashboard.html # Auto-Dashboard
+├── fishing_tracker_map.html       # Heatmap & Spots
+├── fishing_tracker_log.html       # Fanghistorie
+└── fishing_tracker_icon.png
+```
+
+---
+
+## Lizenz
+
+Dieses Projekt steht unter der MIT-Lizenz.
+
+## Links
+- [GitHub](https://github.com/Simforyou/Fishing-Tracker)
+- [Issues](https://github.com/Simforyou/Fishing-Tracker/issues)
+- [PEGELONLINE](https://pegelonline.wsv.de)
+- [wassertemperatur.site](https://wassertemperatur.site)
+- [Open-Meteo](https://open-meteo.com)

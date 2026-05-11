@@ -1,0 +1,59 @@
+Fishing Tracker v2.9.0 – Vollständige Prognose-Engine
+
+NEUE MODULE
+
+water_level.py – Pegelstand (PEGELONLINE WSV)
+- Kostenlose amtliche API, kein API-Key nötig
+- 660+ Stationen an deutschen Bundeswasserstraßen
+- Liefert: Wasserstand (cm), Trend (steigend/fallend/stabil), Bewertung
+- Optional: Wassertrübung (NTU) + Wassertemperatur wo gemessen
+- Score: Hochwasser -18, Normal +3, leicht erhöht +5 (gut für Friedfisch)
+- Raubfische reagieren empfindlicher auf Hochwasser (×1.4)
+- Pegel-UUID eintragen: pegelonline.wsv.de → stations.json
+
+bait_advisor.py – Köder-Berater (Wettermethode + Barsch-Alarm)
+- Wettermethode © (Lieblingsköder): 4-Zustands-Matrix
+  Klar+Sonne=Naturfarben | Klar+Wolken=dezent | Leichttrüb=Kontraste |
+  Trüb=Schockfarben | Sehrtrüb=UV-aktiv (Sheriff, Neo)
+- Saisonal-Tageszeit-Fenster je Fischart (Lieblingsköder + Barsch-Alarm):
+  Hecht: Sommer nur Dämmerung | Herbst lange Fenster
+  Zander: Sommer fast nur Nacht
+  Barsch: Winter nur Mittag (Barsch-Alarm-Erkenntnis!)
+- Herbst-Fresswelle: Hecht +9, Zander +7, Barsch +6 (Okt/Nov)
+- Temperaturwechsel-Geschwindigkeit: Δ>4°C/Tag = -10 Punkte
+- Lichtintensitätswechsel: Wolken→Sonne = +6 Punkte (kurzes Beißfenster)
+- Führungsstil-Empfehlung je Situation
+
+NEUE SENSOREN (insgesamt jetzt 22 Sensoren)
+- sensor.pegelstand: Wasserstand in cm + Trend + Bewertung
+- sensor.koderempfehlung: Aktuelle Wettermethode-Farbe + Ködertypen
+
+SCORE-ENGINE ERWEITERT (jetzt 20+ Faktoren)
+1.  Fanghistorie (lernend)
+2.  Tageszeit (fischartspezifisch)
+3.  Niedriglicht/Dämmerung
+4.  Saison
+5.  Wassertemperatur (direkt)
+6.  Sauerstoffgehalt O₂
+7.  Luftdruck + Trend
+8.  Wind (Stärke + Richtung)
+9.  Bewölkung
+10. Niederschlag
+11. Luftfeuchtigkeit + Taupunkt
+12. Mondphase (artspezifisch)
+13. Solunar (Mondtransit-Uhrzeiten)
+14. Laichzeiten-Penalty
+15. Wetterfront-Erkennung
+16. Sonnenauf/-untergang
+17. Saisonal-Tageszeit (NEU)
+18. Herbst-Fresswelle (NEU)
+19. Temperaturwechsel-Geschwindigkeit (NEU)
+20. Pegelstand (NEU)
+21. Wassertrübung + Wettermethode (NEU)
+22. Lichtintensitätswechsel (NEU)
+
+KONFIGURATION (Optionen)
+- Pegelstation UUID (aus pegelonline.wsv.de)
+- Pegelstation Name
+- Wassertemperatur URL (wassertemperatur.site)
+- Angelplatz Koordinaten (Solunar)

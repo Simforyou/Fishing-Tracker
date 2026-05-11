@@ -6,6 +6,13 @@ from typing import Any
 from .fish_profiles import get_fish_profile, is_hour_in_windows, moon_key, normalize_fish_name, profile_summary
 from .solunar import solunar_times
 from .water_temperature import oxygen_score_modifier, estimate_oxygen, oxygen_level_label
+from .bait_advisor import (
+    seasonal_time_score, autumn_feeding_bonus,
+    temp_change_score, light_change_score,
+    turbidity_score_modifier, full_bait_recommendation,
+    wettermethode_color,
+)
+from .water_level import water_level_score_modifier
 
 
 def smart_fishing_score(
@@ -26,13 +33,19 @@ def smart_fishing_score(
     hour: int | None = None,
     month: int | None = None,
     history_score: float = 50,
-    # Neue Parameter
+    # v2.8 Parameter
     water_temp: float | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
     spawning_penalty: float = 0.0,
     sunrise_hour: float | None = None,
     sunset_hour: float | None = None,
+    # v2.9 Parameter
+    water_temp_yesterday: float | None = None,
+    water_level_data: dict | None = None,
+    precipitation_24h: float = 0.0,
+    turbidity_ntu: float | None = None,
+    cloud_prev_hour: float | None = None,
 ) -> tuple[int, dict[str, Any]]:
     now = datetime.now().astimezone()
     hour = now.hour if hour is None else hour
@@ -257,6 +270,68 @@ def smart_fishing_score(
         elif 0 <= wind_bearing <= 90:
             score -= 4
             warnings.append("Nord-/Ostwind gilt als ungünstig für viele Fischarten")
+
+    # ── Saisonal-Tageszeit (Lieblingsköder + Barsch-Alarm) ────────────────────
+    try:
+        time_bonus, time_desc = seasonal_time_score(profile.name, hour, month)
+        score += time_bonus
+        if time_bonus >= 8:
+            reasons.append(time_desc)
+        elif time_bonus <= -2:
+            warnings.append(time_desc)
+    except Exception:
+        pass
+
+    # ── Herbst-Fresswelle (Oktober/November Raubfisch-Bonus) ─────────────────
+    autumn_bonus = autumn_feeding_bonus(profile.name, month)
+    if autumn_bonus > 0:
+        score += autumn_bonus
+        reasons.append(f"Herbst-Fresswelle: {profile.name} jagt aggressiv (+{autumn_bonus:.0f})")
+
+    # ── Temperaturwechsel-Geschwindigkeit ─────────────────────────────────────
+    try:
+        tc_bonus, tc_desc = temp_change_score(water_temp, water_temp_yesterday, profile.name, month)
+        if tc_bonus != 0.0:
+            score += tc_bonus
+            if tc_bonus > 0:
+                reasons.append(tc_desc)
+            else:
+                warnings.append(tc_desc)
+    except Exception:
+        pass
+
+    # ── Pegelstand ────────────────────────────────────────────────────────────
+    if water_level_data:
+        level_mod = water_level_score_modifier(water_level_data, profile.name)
+        score += level_mod
+        label = water_level_data.get("level_label", "")
+        if level_mod >= 4:
+            reasons.append(f"Pegelstand günstig: {label}")
+        elif level_mod <= -6:
+            warnings.append(f"Pegelstand ungünstig: {label} ({water_level_data.get('value_cm', '?')} cm)")
+
+    # ── Wassertrübung + Wettermethode Köderfarbe ──────────────────────────────
+    turb_ntu = turbidity_ntu or (water_level_data or {}).get("turbidity_ntu")
+    try:
+        turb_mod, bait_color = turbidity_score_modifier(
+            turb_ntu, cloud_coverage, precipitation_24h, profile.name
+        )
+        score += turb_mod
+        if turb_mod >= 3:
+            reasons.append(f"Trübung optimal – Wettermethode: {bait_color}")
+        elif turb_mod <= -4:
+            warnings.append(f"Starke Trübung – Wettermethode: {bait_color}")
+    except Exception:
+        bait_color = "Naturfarben"
+
+    # ── Lichtintensitätswechsel ───────────────────────────────────────────────
+    try:
+        light_bonus, light_desc = light_change_score(cloud_coverage, cloud_prev_hour)
+        if light_bonus > 0:
+            score += light_bonus
+            reasons.append(light_desc)
+    except Exception:
+        pass
 
     final = int(max(5, min(99, round(score))))
 

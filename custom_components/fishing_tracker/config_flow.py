@@ -11,6 +11,7 @@ from homeassistant.core import callback
 from .const import (
     CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER,
     CONF_WEATHER_ENTITY, CONF_WATER_TEMP_URL, CONF_LATITUDE, CONF_LONGITUDE,
+    CONF_PEGEL_UUID, CONF_PEGEL_NAME,
     DEFAULT_NAME, DOMAIN,
 )
 
@@ -90,6 +91,15 @@ class FishingTrackerOptionsFlow(config_entries.OptionsFlow):
                 CONF_LONGITUDE,
                 default=data.get(CONF_LONGITUDE, 0.0),
             ): vol.Coerce(float),
+            vol.Optional(
+                CONF_PEGEL_UUID,
+                default=data.get(CONF_PEGEL_UUID, ""),
+                description={"suggested_value": "UUID aus pegelonline.wsv.de/webservices/rest-api/v2/stations.json"},
+            ): str,
+            vol.Optional(
+                CONF_PEGEL_NAME,
+                default=data.get(CONF_PEGEL_NAME, ""),
+            ): str,
         })
 
         return self.async_show_form(
