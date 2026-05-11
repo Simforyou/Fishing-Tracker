@@ -50,6 +50,7 @@ WWW_FILES = [
     "fishing_tracker_log.html",
     "fishing_tracker_dashboard.html",
     "fishing_tracker_icon.png",
+    "fishing-tracker-card.js",
 ]
 
 SERVICE_INSTALL_DASHBOARD = "install_dashboard"

@@ -2,7 +2,7 @@
 
 # Fishing Tracker Home Assistant Integration
 
-Version 2.6.7
+Version 2.7.1
 
 ## Neu in 1.3.0
 - Natürlichere Tages- und Wochen-Beißprognose
@@ -101,3 +101,14 @@ Version 2.6.7
 ## Neu in 2.6.7
 - Eigenes Home-Assistant-Sidebar-Panel: Fishing Tracker.
 - Auto-Dashboard direkt ohne manuelle Dashboard-Karte erreichbar.
+
+## Fix in 2.6.9
+- Startfehler durch Sidebar-Panel-Registrierung behoben.
+- Auto-Dashboard bleibt über `/local/fishing_tracker_dashboard.html` verfügbar.
+
+## Neu in 2.7.0
+- Native Lovelace Custom Card: `custom:fishing-tracker-card`
+- Premium App-Menü mit Übersicht, Prognosen, Zielfischen, Spots, Fangbuch, Statistiken, Köder, Wetter und Einstellungen.
+
+## Fix in 2.7.1
+- Schnellaktion-Buttons funktionieren in der Lovelace Card.

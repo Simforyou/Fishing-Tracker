@@ -56,6 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = FishingStore(hass)
     await store.async_load()
     await async_install_frontend_files(hass)
+    await async_register_lovelace_resource(hass)
 
     # Register own sidebar panel for the auto-dashboard.
     hass.components.frontend.async_register_panel(
@@ -92,6 +93,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def handle_install_dashboard(call: ServiceCall) -> None:
         await async_install_frontend_files(hass)
+        await async_register_lovelace_resource(hass)
         async_dispatcher_send(hass, SIGNAL_UPDATED)
 
     if not hass.services.has_service(DOMAIN, SERVICE_LOG_CATCH):
@@ -114,7 +116,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
-        hass.components.frontend.async_remove_panel(PANEL_NAME)
         hass.data[DOMAIN].pop(entry.entry_id, None)
 
     if not hass.data.get(DOMAIN):
@@ -195,3 +196,24 @@ def _float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+async def async_register_lovelace_resource(hass: HomeAssistant) -> None:
+    """Try to register the Lovelace custom card resource automatically."""
+    url = "/local/fishing-tracker-card.js?v=270"
+    try:
+        storage = hass.helpers.storage.Store(1, "lovelace_resources")
+        data = await storage.async_load() or {"items": []}
+        items = data.get("items", [])
+        if not any(item.get("url", "").startswith("/local/fishing-tracker-card.js") for item in items):
+            items.append({
+                "id": "fishing-tracker-card",
+                "type": "module",
+                "url": url,
+            })
+            data["items"] = items
+            await storage.async_save(data)
+    except Exception:
+        # Resource can still be added manually in Lovelace:
+        # /local/fishing-tracker-card.js?v=270
+        return

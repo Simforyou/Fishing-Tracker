@@ -1,0 +1,34 @@
+Fishing Tracker v2.7.0
+
+Großer Meilenstein:
+- Erste native Lovelace Custom Card:
+  custom:fishing-tracker-card
+
+Neue Funktionen
+- eigene Lovelace Card statt iframe
+- linkes App-Menü
+- automatische Höhe
+- responsive Layout
+- Live-Datenzugriff über hass states
+- Views:
+  - Übersicht
+  - Prognosen
+  - Zielfische
+  - Spots
+  - Fangbuch
+  - Statistiken
+  - Köder
+  - Wetter
+  - Einstellungen
+- Premium Dark UI
+- Tagesgraph
+- Wochengraph
+- Zielfisch-Prognose
+- Smart Spot Preview
+- Zielfisch-Ranking
+- Wetterblöcke
+
+Hinweis
+- Resource wird automatisch versucht zu registrieren.
+- Falls nötig manuell hinzufügen:
+  /local/fishing-tracker-card.js?v=270

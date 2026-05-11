@@ -1,0 +1,12 @@
+Fishing Tracker v2.6.9
+
+Fixes
+- Kritischer Startfehler behoben:
+  AttributeError: 'HomeAssistant' object has no attribute 'components'
+- Unsichere Sidebar-Panel-Registrierung deaktiviert.
+- Integration startet wieder stabil.
+- Auto-Dashboard bleibt über /local/fishing_tracker_dashboard.html verfügbar.
+
+Hinweis
+- Einige Home-Assistant-Versionen unterstützen die verwendete Sidebar-Panel-API nicht.
+- Für maximale Stabilität bleibt das Auto-Dashboard als iframe/Webseite nutzbar.

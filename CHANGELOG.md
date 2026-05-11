@@ -147,3 +147,33 @@
 
 ### Changed
 - Dashboard version display updated to v2.6.7
+
+## v2.6.9
+### Fixed
+- Removed unsafe `hass.components.frontend` panel registration.
+- Fixed startup error on Home Assistant versions where `hass.components` is unavailable.
+
+### Changed
+- Auto-dashboard remains available via `/local/fishing_tracker_dashboard.html`.
+- Added `DASHBOARD_CARD.md` helper.
+
+## v2.7.0
+### Added
+- Native Lovelace custom card `custom:fishing-tracker-card`
+- Sidebar navigation inside the card
+- Views for overview, forecasts, species, spots, logbook, stats, bait, weather and settings
+- Automatic height and responsive layout
+- Live HA state binding
+- Premium dark UI
+- `LOVELACE_CARD.md`
+
+### Changed
+- First step away from iframe dashboard toward native Home Assistant UI
+
+## v2.7.1
+### Fixed
+- Quick action buttons now work in the native Lovelace card.
+- `log_catch` and `log_no_catch` are called via `hass.callService`.
+
+### Changed
+- Iframe dashboard quick actions are marked as display-only.
