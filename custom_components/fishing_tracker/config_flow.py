@@ -8,7 +8,11 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 
-from .const import CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER, CONF_WEATHER_ENTITY, DEFAULT_NAME, DOMAIN
+from .const import (
+    CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER,
+    CONF_WEATHER_ENTITY, CONF_WATER_TEMP_URL, CONF_LATITUDE, CONF_LONGITUDE,
+    DEFAULT_NAME, DOMAIN,
+)
 
 
 class FishingTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -31,6 +35,9 @@ class FishingTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_PERSON_ENTITY, default=""): str,
             vol.Optional(CONF_MOON_ENTITY, default="sensor.moon_phase"): str,
             vol.Optional(CONF_USE_ONLINE_WEATHER, default=True): bool,
+            vol.Optional(CONF_WATER_TEMP_URL, default=""): str,
+            vol.Optional(CONF_LATITUDE, default=0.0): vol.Coerce(float),
+            vol.Optional(CONF_LONGITUDE, default=0.0): vol.Coerce(float),
         })
 
         return self.async_show_form(
@@ -70,6 +77,19 @@ class FishingTrackerOptionsFlow(config_entries.OptionsFlow):
                 CONF_USE_ONLINE_WEATHER,
                 default=data.get(CONF_USE_ONLINE_WEATHER, True),
             ): bool,
+            vol.Optional(
+                CONF_WATER_TEMP_URL,
+                default=data.get(CONF_WATER_TEMP_URL, ""),
+                description={"suggested_value": "https://wassertemperatur.site/flusse/water-temp-in-dinkel"},
+            ): str,
+            vol.Optional(
+                CONF_LATITUDE,
+                default=data.get(CONF_LATITUDE, 0.0),
+            ): vol.Coerce(float),
+            vol.Optional(
+                CONF_LONGITUDE,
+                default=data.get(CONF_LONGITUDE, 0.0),
+            ): vol.Coerce(float),
         })
 
         return self.async_show_form(

@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Any
 
 from .fish_profiles import get_fish_profile, is_hour_in_windows, moon_key, normalize_fish_name, profile_summary
+from .solunar import solunar_times
+from .water_temperature import oxygen_score_modifier, estimate_oxygen, oxygen_level_label
 
 
 def smart_fishing_score(
@@ -24,6 +26,13 @@ def smart_fishing_score(
     hour: int | None = None,
     month: int | None = None,
     history_score: float = 50,
+    # Neue Parameter
+    water_temp: float | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    spawning_penalty: float = 0.0,
+    sunrise_hour: float | None = None,
+    sunset_hour: float | None = None,
 ) -> tuple[int, dict[str, Any]]:
     now = datetime.now().astimezone()
     hour = now.hour if hour is None else hour
@@ -157,6 +166,98 @@ def smart_fishing_score(
     elif moon_bonus < 0:
         warnings.append(f"Mondphase wirkt für {profile.name} eher ungünstig")
 
+    # ── Solunar-Zeiten ────────────────────────────────────────────────────────
+    if latitude is not None and longitude is not None:
+        try:
+            now_dt = datetime.now().astimezone()
+            sol = solunar_times(now_dt, latitude, longitude)
+            bonus = sol.get("score_bonus", 0)
+            score += bonus
+            if sol.get("in_major_window"):
+                reasons.append(
+                    f"Solunar: Aktive Hauptbeißzeit ({sol['major1']} / {sol['major2']} Uhr) – {sol['moon_phase_label']}"
+                )
+            elif sol.get("in_minor_window"):
+                reasons.append(
+                    f"Solunar: Nebenbeißzeit aktiv ({sol['minor1']} / {sol['minor2']} Uhr)"
+                )
+            elif bonus == 0:
+                warnings.append(
+                    f"Solunar: Kein aktives Fenster. Hauptzeiten: {sol['major1']} / {sol['major2']} Uhr"
+                )
+        except Exception:
+            pass
+
+    # ── Echter Sonnenauf-/untergang (statt fixer Stunden) ────────────────────
+    if sunrise_hour is not None and sunset_hour is not None:
+        dawn_start = sunrise_hour - 0.75
+        dawn_end   = sunrise_hour + 1.5
+        dusk_start = sunset_hour - 1.5
+        dusk_end   = sunset_hour + 0.75
+        in_dawn = dawn_start <= hour <= dawn_end
+        in_dusk = dusk_start <= hour <= dusk_end
+        if in_dawn or in_dusk:
+            score += profile.low_light_weight
+            reasons.append("Dämmerungszeit: erhöhte Aktivität an Uferzonen")
+    # Fallback wenn keine Sonnenzeiten bekannt: bisherige Festwerte bleiben aus
+    # dem vorhandenen Block (hour <= 7 or hour >= 19) erhalten
+
+    # ── Sauerstoffgehalt aus Wassertemperatur ─────────────────────────────────
+    if water_temp is not None:
+        o2_mod = oxygen_score_modifier(water_temp, fish_type)
+        score += o2_mod
+        o2_val = estimate_oxygen(water_temp)
+        if o2_mod >= 3:
+            reasons.append(f"Sauerstoffgehalt sehr gut ({o2_val} mg/l bei {water_temp}°C Wassertemp.)")
+        elif o2_mod < -5:
+            warnings.append(f"Sauerstoffgehalt kritisch ({o2_val} mg/l) – Fische stehen tiefer/träger")
+        elif o2_mod < 0:
+            warnings.append(f"Sauerstoffgehalt leicht eingeschränkt ({o2_val} mg/l)")
+
+        # Artspezifischer Wassertemperatur-Check (präziser als Lufttemp-Schätzung)
+        tmin, tmax = profile.temp_range
+        if tmin <= water_temp <= tmax:
+            score += 6
+            reasons.append(f"Wassertemperatur ({water_temp}°C) liegt im Idealbereich für {profile.name}")
+        else:
+            dist = min(abs(water_temp - tmin), abs(water_temp - tmax))
+            pen = min(14, dist * 1.8)
+            score -= pen
+            warnings.append(f"Wassertemperatur ({water_temp}°C) außerhalb des Idealbereichs für {profile.name}")
+
+    # ── Laichzeit-Penalty ─────────────────────────────────────────────────────
+    if spawning_penalty > 0:
+        score -= spawning_penalty
+        if spawning_penalty >= 20:
+            warnings.append(f"{profile.name} befindet sich in der Hauptlaichzeit – sehr wenig Beißaktivität")
+        elif spawning_penalty >= 10:
+            warnings.append(f"{profile.name} in Vor-/Nachlaichphase – Aktivität reduziert")
+
+    # ── Wetterfront-Erkennung (kombinierter Faktor) ───────────────────────────
+    # Schneller Druckabfall + Wind + steigende Bewölkung = kommende Front
+    front_score = 0.0
+    if pressure_trend < -2.5:
+        front_score += 1
+    if wind_speed > 20:
+        front_score += 1
+    if cloud_coverage > 70:
+        front_score += 1
+    if front_score >= 2:
+        score += 6
+        reasons.append("Wetterfront im Anzug: kurzes Fressfenster vor dem Schlechtwetter")
+    elif pressure_trend > 4.0 and cloud_coverage < 20:
+        score -= 8
+        warnings.append("Stabiles Hochdruckwetter mit klarem Himmel – oft ruhige Phase")
+
+    # ── Windrichtung (vollständig) ────────────────────────────────────────────
+    if wind_bearing is not None:
+        if 180 <= wind_bearing <= 270:
+            score += 4
+            reasons.append("Süd-/Westwind: klassisch günstiger Angelwind")
+        elif 0 <= wind_bearing <= 90:
+            score -= 4
+            warnings.append("Nord-/Ostwind gilt als ungünstig für viele Fischarten")
+
     final = int(max(5, min(99, round(score))))
 
     if final >= 85:
@@ -177,6 +278,7 @@ def smart_fishing_score(
         "recommended_baits": profile.recommended_baits,
         "weather_factors": {
             "temperature": temperature,
+            "water_temp": water_temp,
             "pressure": pressure,
             "pressure_trend": pressure_trend,
             "wind_speed": wind_speed,
@@ -188,6 +290,7 @@ def smart_fishing_score(
             "apparent_temperature": apparent_temperature,
             "uv_index": uv_index,
             "moon_phase": moon_phase,
+            "spawning_penalty": spawning_penalty,
         },
     }
 

@@ -365,6 +365,11 @@ def bite_forecast_series(
     apparent_temperature: float | None = None,
     uv_index: float | None = None,
     wind_bearing: float | None = None,
+    water_temp: float | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    sunrise_hour: float | None = None,
+    sunset_hour: float | None = None,
 ) -> list[dict[str, Any]]:
     from datetime import datetime, timedelta
     import math
@@ -420,6 +425,11 @@ def bite_forecast_series(
             hour=ts.hour,
             month=ts.month,
             history_score=history_score,
+            water_temp=water_temp,
+            latitude=latitude,
+            longitude=longitude,
+            sunrise_hour=sunrise_hour,
+            sunset_hour=sunset_hour,
         )
 
         # Small irregular bite windows

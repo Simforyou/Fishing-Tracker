@@ -12,15 +12,23 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .analytics import current_weather_score, stats
+
+from .storage import FishingStore
+from .frontend import async_install_frontend_files
+from .weather_engine import OpenMeteoWeatherEngine
+from .water_temperature import WaterTemperatureEngine
 from .const import (
     CONF_PERSON_ENTITY,
     CONF_WEATHER_ENTITY,
+    CONF_WATER_TEMP_URL,
+    CONF_LATITUDE,
+    CONF_LONGITUDE,
     DEFAULT_NAME,
     DOMAIN,
     PLATFORMS,
     SERVICE_EXPORT_CSV,
     SERVICE_EXPORT_JSON,
-            SERVICE_INSTALL_DASHBOARD,
+    SERVICE_INSTALL_DASHBOARD,
     SERVICE_IMPORT_CSV,
     SERVICE_LOG_CATCH,
     SERVICE_LOG_NO_CATCH,
@@ -30,9 +38,6 @@ from .const import (
     PANEL_TITLE,
     PANEL_URL,
 )
-from .storage import FishingStore
-from .frontend import async_install_frontend_files
-from .weather_engine import OpenMeteoWeatherEngine
 
 
 SERVICE_LOG_SCHEMA = vol.Schema({
@@ -69,7 +74,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"store": store, "entry": entry, "weather_engine": OpenMeteoWeatherEngine(hass)}
+
+    # Water Temperature Engine aufbauen
+    water_temp_engine = WaterTemperatureEngine(hass)
+    water_temp_url = entry.options.get(CONF_WATER_TEMP_URL) or entry.data.get(CONF_WATER_TEMP_URL, "")
+    if water_temp_url:
+        water_temp_engine.set_url(water_temp_url)
+
+    hass.data[DOMAIN][entry.entry_id] = {
+        "store": store,
+        "entry": entry,
+        "weather_engine": OpenMeteoWeatherEngine(hass),
+        "water_temp_engine": water_temp_engine,
+    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

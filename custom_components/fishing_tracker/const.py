@@ -6,6 +6,14 @@ CONF_MOON_ENTITY = "moon_entity"
 CONF_USE_ONLINE_WEATHER = "use_online_weather"
 CONF_NAME = "name"
 
+# Wassertemperatur von wassertemperatur.site
+# Beispiel: https://wassertemperatur.site/flusse/water-temp-in-dinkel
+CONF_WATER_TEMP_URL = "water_temp_url"
+
+# Koordinaten des Angelplatzes (für Solunar-Berechnung)
+CONF_LATITUDE = "fishing_latitude"
+CONF_LONGITUDE = "fishing_longitude"
+
 DEFAULT_NAME = "Fishing Tracker"
 
 PLATFORMS = ["sensor", "select", "number", "button"]

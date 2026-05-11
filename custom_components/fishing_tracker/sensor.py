@@ -15,8 +15,14 @@ from .intelligence import intelligence_recommendation, smart_fishing_score
 from .fish_profiles import profile_summary
 from .species_ranking import rank_species
 from .advanced_intelligence import advanced_analysis
-from .const import CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER, CONF_WEATHER_ENTITY, DOMAIN, SIGNAL_UPDATED
-
+from .solunar import solunar_times
+from .water_temperature import WaterTemperatureEngine, estimate_oxygen, oxygen_level_label
+from .spawning import spawning_status
+from .const import (
+    CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER,
+    CONF_WEATHER_ENTITY, CONF_WATER_TEMP_URL, CONF_LATITUDE, CONF_LONGITUDE,
+    DOMAIN, SIGNAL_UPDATED,
+)
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     store = hass.data[DOMAIN][entry.entry_id]["store"]
@@ -39,6 +45,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         SpeciesRankingSensor(hass, entry, store),
         OnlineWeatherStatusSensor(hass, entry, store),
         AdvancedIntelligenceSensor(entry, store),
+        # Neue Sensoren
+        SolunarSensor(hass, entry),
+        WaterTempDetailSensor(hass, entry),
+        SpawningSensor(hass, entry),
     ], True)
 
 
@@ -640,3 +650,150 @@ def _float(value: Any, default: Any = 0.0) -> Any:
         return float(value)
     except Exception:
         return default
+
+
+# ── Solunar Sensor ────────────────────────────────────────────────────────────
+
+class SolunarSensor(SensorEntity):
+    """Berechnet Solunar-Haupt- und Nebenbeißzeiten für heute."""
+
+    _attr_icon = "mdi:moon-waxing-crescent"
+    _attr_has_entity_name = True
+    _attr_name = "Solunar Beißzeiten"
+    _attr_should_poll = True
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_solunar"
+        self._state: str = "Berechnung..."
+        self._attrs: dict[str, Any] = {}
+
+    @property
+    def native_value(self) -> str:
+        return self._state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attrs
+
+    async def async_update(self) -> None:
+        lat = (
+            entry_val(self.entry, CONF_LATITUDE)
+            or self.hass.config.latitude
+        )
+        lon = (
+            entry_val(self.entry, CONF_LONGITUDE)
+            or self.hass.config.longitude
+        )
+
+        try:
+            now = datetime.now().astimezone()
+            sol = solunar_times(now, float(lat), float(lon))
+            self._state = sol.get("quality", "–")
+            self._attrs = sol
+        except Exception:
+            self._state = "Fehler"
+            self._attrs = {}
+
+
+# ── Water Temperature Detail Sensor ──────────────────────────────────────────
+
+class WaterTempDetailSensor(SensorEntity):
+    """Wassertemperatur von wassertemperatur.site mit O₂-Wert."""
+
+    _attr_icon = "mdi:thermometer-water"
+    _attr_has_entity_name = True
+    _attr_name = "Wassertemperatur (Gewässer)"
+    _attr_native_unit_of_measurement = "°C"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_should_poll = True
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_water_temp_detail"
+        self._state: float | None = None
+        self._attrs: dict[str, Any] = {}
+
+    @property
+    def native_value(self) -> float | None:
+        return self._state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attrs
+
+    async def async_update(self) -> None:
+        engine: WaterTemperatureEngine | None = (
+            self.hass.data.get(DOMAIN, {})
+            .get(self.entry.entry_id, {})
+            .get("water_temp_engine")
+        )
+        if engine is None:
+            return
+
+        # Lufttemperatur für Schätzung holen
+        weather_entity = entry_val(self.entry, CONF_WEATHER_ENTITY) or "weather.home"
+        ws = self.hass.states.get(weather_entity)
+        air_temp = _float(ws.attributes.get("temperature"), None) if ws else None
+
+        now = datetime.now().astimezone()
+        data = await engine.async_get_water_temperature(
+            air_temp=air_temp, month=now.month
+        )
+
+        self._state = data.get("temp")
+        self._attrs = data
+
+
+# ── Spawning Sensor ───────────────────────────────────────────────────────────
+
+class SpawningSensor(SensorEntity):
+    """Zeigt aktuelle Laichstatus aller Fischarten an."""
+
+    _attr_icon = "mdi:fish"
+    _attr_has_entity_name = True
+    _attr_name = "Laichzeiten Status"
+    _attr_should_poll = True
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_spawning"
+        self._state: str = "–"
+        self._attrs: dict[str, Any] = {}
+
+    @property
+    def native_value(self) -> str:
+        return self._state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attrs
+
+    async def async_update(self) -> None:
+        now = datetime.now().astimezone()
+        try:
+            status = spawning_status(now.month, now.day)
+            spawning_now = [s["fish"] for s in status if s["phase"] == "main"]
+            pre_post = [s["fish"] for s in status if s["phase"] in ("pre", "post")]
+            self._state = (
+                f"Laichzeit: {', '.join(spawning_now)}" if spawning_now
+                else "Keine Hauptlaichzeit"
+            )
+            self._attrs = {
+                "month": now.month,
+                "spawning_main": spawning_now,
+                "spawning_pre_post": pre_post,
+                "all_species": status,
+            }
+        except Exception:
+            self._state = "Fehler"
+            self._attrs = {}
+
+
+def entry_val(entry: ConfigEntry, key: str, default: Any = None) -> Any:
+    """Liest Wert aus entry.options (bevorzugt) oder entry.data."""
+    return entry.options.get(key) or entry.data.get(key) or default
+
