@@ -1,0 +1,12 @@
+# Fishing Tracker Dashboard
+# Dieses Dashboard in HA importieren:
+# Einstellungen → Dashboards → + Hinzufügen → Von YAML
+title: Fishing Tracker
+views:
+  - title: Fishing Tracker
+    path: fishing-tracker
+    icon: mdi:fish
+    badges: []
+    cards:
+      - type: custom:fishing-tracker-card
+        title: Fishing Tracker
