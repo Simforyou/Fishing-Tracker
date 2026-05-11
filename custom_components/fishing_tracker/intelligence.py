@@ -9,10 +9,10 @@ from .water_temperature import oxygen_score_modifier, estimate_oxygen, oxygen_le
 from .bait_advisor import (
     seasonal_time_score, autumn_feeding_bonus,
     temp_change_score, light_change_score,
-    turbidity_score_modifier, full_bait_recommendation,
+    full_bait_recommendation,
     wettermethode_color,
 )
-from .water_level import water_level_score_modifier
+from .water_level import water_level_score_modifier, turbidity_score_modifier
 
 
 def smart_fishing_score(
