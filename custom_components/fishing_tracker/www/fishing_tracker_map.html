@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Fishing Tracker Heatmap</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+html,body{margin:0;height:100%;background:#071018;color:white;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{min-height:100vh;background:radial-gradient(circle at 18% 0%,rgba(0,140,255,.22),transparent 32%),linear-gradient(145deg,#071018,#030507);padding:10px;box-sizing:border-box}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.title{font-size:21px;font-weight:850;letter-spacing:.2px}.pill{font-size:12px;opacity:.85;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.07);white-space:nowrap}
+.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+select,button{width:100%;border:0;border-radius:14px;background:rgba(255,255,255,.08);color:white;padding:10px;outline:none;font-size:14px}
+option{color:black}button{color:#72b7ff;font-weight:800}
+#map{height:62vh;min-height:420px;border-radius:24px;overflow:hidden;box-shadow:0 0 28px rgba(0,140,255,.18);background:#0b1118}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.stat{border-radius:18px;padding:12px;background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1px rgba(255,255,255,.04)}
+.stat .v{font-size:20px;font-weight:850}.stat .l{font-size:11px;opacity:.65;margin-top:3px}
+.panel{margin-top:10px;border-radius:22px;background:linear-gradient(145deg,rgba(12,35,58,.92),rgba(6,12,20,.96));padding:14px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),0 0 24px rgba(0,140,255,.10)}
+.panel-title{font-weight:850;font-size:18px;margin-bottom:8px}
+.rank{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid rgba(255,255,255,.06)}
+.rank:first-of-type{border-top:0}.rank small{opacity:.68}.good{color:#70ffab}.bad{color:#ff8989}.mid{color:#ffd166}
+.message{margin-top:10px;padding:14px;border-radius:18px;background:rgba(255,255,255,.06);color:rgba(255,255,255,.78);line-height:1.4;display:none}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:rgba(12,16,22,.96);color:white;border-radius:16px}.leaflet-container{font-family:inherit}
+.ft-popup{min-width:190px}
+.ft-popup-title{font-weight:850;font-size:15px;margin-bottom:6px}
+.ft-popup-good{color:#35ff8c}.ft-popup-bad{color:#ff7b7b}
+.ft-popup-line{opacity:.85;margin:3px 0}
+.cluster-label{display:inline-block;white-space:nowrap;background:rgba(8,12,18,.88);color:white;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:4px 8px;font-size:12px;font-weight:800;box-shadow:0 0 16px rgba(0,0,0,.3)}
+.cluster-label{background:rgba(8,12,18,.88);color:white;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:4px 8px;font-size:12px;font-weight:800;box-shadow:0 0 16px rgba(0,0,0,.3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top"><div class="title">🗺️ Fishing Heatmap</div><div class="pill" id="statusText">Lade Daten…</div></div>
+<div class="filters">
+<select id="fish"><option value="">Alle Fischarten</option></select>
+<select id="spot"><option value="">Alle Spots</option></select>
+<select id="bait"><option value="">Alle Köder</option></select>
+<select id="status"><option value="">Alle Sessions</option><option value="1">Nur Fang</option><option value="0">Nur kein Fang</option></select>
+<button id="heatToggle">Heatmap: an</button><button id="resetBtn">Reset</button>
+</div>
+<div id="map"></div>
+<div class="stats">
+<div class="stat"><div class="v" id="total">0</div><div class="l">Einträge</div></div>
+<div class="stat"><div class="v" id="caught">0</div><div class="l">Fänge</div></div>
+<div class="stat"><div class="v" id="rate">0%</div><div class="l">Quote</div></div>
+</div>
+<div class="panel">
+<div class="panel-title">🎯 Spot-Intelligenz</div>
+<div id="spotRanks"></div>
+</div>
+<div class="message" id="message"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const DATA_URL="/local/fishing_tracker_data.json";let allEntries=[],map,markerLayer,heatLayer,labelLayer,heatEnabled=true;
+function fixText(v){return typeof v==="string"?v.replaceAll("ÃŸ","ß").replaceAll("Ã¤","ä").replaceAll("Ã¶","ö").replaceAll("Ã¼","ü").replaceAll("Ã„","Ä").replaceAll("Ã–","Ö").replaceAll("Ãœ","Ü"):v}
+function normalizeEntry(e){const lat=e.latitude??e.lat??e.Latitude;const lon=e.longitude??e.lon??e.lng??e.Longitude;return{timestamp:e.timestamp||e.time||"",angler:fixText(e.angler||"Fishing Tracker"),latitude:lat===""||lat==null?null:Number(lat),longitude:lon===""||lon==null?null:Number(lon),fish_type:fixText(e.fish_type||e.fischart||e.fish||"-"),caught:Number(e.caught||e.fang||0),spot:fixText(e.spot||"-"),bait:fixText(e.bait||e.koeder||"-"),length_cm:e.length_cm??e.laenge??0,chance:Number(e.chance??0),temperature:e.temperature??"-",wind_speed:e.wind_speed??"-",pressure:e.pressure??"-"}}
+function validGps(e){return Number.isFinite(e.latitude)&&Number.isFinite(e.longitude)&&Math.abs(e.latitude)<=90&&Math.abs(e.longitude)<=180}
+function unique(a){return[...new Set(a.filter(v=>v&&v!=="-"))].sort((a,b)=>String(a).localeCompare(String(b),"de"))}
+function fillSelect(id,values){const el=document.getElementById(id);const first=el.options[0].outerHTML;el.innerHTML=first+values.map(v=>`<option value="${String(v).replaceAll('"','&quot;')}">${v}</option>`).join("")}
+function filteredEntries(){const fish=document.getElementById("fish").value,spot=document.getElementById("spot").value,bait=document.getElementById("bait").value,status=document.getElementById("status").value;return allEntries.filter(e=>(!fish||e.fish_type===fish)&&(!spot||e.spot===spot)&&(!bait||e.bait===bait)&&(!status||String(e.caught)===status))}
+function initMap(){map=L.map("map",{zoomControl:true,attributionControl:true}).setView([52.4922,6.9581],12);L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"&copy; OpenStreetMap"}).addTo(map);heatLayer=L.layerGroup().addTo(map);markerLayer=L.layerGroup().addTo(map);labelLayer=L.layerGroup().addTo(map);setTimeout(()=>map.invalidateSize(),300)}
+function heatColor(rate){if(rate>=70)return "#35ff8c";if(rate>=40)return "#ffd166";return "#ff4747"}
+function addHeat(lat,lon,rate,total){const intensity=Math.min(1,0.35+(total/12));const radius=90+Math.min(350,total*28);return L.circle([lat,lon],{radius,stroke:false,fillColor:heatColor(rate),fillOpacity:.12+intensity*.20})}
+function analyze(rows){const bySpot={};rows.forEach(e=>{const key=e.spot||"Unbekannt";if(!bySpot[key])bySpot[key]={spot:key,total:0,caught:0,chance:0,baits:{},lat:0,lon:0,gps:0};const g=bySpot[key];g.total++;g.caught+=e.caught>=1?1:0;g.chance+=Number(e.chance||0);g.baits[e.bait]=(g.baits[e.bait]||0)+1;if(validGps(e)){g.lat+=e.latitude;g.lon+=e.longitude;g.gps++}});return Object.values(bySpot).map(g=>{g.rate=g.total?Math.round(g.caught/g.total*100):0;g.avgChance=g.total?Math.round(g.chance/g.total):0;g.topBait=Object.entries(g.baits).sort((a,b)=>b[1]-a[1])[0]?.[0]||"-";if(g.gps){g.lat=g.lat/g.gps;g.lon=g.lon/g.gps}return g}).sort((a,b)=>(b.rate*2+b.total+b.avgChance/10)-(a.rate*2+a.total+a.avgChance/10))}
+function renderSpotRanks(rows){const ranks=analyze(rows).slice(0,5);const el=document.getElementById("spotRanks");if(!ranks.length){el.innerHTML='<div class="rank"><span>Keine Daten</span><small>Speichere Fänge für Spot-Ranking.</small></div>';return}el.innerHTML=ranks.map((r,i)=>`<div class="rank"><div><b>${i+1}. ${r.spot}</b><br><small>${r.total} Sessions · ${r.caught} Fänge · Köder: ${r.topBait}</small></div><div class="${r.rate>=70?'good':r.rate>=40?'mid':'bad'}"><b>${r.rate}%</b><br><small>${r.avgChance}% KI</small></div></div>`).join("")}
+function render(){markerLayer.clearLayers();heatLayer.clearLayers();labelLayer.clearLayers();const rows=filteredEntries();const gpsRows=rows.filter(validGps);const caughtRows=rows.filter(e=>e.caught>=1);document.getElementById("total").textContent=rows.length;document.getElementById("caught").textContent=caughtRows.length;document.getElementById("rate").textContent=rows.length?Math.round(caughtRows.length/rows.length*100)+"%":"0%";document.getElementById("statusText").textContent=`${rows.length} Einträge · ${gpsRows.length} GPS`;renderSpotRanks(rows);const msg=document.getElementById("message");msg.style.display="none";if(!rows.length){msg.style.display="block";msg.textContent="Keine Fangdaten gefunden. Speichere einen Fang oder exportiere JSON erneut."}else if(!gpsRows.length){msg.style.display="block";msg.textContent="Fangdaten vorhanden, aber ohne gültige GPS-Koordinaten."}const bounds=[];const spots=analyze(rows).filter(s=>s.gps);spots.forEach(s=>{if(heatEnabled)addHeat(s.lat,s.lon,s.rate,s.total).addTo(heatLayer);const label=L.marker([s.lat,s.lon],{icon:L.divIcon({className:"ft-cluster-icon",html:`<div class="cluster-label">${s.spot} · ${s.rate}%</div>`,iconSize:null})}).addTo(labelLayer);bounds.push([s.lat,s.lon])});gpsRows.forEach(e=>{const good=e.caught>=1;const color=good?"#35ff8c":"#ff4747";const marker=L.circleMarker([e.latitude,e.longitude],{radius:good?8:7,color,fillColor:color,fillOpacity:good?.78:.55,weight:2});marker.bindPopup(`
+<div class="ft-popup">
+  <div class="ft-popup-title ${good ? "ft-popup-good" : "ft-popup-bad"}">${good ? "🎣 Fang" : "❌ Kein Fang"}</div>
+  <div class="ft-popup-line"><b>${e.fish_type}</b> · ${e.spot}</div>
+  <div class="ft-popup-line">🪝 ${e.bait} · 📏 ${e.length_cm || 0} cm</div>
+  <div class="ft-popup-line">🔥 Chance: <b>${e.chance}%</b></div>
+  <div class="ft-popup-line">🌡️ ${e.temperature} °C</div>
+  <small>${e.timestamp}</small>
+</div>
+`);marker.addTo(markerLayer);bounds.push([e.latitude,e.longitude])});if(bounds.length)map.fitBounds(bounds,{padding:[30,30],maxZoom:15});setTimeout(()=>map.invalidateSize(),200)}
+async function loadData(){try{const r=await fetch(DATA_URL+"?ts="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);const payload=await r.json();const raw=Array.isArray(payload)?payload:(payload.entries||[]);allEntries=raw.map(normalizeEntry);fillSelect("fish",unique(allEntries.map(e=>e.fish_type)));fillSelect("spot",unique(allEntries.map(e=>e.spot)));fillSelect("bait",unique(allEntries.map(e=>e.bait)));render()}catch(err){document.getElementById("statusText").textContent="Keine Daten";const msg=document.getElementById("message");msg.style.display="block";msg.textContent="fishing_tracker_data.json konnte nicht geladen werden. Exportiere JSON unter Entwicklerwerkzeuge → Aktionen.";console.error(err)}}
+document.addEventListener("DOMContentLoaded",()=>{initMap();["fish","spot","bait","status"].forEach(id=>document.getElementById(id).addEventListener("change",render));document.getElementById("heatToggle").addEventListener("click",()=>{heatEnabled=!heatEnabled;document.getElementById("heatToggle").textContent=heatEnabled?"Heatmap: an":"Heatmap: aus";render()});document.getElementById("resetBtn").addEventListener("click",()=>{["fish","spot","bait","status"].forEach(id=>document.getElementById(id).value="");render()});loadData()});
+</script>
+</body>
+</html>
