@@ -1,6 +1,6 @@
 ![Fishing Tracker Logo](logo.png)
 
-# Fishing Tracker – Home Assistant Integration
+# Fishing hhhh – Home Assistant Integration
 
 **Version 2.9.0** | Custom Integration für Home Assistant
 
