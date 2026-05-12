@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Fishing Tracker</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;width:100%;background:#0d1117;overflow:hidden}
+  #ft-root{height:100vh;width:100%;display:flex;flex-direction:column}
+
+  /* Top-Bar */
+  .ft-topbar{
+    height:56px;background:linear-gradient(90deg,#07111d,#0d1a2a);
+    border-bottom:1px solid rgba(46,168,255,.2);
+    display:flex;align-items:center;padding:0 16px;gap:14px;flex-shrink:0;
+  }
+  .ft-logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(135deg,#1a6baa,#0a3660);
+    display:flex;align-items:center;justify-content:center;font-size:18px;
+    box-shadow:0 0 14px rgba(46,168,255,.3);}
+  .ft-title-box{}
+  .ft-title{font-family:system-ui,-apple-system,sans-serif;font-size:18px;font-weight:900;
+    color:#fff;letter-spacing:.5px}
+  .ft-sub{font-size:11px;color:rgba(255,255,255,.45);margin-top:1px}
+  .ft-live{margin-left:auto;display:flex;align-items:center;gap:6px;
+    font-size:12px;color:rgba(255,255,255,.5)}
+  .dot{width:7px;height:7px;border-radius:50%;background:#67d33f;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .ft-clock{font-size:13px;font-weight:700;color:rgba(255,255,255,.75)}
+
+  /* Nav Tabs */
+  .ft-nav{
+    background:#06101a;border-bottom:1px solid rgba(255,255,255,.06);
+    display:flex;overflow-x:auto;flex-shrink:0;
+    scrollbar-width:none;
+  }
+  .ft-nav::-webkit-scrollbar{display:none}
+  .ft-nav-btn{
+    border:0;background:transparent;color:rgba(255,255,255,.5);
+    padding:12px 16px;font-size:13px;font-weight:700;
+    cursor:pointer;white-space:nowrap;font-family:inherit;
+    border-bottom:2px solid transparent;transition:.15s;flex-shrink:0;
+  }
+  .ft-nav-btn:hover{color:rgba(255,255,255,.85);background:rgba(255,255,255,.04)}
+  .ft-nav-btn.active{color:#2ea8ff;border-bottom-color:#2ea8ff;background:rgba(46,168,255,.07)}
+
+  /* Content area */
+  .ft-content{flex:1;overflow-y:auto;overflow-x:hidden;padding:14px;background:#0d1117}
+  .ft-content::-webkit-scrollbar{width:4px}
+  .ft-content::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px}
+
+  /* Card wrapper */
+  .card-wrap{
+    background:linear-gradient(145deg,rgba(8,18,34,.97),rgba(3,7,14,.99));
+    border:1px solid rgba(46,168,255,.15);border-radius:20px;
+    overflow:hidden;min-height:calc(100vh - 140px);
+  }
+</style>
+</head>
+<body>
+<div id="ft-root">
+  <!-- Top Bar -->
+  <div class="ft-topbar">
+    <div class="ft-logo">🎣</div>
+    <div class="ft-title-box">
+      <div class="ft-title">Fishing Tracker</div>
+      <div class="ft-sub">v2.12.5 · Premium Intelligence</div>
+    </div>
+    <div class="ft-live">
+      <div class="dot"></div>
+      <span>Live</span>
+      <span class="ft-clock" id="clock">--:--</span>
+    </div>
+  </div>
+
+  <!-- Navigation -->
+  <nav class="ft-nav" id="nav"></nav>
+
+  <!-- Content -->
+  <div class="ft-content" id="content"></div>
+</div>
+
+<script>
+// ── Clock ──────────────────────────────────────────────────────────────────────
+setInterval(() => {
+  const t = new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('clock').textContent = t + ' Uhr';
+}, 1000);
+
+// ── Connect to HA via parent window ───────────────────────────────────────────
+let haConnection = null;
+let haStates = {};
+let currentView = 'overview';
+
+// Try to get HA connection from parent
+async function connectHA() {
+  try {
+    // HA iframe: parent has hassConnection
+    if (window.parent && window.parent.customElements) {
+      const haEl = window.parent.document.querySelector('home-assistant');
+      if (haEl && haEl.hass) {
+        haStates = haEl.hass.states || {};
+        return true;
+      }
+    }
+  } catch(e) {}
+  return false;
+}
+
+function getState(entityId, fallback = '--') {
+  const s = haStates[entityId];
+  return s ? s.state : fallback;
+}
+
+function getAttr(entityId, attr, fallback = '--') {
+  const s = haStates[entityId];
+  return s && s.attributes ? (s.attributes[attr] ?? fallback) : fallback;
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+const VIEWS = [
+  ['overview', '🏠', 'Übersicht'],
+  ['forecast', '📈', 'Prognosen'],
+  ['species',  '🎯', 'Zielfische'],
+  ['spots',    '📍', 'Spots'],
+  ['logbook',  '📘', 'Fangbuch'],
+  ['stats',    '📊', 'Statistiken'],
+  ['bait',     '🪱', 'Köder-Wizard'],
+  ['weather',  '🌦️', 'Wetter'],
+  ['settings', '⚙️', 'Einstellungen'],
+];
+
+function buildNav() {
+  document.getElementById('nav').innerHTML = VIEWS.map(([v, i, l]) =>
+    `<button class="ft-nav-btn ${v === currentView ? 'active' : ''}"
+      onclick="switchView('${v}')">${i} ${l}</button>`
+  ).join('');
+}
+
+function switchView(v) {
+  currentView = v;
+  buildNav();
+  renderView();
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+function drawChart(id, pts, color = '#ff9d18') {
+  const svg = document.getElementById(id);
+  if (!svg) return;
+  const w = 900, h = 180, pad = 28, step = (w - pad * 2) / (pts.length - 1);
+  const mx = Math.max(...pts) || 100;
+  const pp = pts.map((v, i) => [pad + i * step, h - pad - (v / mx) * (h - pad * 1.6)]);
+  const line = pp.map((p, i) => (i ? 'L' : 'M') + p[0] + ',' + p[1]).join(' ');
+  const area = 'M' + pp[0][0] + ',' + (h - pad) + ' ' + pp.map(p => 'L' + p[0] + ',' + p[1]).join(' ') + ' L' + pp[pp.length-1][0] + ',' + (h-pad) + ' Z';
+  const nh = new Date().getHours();
+  const nx = pad + Math.min(nh, pts.length-1) * step;
+  const ny = pp[Math.min(nh, pts.length-1)]?.[1] || 60;
+  const labs = pts.length > 8 ? ['00','03','06','09','12','15','18','21'] : ['Mo','Di','Mi','Do','Fr','Sa','So'];
+  svg.innerHTML = `
+    <defs><linearGradient id="g${id}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${color}" stop-opacity=".25"/>
+      <stop offset="100%" stop-color="${color}" stop-opacity=".03"/>
+    </linearGradient></defs>
+    <line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="rgba(255,255,255,.1)"/>
+    ${labs.map((l,i) => `<text x="${pad + i*(w-pad*2)/(labs.length-1) - 10}" y="${h-4}" fill="rgba(255,255,255,.4)" font-size="11" font-family="system-ui">${l}</text>`).join('')}
+    <path d="${area}" fill="url(#g${id})"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="${nx}" y1="${pad}" x2="${nx}" y2="${h-pad}" stroke="rgba(255,215,0,.55)" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <circle cx="${nx}" cy="${ny}" r="5" fill="#ffd23f" stroke="#fff" stroke-width="1.5"/>
+    <text x="${nx+7}" y="${ny-7}" fill="#ffd23f" font-size="11" font-weight="800" font-family="system-ui">Jetzt</text>`;
+}
+
+// ── CSS ───────────────────────────────────────────────────────────────────────
+const STYLES = `
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{--green:#67d33f;--blue:#2ea8ff;--orange:#ff9d18;--yellow:#ffd23f;--red:#ff6b6b;--muted:rgba(255,255,255,.5)}
+  body{color:#fff;font-family:system-ui,-apple-system,sans-serif}
+  .panel{background:linear-gradient(145deg,rgba(10,24,38,.9),rgba(4,8,14,.96));border:1px solid rgba(90,180,255,.12);border-radius:18px;padding:14px;margin-bottom:12px}
+  .panel.green{background:radial-gradient(circle at 0 0,rgba(103,211,63,.16),transparent 42%),linear-gradient(145deg,rgba(8,22,16,.96),rgba(3,7,5,.98));border-color:rgba(103,211,63,.22)}
+  .panel.blue{background:radial-gradient(circle at 0 0,rgba(46,168,255,.14),transparent 42%),linear-gradient(145deg,rgba(5,14,26,.96),rgba(3,7,14,.98));border-color:rgba(46,168,255,.22)}
+  .panel.gold{background:radial-gradient(circle at 0 0,rgba(255,165,40,.12),transparent 42%),linear-gradient(145deg,rgba(20,18,10,.96),rgba(5,5,4,.98));border-color:rgba(255,165,40,.22)}
+  .sec{font-size:11px;font-weight:800;color:rgba(255,255,255,.38);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
+  .big{font-size:52px;font-weight:950;line-height:.9}
+  .greenText{color:var(--green)}.blueText{color:var(--blue)}.orangeText{color:var(--orange)}.yellowText{color:var(--yellow)}
+  .muted{color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .box{background:rgba(255,255,255,.045);border-radius:13px;padding:12px}
+  .box small{font-size:11px;color:var(--muted);display:block;margin-bottom:5px}
+  .box .val{font-size:20px;font-weight:900}
+  .rank-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px}
+  .rank-row:last-child{border-bottom:0}
+  .bar-wrap{flex:1;height:7px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;margin:0 10px}
+  .bar-fill{height:100%;border-radius:4px}
+  .chart-box{height:240px}
+  .chart-box svg{width:100%;height:100%}
+  .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+  .kpi{background:linear-gradient(145deg,rgba(10,24,38,.9),rgba(4,8,14,.96));border:1px solid rgba(90,180,255,.12);border-radius:18px;padding:14px}
+  .kpi-val{font-size:26px;font-weight:950;margin:4px 0}
+  .kpi-label{font-size:10px;font-weight:800;color:rgba(255,255,255,.38);text-transform:uppercase;letter-spacing:.08em}
+  .kpi-delta{font-size:11px;color:var(--green);margin-top:4px}
+  .fc-tabs{display:flex;gap:7px;margin-bottom:12px}
+  .fc-tab{border:0;background:rgba(255,255,255,.07);color:rgba(255,255,255,.55);border-radius:9px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;transition:.15s}
+  .fc-tab.active{background:rgba(46,168,255,.2);color:#2ea8ff}
+  .tz-row{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .tz-time{font-size:12px;font-weight:700;width:44px;flex-shrink:0}
+  .tz-val{font-size:12px;font-weight:800;width:32px;text-align:right;flex-shrink:0}
+  .sol-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .sol-card{border-radius:13px;padding:11px;text-align:center}
+  .sol-main{background:rgba(103,211,63,.1);border:1px solid rgba(103,211,63,.22)}
+  .sol-minor{background:rgba(46,168,255,.08);border:1px solid rgba(46,168,255,.18)}
+  .sol-time{font-size:20px;font-weight:900;margin:4px 0}
+  .spotMap{height:280px;border-radius:14px;background:radial-gradient(circle at 28% 65%,rgba(255,120,40,.85),rgba(255,120,40,.14) 14%,transparent 28%),radial-gradient(circle at 72% 35%,rgba(80,255,120,.8),rgba(80,255,120,.12) 12%,transparent 25%),linear-gradient(135deg,rgba(20,70,95,.95),rgba(3,15,28,.95));position:relative;margin-bottom:10px}
+  .pin{position:absolute;right:34%;top:28%;font-size:26px;filter:drop-shadow(0 0 8px rgba(103,211,63,.9))}
+  .sp-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+  .sp-row:last-child{border-bottom:0}
+  .sp-score{font-size:16px;font-weight:900;flex-shrink:0}
+  .sp-label{font-size:11px;font-weight:700;flex-shrink:0;width:54px;text-align:right}
+  .lb-entry{display:flex;align-items:center;gap:10px;padding:11px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer;border-radius:10px;transition:.15s}
+  .lb-entry:hover,.lb-entry.active{background:rgba(46,168,255,.08)}
+  .lb-entry:last-child{border-bottom:0}
+  .lb-icon{font-size:22px;flex-shrink:0}
+  .fish-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .ftab{border:1px solid rgba(255,255,255,.13);border-radius:50px;padding:7px 13px;font-size:12px;font-weight:700;cursor:pointer;background:rgba(255,255,255,.04);color:rgba(255,255,255,.58);font-family:inherit;transition:.15s}
+  .ftab.active{background:rgba(46,168,255,.2);border-color:#2ea8ff;color:#fff}
+  .wiz-chip{border:1px solid rgba(255,255,255,.14);border-radius:50px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;background:rgba(255,255,255,.04);color:rgba(255,255,255,.62);font-family:inherit;transition:.15s;margin:3px}
+  .wiz-chip.sel{background:rgba(46,168,255,.2);border-color:#2ea8ff;color:#fff}
+  .wiz-label{font-size:11px;font-weight:800;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;margin-top:14px}
+  .prog-bar{height:3px;flex:1;border-radius:3px;background:rgba(255,255,255,.1);transition:.3s}
+  .prog-bar.done{background:var(--blue)}
+  .rcard{border-radius:14px;padding:13px;margin-bottom:9px;display:flex;gap:11px}
+  .rcard.top{background:rgba(103,211,63,.1);border:1px solid rgba(103,211,63,.28)}
+  .rcard.gut{background:rgba(46,168,255,.08);border:1px solid rgba(46,168,255,.2)}
+  .rbadge{display:inline-block;font-size:10px;font-weight:800;border-radius:4px;padding:2px 7px;margin-bottom:4px}
+  .rb-top{background:rgba(103,211,63,.25);color:#67d33f}
+  .rb-gut{background:rgba(46,168,255,.22);color:#2ea8ff}
+  .quickBtn{border:0;border-radius:15px;padding:16px 14px;color:white;font-size:17px;font-weight:900;cursor:pointer;font-family:inherit;transition:.15s;flex:1}
+  .quickBtn:active{transform:scale(.96)}
+  .catch-btn{background:linear-gradient(145deg,#07391b,#021108);border:1px solid rgba(103,211,63,.3)}
+  .no-catch-btn{background:linear-gradient(145deg,#3a0909,#130202);border:1px solid rgba(255,107,107,.3)}
+  .set-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px}
+  .set-code{background:rgba(255,255,255,.07);border-radius:5px;padding:2px 8px;font-size:11px;color:#2ea8ff;font-family:monospace}
+  .wt-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:13px}
+  .wi-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .wi-label{font-size:12px;width:110px;flex-shrink:0}
+  .wi-bar-wrap{flex:1;height:7px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden}
+  .wi-bar{height:100%;border-radius:4px}
+  .bait-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .bait-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 11px;display:flex;align-items:center;gap:9px}
+  .bait-icon{width:34px;height:34px;flex-shrink:0}
+  .bait-icon svg{width:100%;height:100%}
+  .bait-name{font-size:12px;font-weight:800}
+  .bait-sub{font-size:10px;color:rgba(255,255,255,.4);margin-top:1px}
+  @media(max-width:480px){.grid4{grid-template-columns:1fr 1fr}.kpi-row{grid-template-columns:1fr 1fr}.grid3{grid-template-columns:1fr 1fr}}
+`;
+
+// ── View Renderer ─────────────────────────────────────────────────────────────
+let selFish = 'Zander';
+let wizState = {fish:null,turb:null,light:null,depth:null};
+
+const sc = v => parseInt(v) >= 80 ? '#67d33f' : parseInt(v) >= 60 ? '#ffd23f' : '#ff9d18';
+
+const DAY  = [28,25,32,30,28,26,25,42,60,68,72,70,65,60,55,52,58,68,88,92,85,72,58,42];
+const WEEK = [76,82,68,85,91,72,78];
+const SPECIES_CURVES = {
+  Zander: [22,20,30,28,25,22,20,38,55,65,60,58,55,50,48,50,55,62,88,92,85,72,58,42],
+  Hecht:  [31,28,42,38,35,32,30,50,62,68,64,60,55,52,50,52,58,65,70,68,62,55,42,35],
+  Barsch: [25,22,35,32,30,28,26,45,60,70,72,68,65,62,62,65,72,78,76,70,62,52,40,30],
+  Karpfen:[18,18,22,20,20,18,18,28,40,50,55,58,60,64,68,72,75,79,78,75,68,55,40,28],
+  Aal:    [8,10,10,9,8,8,10,12,14,16,18,20,22,24,26,30,35,45,62,80,88,91,82,70],
+  Schleie:[18,18,20,19,18,18,20,22,30,40,48,55,60,65,68,72,78,79,76,72,62,50,38,28],
+};
+
+const BAIT_ICONS = {
+  Gummifisch:`<svg viewBox="0 0 40 40" fill="none"><ellipse cx="17" cy="20" rx="13" ry="7" fill="#4ecb8d" opacity=".9"/><ellipse cx="28" cy="20" rx="5" ry="5.5" fill="#3aad75"/><circle cx="30" cy="18.5" r="1.8" fill="#fff"/><circle cx="30.4" cy="18.5" r=".9" fill="#111"/><path d="M4 20 Q0 13 2 20 Q0 27 4 20Z" fill="#2fa868"/><circle cx="32" cy="22" r="2.5" fill="#aaa" opacity=".7"/><path d="M32 24.5 Q35 28 33 31 Q30 33 29 31" stroke="#aaa" stroke-width="1.4" fill="none"/></svg>`,
+  Wobbler:`<svg viewBox="0 0 40 40" fill="none"><ellipse cx="19" cy="20" rx="14" ry="6" fill="#2ea8ff" opacity=".9"/><ellipse cx="19" cy="17.5" rx="10" ry="2.5" fill="#fff" opacity=".18"/><ellipse cx="19" cy="22.5" rx="11" ry="2.5" fill="#f5e030" opacity=".6"/><ellipse cx="30" cy="20" rx="4.5" ry="5" fill="#1a88d8"/><circle cx="31.5" cy="18" r="2.2" fill="#fff"/><circle cx="31.5" cy="18" r="1.1" fill="#111"/><path d="M5 20 Q1 14 4 20 Q1 26 5 20Z" fill="#1a88d8"/></svg>`,
+  Spinner:`<svg viewBox="0 0 40 40" fill="none"><line x1="4" y1="20" x2="36" y2="20" stroke="#aaa" stroke-width="1.2"/><ellipse cx="12" cy="17" rx="5" ry="9" fill="#ffd23f" opacity=".9" transform="rotate(-25 12 17)"/><circle cx="19" cy="20" r="3" fill="#888"/><ellipse cx="27" cy="20" rx="5" ry="3.5" fill="#ff6b35" opacity=".9"/><circle cx="35" cy="20" r="1.5" fill="none" stroke="#aaa" stroke-width=".9"/></svg>`,
+  Jig:`<svg viewBox="0 0 40 40" fill="none"><circle cx="28" cy="15" r="7" fill="#a78bfa" opacity=".9"/><circle cx="30" cy="13.5" r="2" fill="#fff"/><circle cx="30.4" cy="13.5" r="1" fill="#111"/><path d="M28 8 Q28 4 31 4 Q34 4 34 7 Q34 10 31 11" stroke="#aaa" stroke-width="1.5" fill="none"/><path d="M25 21 Q22 26 21 32 Q23 34 25 32Z" fill="#7c3aed" opacity=".85"/><path d="M28 21 Q28 27 28 33" stroke="#6d28d9" stroke-width="2.5" fill="none" stroke-linecap="round"/><path d="M31 21 Q33 26 33 32 Q31 34 29.5 32Z" fill="#7c3aed" opacity=".85"/></svg>`,
+  Wurm:`<svg viewBox="0 0 40 40" fill="none"><path d="M6 22 Q10 16 14 20 Q18 24 22 19 Q26 14 30 18 Q34 22 36 20" stroke="#92400e" stroke-width="5.5" fill="none" stroke-linecap="round"/><path d="M6 21 Q10 15 14 19 Q18 23 22 18 Q26 13 30 17 Q34 21 36 19" stroke="#d97706" stroke-width="2.5" fill="none" stroke-linecap="round" opacity=".45"/><circle cx="36" cy="20" r="3.2" fill="#d97706"/></svg>`,
+  Made:`<svg viewBox="0 0 40 40" fill="none"><ellipse cx="14" cy="18" rx="7" ry="3.5" fill="#f3f4f6" opacity=".9" transform="rotate(-15 14 18)"/><path d="M7 17 Q10 14 14 15 Q18 14 21 17" stroke="#d1d5db" stroke-width=".6" fill="none"/><ellipse cx="22" cy="23" rx="7" ry="3.5" fill="#e5e7eb" opacity=".9" transform="rotate(10 22 23)"/><path d="M15 23 Q18 20 22 21 Q26 20 29 23" stroke="#d1d5db" stroke-width=".6" fill="none"/><ellipse cx="13" cy="28" rx="6" ry="3" fill="#f9fafb" opacity=".85" transform="rotate(-8 13 28)"/><path d="M28 15 Q33 15 33 20 Q33 24 29 24" stroke="#aaa" stroke-width="1.3" fill="none"/><path d="M29 24 L27.5 22.5" stroke="#aaa" stroke-width="1.1"/></svg>`,
+  Mais:`<svg viewBox="0 0 40 40" fill="none"><circle cx="16" cy="17" r="5.5" fill="#fde047" opacity=".95"/><circle cx="16" cy="17" r="3.5" fill="#fef08a" opacity=".5"/><circle cx="24" cy="15" r="5" fill="#facc15" opacity=".9"/><circle cx="21" cy="23" r="5" fill="#eab308" opacity=".9"/><circle cx="12" cy="24" r="4.5" fill="#fef08a" opacity=".85"/><circle cx="28" cy="22" r="3.5" fill="#facc15" opacity=".8"/><circle cx="14.5" cy="15.5" r="1.2" fill="#fff" opacity=".4"/><path d="M30 18 Q36 18 36 23 Q36 27 32 27" stroke="#aaa" stroke-width="1.4" fill="none"/><path d="M32 27 L30.5 25.5" stroke="#aaa" stroke-width="1.2"/></svg>`,
+  Boilie:`<svg viewBox="0 0 40 40" fill="none"><circle cx="15" cy="22" r="8.5" fill="#d97706" opacity=".9"/><circle cx="15" cy="22" r="6" fill="#f59e0b" opacity=".35"/><ellipse cx="12" cy="19" rx="3" ry="2" fill="#fff" opacity=".18"/><circle cx="25" cy="16" r="6" fill="#b45309" opacity=".85"/><path d="M23.5 22 Q30 20 34 18" stroke="#ddd" stroke-width=".9" stroke-dasharray="2 1.5"/><path d="M34 16 Q34 12 37 12 Q37 16 35 17" stroke="#aaa" stroke-width="1.3" fill="none"/></svg>`,
+  Brot:`<svg viewBox="0 0 40 40" fill="none"><rect x="8" y="14" width="24" height="16" rx="3" fill="#d97706" opacity=".85"/><rect x="8" y="14" width="24" height="7" rx="3" fill="#f59e0b" opacity=".6"/><rect x="8" y="14" width="24" height="3" rx="2" fill="#b45309" opacity=".9"/><rect x="8" y="27" width="24" height="3" rx="2" fill="#b45309" opacity=".9"/><circle cx="15" cy="22" r="1.5" fill="#b45309" opacity=".4"/><circle cx="21" cy="20" r="1.2" fill="#b45309" opacity=".35"/><path d="M30 18 Q36 18 36 23 Q36 27 32 27" stroke="#aaa" stroke-width="1.4" fill="none"/><path d="M32 27 L30.5 25.5" stroke="#aaa" stroke-width="1.2"/></svg>`,
+  Pellets:`<svg viewBox="0 0 40 40" fill="none"><ellipse cx="13" cy="20" rx="5" ry="7" fill="#92400e" opacity=".9" transform="rotate(-10 13 20)"/><ellipse cx="13" cy="20" rx="3" ry="4.5" fill="#b45309" opacity=".4" transform="rotate(-10 13 20)"/><ellipse cx="22" cy="17" rx="5" ry="7" fill="#78350f" opacity=".9" transform="rotate(5 22 17)"/><ellipse cx="22" cy="17" rx="3" ry="4.5" fill="#92400e" opacity=".4" transform="rotate(5 22 17)"/><ellipse cx="31" cy="21" rx="4.5" ry="6.5" fill="#92400e" opacity=".85" transform="rotate(-5 31 21)"/><path d="M34 16 Q37 16 37 20 Q37 24 34 24" stroke="#aaa" stroke-width="1.3" fill="none"/><path d="M34 24 L32.5 22.5" stroke="#aaa" stroke-width="1.1"/></svg>`,
+  Hanf:`<svg viewBox="0 0 40 40" fill="none"><circle cx="15" cy="22" r="5" fill="#365314" opacity=".9"/><circle cx="15" cy="22" r="3" fill="#4d7c0f" opacity=".5"/><circle cx="23" cy="18" r="4.5" fill="#3f6212" opacity=".9"/><circle cx="23" cy="18" r="2.5" fill="#65a30d" opacity=".4"/><circle cx="29" cy="24" r="4" fill="#365314" opacity=".85"/><circle cx="11" cy="28" r="3.5" fill="#4d7c0f" opacity=".8"/><path d="M32 20 Q36 20 36 24 Q36 28 32 28" stroke="#aaa" stroke-width="1.3" fill="none"/><path d="M32 28 L30.5 26.5" stroke="#aaa" stroke-width="1.1"/></svg>`,
+  Teig:`<svg viewBox="0 0 40 40" fill="none"><ellipse cx="20" cy="22" rx="14" ry="10" fill="#fef3c7" opacity=".9"/><ellipse cx="20" cy="20" rx="11" ry="7" fill="#fde68a" opacity=".5"/><ellipse cx="16" cy="19" rx="3" ry="2" fill="#fff" opacity=".3"/><path d="M32 18 Q37 18 37 22 Q37 26 33 26" stroke="#aaa" stroke-width="1.3" fill="none"/><path d="M33 26 L31.5 24.5" stroke="#aaa" stroke-width="1.1"/></svg>`,
+  Blinker:`<svg viewBox="0 0 40 40" fill="none"><ellipse cx="20" cy="20" rx="14" ry="6" fill="#e5e7eb" opacity=".95" transform="rotate(-20 20 20)"/><ellipse cx="20" cy="20" rx="11" ry="4" fill="#fff" opacity=".5" transform="rotate(-20 20 20)"/><ellipse cx="17" cy="17" rx="4" ry="2" fill="#fff" opacity=".5" transform="rotate(-20 17 17)"/><circle cx="30" cy="26" r="2" fill="none" stroke="#aaa" stroke-width="1"/><path d="M28.5 27.5 L30 26 L31.5 27.5" stroke="#aaa" stroke-width=".9" fill="none"/><path d="M8 14 Q6 12 7 10 Q9 8 11 10" stroke="#aaa" stroke-width="1.2" fill="none"/></svg>`,
+  Kirsche:`<svg viewBox="0 0 40 40" fill="none"><circle cx="15" cy="24" r="7" fill="#dc2626" opacity=".9"/><circle cx="15" cy="22" r="4" fill="#ef4444" opacity=".4"/><circle cx="12" cy="21" r="1.5" fill="#fff" opacity=".4"/><circle cx="26" cy="22" r="6.5" fill="#b91c1c" opacity=".9"/><circle cx="23" cy="20" r="3.5" fill="#dc2626" opacity=".4"/><path d="M15 17 Q18 10 26 15" stroke="#16a34a" stroke-width="1.5" fill="none"/><path d="M18 12 Q20 8 22 10" stroke="#16a34a" stroke-width="1.2" fill="none"/></svg>`,
+  Oberflächenköder:`<svg viewBox="0 0 40 40" fill="none"><path d="M2 26 Q10 24 20 26 Q30 28 38 26" stroke="#2ea8ff" stroke-width=".7" fill="none" opacity=".4"/><ellipse cx="21" cy="21" rx="13" ry="6" fill="#f97316" opacity=".9"/><ellipse cx="21" cy="19.5" rx="10" ry="3" fill="#fff" opacity=".15"/><path d="M34 19 Q38 21 34 23 Q31 22 31 21 Q31 20 34 19Z" fill="#ea580c"/><circle cx="31" cy="18.5" r="2.2" fill="#fff"/><circle cx="31.4" cy="18.5" r="1.1" fill="#111"/><path d="M8 21 Q4 16 7 21 Q4 26 8 21Z" fill="#ea580c"/></svg>`,
+};
+
+// Alias-Map: Köder-Text → Icon-Key
+const BAIT_ALIAS = {
+  'Gummifisch 7–12cm':'Gummifisch','Gummifisch 5–8cm':'Gummifisch',
+  'Gummifisch 10cm':'Gummifisch','Gummifisch 15cm':'Gummifisch',
+  'Swimbaits':'Gummifisch','Twister':'Gummifisch',
+  'Wobbler (Nacht)':'Wobbler','Mini-Wobbler':'Wobbler','Kleine Wobbler':'Wobbler',
+  'Spinner':'Spinner','Blinker/Spinner':'Blinker',
+  'Jig (vertikal)':'Jig','Micro-Jig':'Jig','Drop-Shot':'Jig',
+  'Tauwurm':'Wurm','Tauwurm (Nacht)':'Wurm','Mistwurm':'Wurm',
+  'Rotwurm':'Wurm','Regenwurm':'Wurm','Wurm (Nacht)':'Wurm',
+  'Made':'Made','Pinkies':'Made','Caster':'Made','Maden':'Made',
+  'Mais':'Mais','Dosenmais':'Mais','Tigernüsse':'Boilie',
+  'Boilie':'Boilie','Pellets':'Pellets','Minipellets':'Pellets',
+  'Heilbuttpellets':'Pellets','Hanf':'Hanf','Hanfsamen':'Hanf',
+  'Brot':'Brot','Brotflocke':'Brot','Weißbrotflocke':'Brot','Teig':'Teig',
+  'Kleinfisch':'Gummifisch','Deadbait (Winter)':'Gummifisch','Innereien':'Wurm',
+  'Kirsche':'Kirsche','Kirschen':'Kirsche','Obst/Früchte':'Kirsche',
+  'Brot/Früchte (Sommer)':'Brot',
+  'Oberflächenköder':'Oberflächenköder','Popper (Dämmerung)':'Oberflächenköder',
+  'Fliegenfischen':'Spinner','Kombi':'Boilie',
+};
+
+function baitCard(name, sub) {
+  const key = BAIT_ALIAS[name] || name.replace(/ \d+.*cm$/,'').replace(/ \(.*\)$/,'');
+  const icon = BAIT_ICONS[key] || BAIT_ICONS['Gummifisch'];
+  return `<div class="bait-card"><div class="bait-icon">${icon}</div><div><div class="bait-name">${name}</div><div class="bait-sub">${sub||key}</div></div></div>`;
+}
+
+
+
+// ── Köder-Wizard Logik (korrigiert) ──────────────────────────────────────────
+function wizardResult(w) {
+  const {fish, turb, light, depth} = w;
+  const sc = v => parseInt(v)>=80?'#67d33f':parseInt(v)>=60?'#ffd23f':'#ff9d18';
+
+  // Farbsehen je Fischart
+  const sight = {
+    Zander:"Restlichtverstärker – Kontrast > Farbe. Lichtempfindlich.",
+    Hecht:"Kein Blau/UV (gelbe Hornhaut, PCR 2019). Sieht Grün & Rot.",
+    Barsch:"Kein Blau/UV (wie Hecht). Sieht Grün & Rot. Futterneid im Schwarm.",
+    Forelle:"Breites Spektrum inkl. UV.",
+  };
+
+  // Tiefenabsorption
+  const depthNote = {
+    flach:"Alle Farben wirksam (<2m)",
+    mittel:"Rot kaum sichtbar, Orange wird bräunlich → Gelb/Grün",
+    tief:"Nur Grün/Chartreuse/Schwarz/UV sichtbar – Rot+Orange sind weg!",
+  };
+
+  // Korrekte Empfehlungslogik
+  let recs = [];
+
+  if (light === 'nacht') {
+    recs = [
+      {c:'top',l:'⭐ Top',n:'⚫ Schwarz / Dunkelolive',
+       w:'Stärkste Silhouette gegen aufgehellten Nachthimmel (Mondlicht von oben). Köderwissen Kap.6.'},
+      {c:'gut',l:'✓ Gut',n:'🟢 Dunkelgrün / Olive',
+       w:'Grün dringt tief ein – gute Silhouette bei Restlicht.'},
+      {c:'ok',l:'~ OK',n:fish==='Forelle'?'🌟 UV-aktiv Chartreuse':'🟡 Chartreuse',
+       w:fish==='Forelle'?'Forelle sieht UV – nutzbar bei Mondlicht.':'Kontraststark auch bei wenig Licht.'},
+    ];
+  } else if (light === 'daemmerung') {
+    recs = [
+      {c:'top',l:'⭐ Top',n:'🟡 Chartreuse / Gelb-Grün',
+       w:'Dämmerung: Stäbchensehen aktiv – Kontrast wichtiger als Farbe. Chartreuse = maximaler Kontrast.'},
+      {c:'gut',l:'✓ Gut',n:turb!=='klar'?'🌟 UV-aktiv (Sheriff, Neo)':'⚪ Weiß / Pearl',
+       w:turb!=='klar'?'UV wandelt Restlicht in Helligkeit – physikalischer Vorteil bei Trübung+Dämmerung.':'Hohe Helligkeit = starker Kontrast im Dämmerlicht.'},
+      {c:'ok',l:'~ OK',n:'⚫ Schwarz',w:'Silhouette in jedem Licht – immer als Backup.'},
+    ];
+  } else if (turb === 'sehrtrüb') {
+    recs = [
+      {c:'top',l:'⭐ Top',n:'🌟 UV-aktiv / Chartreuse',
+       w:'Sehr trüb: UV-Farben wandeln kurzwelliges Restlicht in Helligkeit – einzige Option die noch leuchtet.'},
+      {c:'gut',l:'✓ Gut',n:'⚫ Schwarz',
+       w:'Silhouette durch Kontrast – funktioniert ohne Farbsehen, nur Form zählt.'},
+      {c:'ok',l:'~ OK',n:'🩷 Pink / Weiß',w:'Maximale Helligkeit als letzte Farbenoption.'},
+    ];
+  } else if (turb === 'trüb') {
+    recs = [
+      {c:'top',l:'⭐ Top',n:'🔥 Orange / Firetiger',
+       w:'Trüb: Orange bleibt bis ~10m sichtbar, Firetiger-Muster zieht Aufmerksamkeit.'},
+      {c:'gut',l:'✓ Gut',n:'🩷 Pink / Pinky',w:'Schockfarbe mit hoher Sichtbarkeit in trübem Wasser.'},
+      {c:'ok',l:'~ OK',n:depth==='tief'?'🌟 UV-aktiv':'🟡 Chartreuse',
+       w:depth==='tief'?'Tief+trüb: UV für maximale Restlicht-Nutzung.':'Gute Sichtbarkeit für trübes Wasser.'},
+    ];
+  } else if (turb === 'leicht') {
+    recs = [
+      {c:'top',l:'⭐ OPTIMAL!',n:'🔥 Firetiger / Naturmuster',
+       w:'⭐ Leicht trüb = BESTE Situation: Fisch sieht Köder, NICHT die Montage! Perfekte Balance.'},
+      {c:'gut',l:'✓ Gut',n:light==='sonnig'?'🟡 Gelb-Grün / Chartreuse':'🩷 Pink / Captain',
+       w:light==='sonnig'?'Sonnig+leicht trüb: auffällig ohne übertrieben zu sein.':'Bewölkt+leicht trüb: dezente Schockfarbe wirkt sehr gut.'},
+      {c:'ok',l:'~ OK',n:'🌿 Naturfarben (Whisky, Sunny)',
+       w:'Reserve wenn Fisch nach intensiver Befischung scheu ist.'},
+    ];
+  } else {
+    // klar
+    if (light === 'sonnig') {
+      recs = [
+        {c:'top',l:'⭐ Top',n:'🌿 Naturfarben (Sunny, Whisky)',
+         w:'Klares Wasser+Sonne: Fisch sieht alles! Nur perfekte Beutefisch-Imitate. Keine Auffälligkeiten.'},
+        {c:'gut',l:'✓ Gut',n:'🟤 Braun / Whisky (bodennahe Beute)',
+         w:'Grundeln/Krebse imitieren – dezent und in klarem Wasser sehr fängig.'},
+        {c:'ok',l:'~ OK',n:depth==='tief'?'🟢 Grün (Tiefe!)':'🟡 Gelb dezent',
+         w:depth==='tief'?'Tief+klar: Grün ist letzte Farbe die noch ankommt.':'Dezente Kontrastfarbe als Alternative.'},
+      ];
+    } else {
+      // klar + bewoelkt
+      recs = [
+        {c:'top',l:'⭐ Top',n:'🌿 Naturfarben + leichte Kontraste',
+         w:'Klares Wasser+Wolken: Naturgetreu mit etwas Kontrast – funktioniert in beiden Lichtsituationen.'},
+        {c:'gut',l:'✓ Gut',n:'🟡 Gelb / Whisky Orange',
+         w:'Dezente Kontrastfarbe – sichtbar ohne misstrauische Fische zu vergraulen.'},
+        {c:'ok',l:'~ OK',n:'🟢 Grün / Naturgrün',w:'Natürliche Farbe die in klarem Wasser gut sichtbar ist.'},
+      ];
+    }
+  }
+
+  // Blau/UV-Warnung für Hecht und Barsch
+  const blauWarn = (fish==='Hecht'||fish==='Barsch')
+    ? `<div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.28);border-radius:13px;padding:11px 13px;margin-bottom:11px;font-size:12px;color:rgba(255,190,190,.9)">
+        ⚠️ <b>${fish} kann Blau + UV NICHT sehen!</b> Gelbe Hornhaut blockiert kurzwelliges Licht physikalisch (Jokela-Määttä et al. 2019).
+       </div>`
+    : '';
+
+  const cards = recs.slice(0,3).map((r,i) => `
+    <div style="border-radius:13px;padding:13px 14px;margin-bottom:8px;display:flex;gap:11px;align-items:flex-start;${r.c==='top'?'background:rgba(103,211,63,.1);border:1px solid rgba(103,211,63,.28)':r.c==='gut'?'background:rgba(46,168,255,.08);border:1px solid rgba(46,168,255,.2)':'background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1)'}">
+      <div style="font-size:20px">${['🥇','🥈','🥉'][i]}</div>
+      <div>
+        <span style="display:inline-block;font-size:10px;font-weight:800;border-radius:4px;padding:2px 7px;margin-bottom:4px;${r.c==='top'?'background:rgba(103,211,63,.25);color:#67d33f':r.c==='gut'?'background:rgba(46,168,255,.22);color:#2ea8ff':'background:rgba(255,157,24,.2);color:#ff9d18'}">${r.l}</span>
+        <div style="font-size:14px;font-weight:900;margin-bottom:3px">${r.n}</div>
+        <div style="font-size:12px;color:rgba(255,255,255,.55);line-height:1.5">${r.w}</div>
+      </div>
+    </div>`).join('');
+
+  return `<div style="margin-top:16px;animation:fadeIn .3s ease">
+    <div style="font-size:11px;font-weight:800;color:rgba(255,255,255,.38);text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px">
+      Empfehlung: ${fish} · ${turb} · ${light} · ${depth}
+    </div>
+    ${blauWarn}${cards}
+    <div style="background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.07);border-radius:13px;padding:12px;margin-top:8px;font-size:12px;color:rgba(255,255,255,.55);line-height:1.6">
+      <b style="color:rgba(255,255,255,.85)">👁️ Farbsehen ${fish}:</b> ${sight[fish]||sight.Zander}<br>
+      <b style="color:rgba(255,255,255,.85)">📏 Tiefe (${depth}):</b> ${depthNote[depth]}
+    </div>
+  </div>`;
+}
+
+
+// ── Views ─────────────────────────────────────────────────────────────────────
+function renderView() {
+  // Try to get live HA data
+  const chance   = getState('sensor.fishing_tracker_bite_chance', getState('sensor.beisschance','87'));
+  const bestTime = getState('sensor.fishing_tracker_best_time', getState('sensor.beste_angelzeit','18:00–21:00'));
+  const waterT   = getState('sensor.wassertemperatur_gewaesser', getState('sensor.water_temp','13.2'));
+  const sol      = haStates['sensor.solunar_beisszeiten']?.attributes || {};
+  const ranking  = haStates['sensor.fishing_tracker_species_ranking']?.attributes?.ranking ||
+                   [{fish_type:'Zander',score:91},{fish_type:'Barsch',score:84},{fish_type:'Hecht',score:76},{fish_type:'Karpfen',score:68}];
+  const weather  = haStates['weather.home']?.attributes || {};
+  const airTemp  = weather.temperature || '18.7';
+  const wind     = weather.wind_speed || '12';
+  const pressure = weather.pressure || '1015';
+
+  const tops = [{h:'18:00',v:91},{h:'19:00',v:88},{h:'20:00',v:84},{h:'07:00',v:79},{h:'08:00',v:74},{h:'06:00',v:68}];
+  // Echte Daten aus HA oder Fallback
+  const weekDays = useReal
+    ? dailyForecast.slice(0,7).map(d => ({d: d.weekday, date: d.date_str, v: d.avg_score, peak: d.peak_score, isToday: d.is_today}))
+    : [{d:'Mo',v:72},{d:'Di',v:65},{d:'Mi',v:58},{d:'Do',v:71},{d:'Sa',v:68},{d:'So',v:74},{d:'Mo',v:62}];
+  const factors = [['🌦️','Wetter',87],['🌙','Mondphase',91],['📊','Luftdruck',78],['💨','Wind',68],['💧','Wassertemp.',84]];
+
+  const fishData = {
+    Zander:{emoji:'🟡',type:'raubfisch',score:91,best:'19:00–24:00',temp:'12–18°C',
+      act:[['<8°C','Alle 15–30 Tage',false],['12–18°C','Alle 1–3 Tage ⭐',true],['>20°C','Stark reduziert – nur Nacht',false]],
+      baits:['Gummifisch 7–12cm','Jig (vertikal)','Wobbler (Nacht)','Twister'],
+      sight:'Restlichtverstärker – Kontrast > Farbe. Sehr lichtempfindlich.',
+      spots:['Kanten zum Tiefwasser','Häfen & Einläufe','Strömungsunterbrechungen','Brücken & Spundwände'],
+      curve:[22,20,30,28,25,22,20,38,55,65,60,58,55,50,48,50,55,62,88,92,85,72,58,42]},
+    Hecht:{emoji:'🟢',type:'raubfisch',score:76,best:'05:00–09:00 / Dämmerung',temp:'15–17°C',
+      act:[['4–6°C','Alle 15–30 Tage',false],['15–17°C','Alle 1–2 Tage ⭐',true],['>19°C','Stark reduziert',false]],
+      baits:['Swimbaits','Wobbler','Spinner','Popper (Dämmerung)','Deadbait (Winter)'],
+      sight:'Kein Blau/UV (gelbe Hornhaut, PCR 2019). Sieht Grün & Rot.',
+      spots:['Uferkanten mit Vegetation','Schilf- und Krautränder','Einläufe & Kanäle','Kanten'],
+      curve:[31,28,42,38,35,32,30,50,62,68,64,60,55,52,50,52,58,65,70,68,62,55,42,35],
+      note:'⚠️ Juli: Hechte überfüttert – schlechteste Fangquoten (Fischfindertest)'},
+    Barsch:{emoji:'🔴',type:'raubfisch',score:84,best:'10:00–15:00 (Winter!)',temp:'14–20°C',
+      act:[['<8°C','Sporadisch (Großbarsch!)',false],['14–20°C','Intensive Fenster ⭐',true],['>22°C','Nur früh/abends',false]],
+      baits:['Gummifisch 5–8cm','Drop-Shot','Micro-Jig','Spinner'],
+      sight:'Kein Blau/UV (wie Hecht). Grün & Rot. Starker Futterneid im Schwarm.',
+      spots:['Steinpackungen & Spundwände','Krautfelder','Einlassströmungen','Plateaus'],
+      curve:[25,22,35,32,30,28,26,45,60,70,72,68,65,62,62,65,72,78,76,70,62,52,40,30]},
+    Karpfen:{emoji:'🟤',type:'friedfisch',score:79,best:'04:00–08:00 / 20:00–24:00',temp:'18–24°C',
+      act:[['<5°C','Kaum aktiv',false],['14–18°C','Zunehmend',false],['18–24°C','Optimale Fressphasen ⭐',true],['>25°C','Reduziert',false]],
+      baits:['Boilie','Mais','Pellets','Tigernüsse','Wurm'],
+      sight:'Breites Farbspektrum – Geruchssinn dominant.',
+      spots:['Flache Buchten','Windseite','Krautfelder','Einläufe'],
+      curve:[18,18,22,20,20,18,18,28,40,50,55,58,60,64,68,72,75,79,78,75,68,55,40,28]},
+    Aal:{emoji:'⚫',type:'raubfisch',score:71,best:'20:00–05:00 (Nacht!)',temp:'18–24°C',
+      act:[['<10°C','Winterschlaf',false],['10–15°C','Erwachend',false],['18–24°C','Optimale Jagd Nacht ⭐',true],['>26°C','Reduziert',false]],
+      baits:['Wurm (Nacht)','Tauwurm','Kleinfisch','Innereien'],
+      sight:'Nachtspezialist – olfaktorisch und vibrationssensitiv.',
+      spots:['Wurzeln & Totholz','Tiefe Löcher','Einläufe','Schlammige Uferzonen'],
+      curve:[8,10,10,9,8,8,10,12,14,16,18,20,22,24,26,30,35,45,62,80,88,91,82,70]},
+    Schleie:{emoji:'🟠',type:'friedfisch',score:58,best:'05:00–09:00 / 19:00–22:00',temp:'17–22°C',
+      act:[['<13°C','Kaum aktiv',false],['13–17°C','Gering',false],['17–22°C','Optimale Fressphasen ⭐',true],['>24°C','Reduziert',false]],
+      baits:['Wurm','Mais','Made','Brot'],
+      sight:'Friedfisch – breites Farbspektrum, Geruch wichtig.',
+      spots:['Krautfelder','Seerosenfelder','Buchten','Schilf'],
+      curve:[18,18,20,19,18,18,20,22,30,40,48,55,60,65,68,72,78,79,76,72,62,50,38,28]},
+    Brasse:{emoji:'🥈',type:'friedfisch',score:65,best:'06:00–11:00 / 18:00–23:00',temp:'15–22°C',
+      act:[['<12°C','Kaum aktiv',false],['12–15°C','Gering',false],['15–22°C','Optimale Fressphasen ⭐',true],['>24°C','Tiefere Zonen',false]],
+      baits:['Made','Mais','Wurm','Brot','Pellets'],
+      sight:'Friedfisch – breites Farbspektrum, Geruch wichtig.',
+      spots:['Tiefe Futterplätze','Flussrinnen','Schilfränder','Ruhige Buchten'],
+      curve:[18,18,22,20,18,18,20,28,42,55,60,65,68,70,72,74,78,76,70,65,55,42,30,20]},
+    Rotauge:{emoji:'🔵',type:'friedfisch',score:62,best:'08:00–12:00 / 15:00–19:00',temp:'12–20°C',
+      act:[['<8°C','Gering',false],['8–12°C','Zunehmend',false],['12–20°C','Optimale Fressphasen ⭐',true],['>22°C','Reduziert',false]],
+      baits:['Made','Pinkies','Brot','Mais','Wurm'],
+      sight:'Breites Farbspektrum – vorsichtig in klarem Wasser. Beste Jahreszeit: Frühjahr & Herbst.',
+      spots:['Krautränder','Ufernahe Strukturen','Brücken','Einläufe'],
+      curve:[20,20,24,22,20,20,22,32,48,60,64,62,60,58,56,58,62,66,62,58,48,36,26,22]},
+    Rotfeder:{emoji:'🟣',type:'friedfisch',score:55,best:'06:00–10:00 / 18:00–22:00',temp:'18–24°C',
+      act:[['<12°C','Kaum aktiv',false],['12–18°C','Zunehmend',false],['18–24°C','Optimale Fressphasen ⭐',true],['>26°C','Reduziert',false]],
+      baits:['Brot','Made','Mais','Pinkies','Fliegenfischen'],
+      sight:'Typischer Sommerfisch. Sehr sensibel auf Störungen. Oberflächennah bei Sonne.',
+      spots:['Krautbänke','Seerosenfelder','Oberflächennahe Zonen','Ufernah'],
+      curve:[15,15,18,17,16,15,18,22,32,45,55,62,68,70,68,65,60,55,48,38,28,20,16,15]},
+    Döbel:{emoji:'🟫',type:'sonderfall',score:68,best:'Frühe Morgen- / Abendstunden (kurze Fenster!)',temp:'14–20°C',
+      act:[['<8°C','Gering – räuberisch (fleischliche Köder)',false],['8–14°C','Zunehmend',false],['14–20°C','Optimale Phase ⭐',true],['>22°C','Sommer: oft Vegetarier (Insekten/Früchte)',false]],
+      baits:['Kleine Wobbler','Spinner','Brot/Früchte (Sommer)','Wurm','Fliegenfischen'],
+      sight:'🎯 Sonderfall: Friedfisch der mit Größe räuberisch wird. Ganzjährig aktiv – keine Winterruhe! Sehr misstrauisch.',
+      spots:['Strömungskanten','Überhängende Äste','Buhnen','Wehre','Treibholz'],
+      curve:[30,28,32,30,28,26,28,42,58,65,68,65,60,55,50,48,55,65,70,68,62,52,40,32]},
+    Rapfen:{emoji:'🔶',type:'sonderfall',score:72,best:'06:00–09:00 / 19:00–21:00 (Oberfläche!)',temp:'16–22°C',
+      act:[['<10°C','Gering (tiefere Schichten)',false],['10–16°C','Zunehmend',false],['16–22°C','Intensive Jagd Oberfläche ⭐',true],['>24°C','Strömungsreiche Stellen',false]],
+      baits:['Blinker/Spinner','Oberflächenköder','Kleine Wobbler','Gummifisch (bewölkt)'],
+      sight:'🎯 Sonderfall: Einziger Karpfenfisch als offizieller Raubfisch. Verrät sich durch lautes Platschen. Sonnenschein = Jagd! Sehr scheu.',
+      spots:['Unterhalb von Wehren','Kühlwassereinläufe','Strömungskanten','Buhnenköpfe'],
+      curve:[15,14,18,16,15,14,16,25,42,55,62,65,68,65,60,58,62,70,72,68,58,42,28,18]},
+  };
+  const FISHES_ORDER = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse','Rotauge','Rotfeder','Döbel','Rapfen'];
+
+  const views = {
+    overview: () => `
+      <div class="kpi-row">
+        <div class="kpi" style="border-color:rgba(103,211,63,.25);background:radial-gradient(circle at 0 0,rgba(103,211,63,.13),transparent 50%),linear-gradient(145deg,rgba(8,22,16,.96),rgba(3,7,5,.98))">
+          <div class="kpi-label">Angelwetter Index</div>
+          <div class="kpi-val greenText">${chance}%</div>
+          <div class="kpi-delta">${parseInt(chance)>=85?'⭐ Sehr gut':parseInt(chance)>=70?'✓ Gut':'~ Mittel'}</div>
+        </div>
+        <div class="kpi"><div class="kpi-label">Beste Zeit heute</div><div class="kpi-val blueText" style="font-size:16px">${bestTime}</div><div class="kpi-delta">Aktivität hoch</div></div>
+        <div class="kpi"><div class="kpi-label">Wetter</div><div class="kpi-val" style="font-size:18px">${airTemp}°C</div><div class="kpi-delta muted">Wind ${wind} km/h · ${pressure} hPa</div></div>
+        <div class="kpi"><div class="kpi-label">Wassertemp.</div><div class="kpi-val blueText">${waterT}°C</div><div class="kpi-delta muted">wassertemperatur.site</div></div>
+      </div>
+      <div class="panel blue">
+        <div class="sec">📈 Aktivitätsprognose Heute</div>
+        <div class="chart-box"><svg id="dayChart" viewBox="0 0 900 180" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
+        <div style="margin-top:14px;background:rgba(255,255,255,.04);border-radius:12px;padding:10px 14px">
+          <div style="font-size:11px;font-weight:800;color:rgba(255,255,255,.38);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">🏆 Top Beißzeiten</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${tops.map(t=>`<div style="background:rgba(255,255,255,.06);border-radius:8px;padding:6px 12px;text-align:center"><div style="font-size:13px;font-weight:800;color:rgba(255,255,255,.8)">${t.h}</div><div style="font-size:15px;font-weight:950;color:${sc(t.v)}">${t.v}%</div></div>`).join('')}
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="sec">🏆 Zielfisch-Ranking</div>
+        ${ranking.slice(0,5).map((r,i)=>`<div class="rank-row">
+          <span style="font-size:13px;font-weight:800;width:100px">${i+1}. ${r.fish_type||r.name}</span>
+          <div class="bar-wrap"><div class="bar-fill" style="width:${r.score}%;background:${sc(r.score)}"></div></div>
+          <span style="font-size:14px;font-weight:900;color:${sc(r.score)}">${r.score}%</span>
+        </div>`).join('')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="panel">
+          <div class="sec">🗺️ Top Spot</div>
+          <div class="spotMap"><div class="pin">📍</div></div>
+          <div style="font-size:15px;font-weight:900">Geheimer Bucht</div>
+          <div style="font-size:22px;font-weight:950;color:var(--green)">91%</div>
+        </div>
+        <div class="panel">
+          <div class="sec">🌙 Solunar</div>
+          <div style="margin-bottom:8px">
+            <div style="font-size:11px;color:var(--muted)">Hauptbeißzeiten</div>
+            <div style="font-size:20px;font-weight:900;color:var(--green)">${sol.major1||'06:18'} / ${sol.major2||'18:42'}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--muted)">Nebenbeißzeiten</div>
+            <div style="font-size:16px;font-weight:900;color:var(--blue)">${sol.minor1||'12:28'} / ${sol.minor2||'00:52'}</div>
+          </div>
+          <div style="margin-top:10px;font-size:12px;color:var(--muted)">🌔 ${sol.moon_phase_label||'Zunehmend'}</div>
+        </div>
+      </div>
+      <div class="panel" style="display:flex;gap:10px">
+        <button class="quickBtn catch-btn" onclick="alert('✅ Fang gespeichert! (HA Service)')">🐟 ✓<br><small style="font-size:11px;opacity:.7">Fang speichern</small></button>
+        <button class="quickBtn no-catch-btn" onclick="alert('Kein Fang gespeichert.')">🐟 ✕<br><small style="font-size:11px;opacity:.7">Kein Fang</small></button>
+      </div>`,
+
+    forecast: () => {
+      setTimeout(() => {
+        switchForecastTab(document.querySelector('.fc-tab.active') || document.querySelector('.fc-tab'), 'overview');
+      }, 50);
+      return `
+      <div class="fc-tabs">
+        <button class="fc-tab active" onclick="switchForecastTab(this,'overview')">Übersicht</button>
+        <button class="fc-tab" onclick="switchForecastTab(this,'24h')">24 Stunden</button>
+        <button class="fc-tab" onclick="switchForecastTab(this,'7days')">7 Tage</button>
+        <button class="fc-tab" onclick="switchForecastTab(this,'14days')">14 Tage</button>
+      </div>
+      <div id="forecastContent"></div>`;
+    },
+
+    species: () => {
+      const FISHES = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse','Rotauge','Rotfeder','Döbel','Rapfen'];
+      const d = fishData[selFish] || fishData['Zander'];
+      const actLabel = d.type==='friedfisch' ? 'Fressphasen' : d.type==='sonderfall' ? 'Fressphasen & Jagd' : 'Jagdfrequenz';
+      const typeBadge = `<span style="display:inline-block;font-size:11px;font-weight:800;border-radius:6px;padding:3px 10px;margin-left:8px;${d.type==='raubfisch'?'background:rgba(255,107,107,.18);color:#ff8080':d.type==='friedfisch'?'background:rgba(103,211,63,.18);color:#67d33f':'background:rgba(255,157,24,.18);color:#ff9d18'}">${d.type==='raubfisch'?'🎣 Raubfisch':d.type==='friedfisch'?'🌿 Friedfisch':'⚡ Sonderfall'}</span>`;
+      const noteBox = d.note ? `<div style="background:rgba(255,107,107,.07);border:1px solid rgba(255,107,107,.22);border-radius:13px;padding:10px 13px;margin-bottom:10px;font-size:12px;color:rgba(255,180,180,.9)">${d.note}</div>` : '';
+      const sightBox = `<div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:13px;padding:10px 13px;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5"><b style="color:rgba(255,255,255,.85)">👁️ ${d.type==='sonderfall'?'Besonderheit':'Farbsehen'}:</b> ${d.sight||'–'}</div>`;
+      return `
+      <div style="margin-bottom:14px">
+        <select onchange="selFish=this.value;renderView()" style="width:100%;background:rgba(20,40,60,.95);border:1px solid rgba(46,168,255,.3);border-radius:13px;color:#fff;padding:12px 16px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer">
+          ${FISHES.map(f=>`<option value="${f}" ${f===selFish?'selected':''} style="background:#1a2a3a">${fishData[f]?.emoji||''} ${f} – ${fishData[f]?.type==='raubfisch'?'Raubfisch':fishData[f]?.type==='sonderfall'?'Sonderfall':'Friedfisch'}</option>`).join('')}
+        </select>
+      </div>
+      <div class="panel green">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+          <div style="font-size:52px">${d.emoji}</div>
+          <div style="flex:1">
+            <div style="font-size:24px;font-weight:900">${selFish} ${typeBadge}</div>
+            <div style="font-size:42px;font-weight:950;color:var(--green);line-height:1">${d.score}%</div>
+            <div class="muted" style="font-size:12px">Beißchance jetzt</div>
+          </div>
+        </div>
+        ${noteBox}
+        <div class="grid2">
+          <div class="box"><small>⏰ Beste Zeit</small><div class="val" style="font-size:13px;line-height:1.3">${d.best}</div></div>
+          <div class="box"><small>🌡️ Idealtemp.</small><div class="val">${d.temp}</div></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="sec">📊 ${actLabel} nach Wassertemperatur</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr>
+            <th style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;color:rgba(255,255,255,.4);font-size:11px">Wassertemp.</th>
+            <th style="padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;color:rgba(255,255,255,.4);font-size:11px">${actLabel}</th>
+          </tr></thead>
+          <tbody>${(d.act||[]).map(([r,v,cur])=>`<tr style="${cur?'background:rgba(103,211,63,.07)':''}">
+            <td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.05);color:rgba(255,255,255,.7)">${r}</td>
+            <td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.05);font-weight:${cur?800:400};color:${cur?'#67d33f':'inherit'}">${v}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+      <div class="panel blue">
+        <div class="sec">📈 Aktivitätskurve – Tageskurve (00:00–24:00 Uhr)</div>
+        <div class="chart-box"><svg id="specChart" viewBox="0 0 900 200" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
+      </div>
+      <div class="panel">
+        <div class="sec">🪱 Empfohlene Köder</div>
+        <div class="bait-grid">${(d.baits||[]).slice(0,4).map(b=>baitCard(b,'')).join('')}</div>
+      </div>
+      <div class="panel" style="margin-top:0">${sightBox}</div>
+      <div class="panel" style="margin-top:0">
+        <div class="sec">📍 Typische Spots</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${(d.spots||[]).map(s=>`<span style="background:rgba(46,168,255,.12);color:#7ec8ff;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:700">📍 ${s}</span>`).join('')}</div>
+      </div>`;
+    },
+
+    spots: () => `
+      <div class="panel">
+        <div class="sec">🗺️ Spot-Karte</div>
+        <div class="spotMap" style="height:300px">
+          <div class="pin" style="font-size:28px">📍</div>
+          <div style="position:absolute;left:38%;top:55%;font-size:22px;filter:drop-shadow(0 0 8px rgba(255,160,40,.9))">📍</div>
+          <div style="position:absolute;right:18%;bottom:25%;font-size:18px;filter:drop-shadow(0 0 7px rgba(255,215,0,.8))">📍</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="sec">📍 Spot Liste</div>
+        ${[['Geheimer Bucht',91,'Sehr gut'],['Alte Kiesgrube',88,'Sehr gut'],['Steinbruch See',84,'Gut'],['Flussbiegung',76,'Gut'],['Karpfenteich',68,'Mittel']].map(([n,s,l])=>`
+        <div class="sp-row">
+          <span style="font-size:18px">📍</span>
+          <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800">${n}</div><div class="muted" style="font-size:11px">Zander · Hecht</div></div>
+          <span class="sp-score" style="color:${sc(s)}">${s}%</span>
+          <span class="sp-label" style="color:${sc(s)}">${l}</span>
+        </div>`).join('')}
+      </div>`,
+
+    logbook: () => `
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="sec" style="margin-bottom:0">📘 Fangbuch</div>
+          <button style="border:0;border-radius:9px;background:#145da0;color:#fff;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">+ Neuer Fang</button>
+        </div>
+        ${[['🟡','Zander','68 cm · 3.2 kg','Geheimer Bucht','Gummifisch','22.05.2026'],['🔴','Barsch','34 cm · 0.6 kg','Alte Kiesgrube','Spinner','18.05.2026'],['🟢','Hecht','71 cm · 4.1 kg','Geheimer Bucht','Wobbler','15.05.2026'],['🟤','Karpfen','54 cm · 2.7 kg','Alte Kiesgrube','Boilie','10.05.2026']].map(([e,f,s,sp,b,d])=>`
+        <div class="lb-entry">
+          <div class="lb-icon">${e}</div>
+          <div style="flex:1">
+            <div style="font-size:14px;font-weight:800">${f}</div>
+            <div style="font-size:12px;color:rgba(255,255,255,.7);margin-top:2px">${s} · ${sp}</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:1px">${b} · ${d}</div>
+          </div>
+        </div>`).join('')}
+        <div style="text-align:center;padding:20px;color:rgba(255,255,255,.3);font-size:13px;border-top:1px solid rgba(255,255,255,.06);margin-top:8px">
+          🐟 Detailansicht mit Fotos kommt im nächsten Update
+        </div>
+      </div>`,
+
+    stats: () => `
+      <div class="kpi-row">
+        <div class="kpi"><div class="kpi-label">Gesamtfänge</div><div class="kpi-val">120</div><div class="kpi-delta">+23% vs. 2024</div></div>
+        <div class="kpi"><div class="kpi-label">Gesamtgewicht</div><div class="kpi-val">45.7 kg</div><div class="kpi-delta">+18% vs. 2024</div></div>
+        <div class="kpi"><div class="kpi-label">Durchschnitt</div><div class="kpi-val">0.38 kg</div><div class="kpi-delta">+12% vs. 2024</div></div>
+        <div class="kpi"><div class="kpi-label">Angeltage</div><div class="kpi-val">28</div><div class="kpi-delta">+8% vs. 2024</div></div>
+      </div>
+      <div class="panel">
+        <div class="sec">📊 Fänge nach Art</div>
+        ${[['🟡 Zander',45,37,'#2ea8ff'],['🔴 Barsch',38,32,'#67d33f'],['🟢 Hecht',22,18,'#ff9d18'],['🟤 Karpfen',15,13,'#ffd23f']].map(([f,n,pct,col])=>`
+        <div class="rank-row">
+          <span style="font-size:13px;font-weight:800;width:90px">${f}</span>
+          <div class="bar-wrap"><div class="bar-fill" style="width:${pct*2.5}%;background:${col}"></div></div>
+          <span style="font-size:13px;font-weight:800;color:${col}">${n} (${pct}%)</span>
+        </div>`).join('')}
+      </div>
+      <div class="panel blue">
+        <div class="sec">📈 Fänge pro Monat</div>
+        <div style="display:flex;align-items:flex-end;gap:4px;height:100px;padding-bottom:18px">
+          ${[2,3,8,14,22,18,12,15,28,35,24,8].map((v,i)=>{const mx=35;const labs=['J','F','M','A','M','J','J','A','S','O','N','D'];return`<div style="flex:1;display:flex;flex-direction:column;align-items:center;height:100%"><div style="flex:1;width:100%;display:flex;align-items:flex-end"><div style="width:100%;border-radius:3px 3px 0 0;background:linear-gradient(to top,#2ea8ff,#67d33f);height:${Math.round(v/mx*100)}%"></div></div><div style="font-size:9px;color:var(--muted);margin-top:4px">${labs[i]}</div></div>`;}).join('')}
+        </div>
+      </div>`,
+
+    bait: () => {
+      const ALL_FISH = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse','Rotauge','Rotfeder','Döbel','Rapfen','Forelle'];
+      const FISH_TYPE = {
+        Zander:'raubfisch',Hecht:'raubfisch',Barsch:'raubfisch',Forelle:'raubfisch',Aal:'raubfisch',
+        Karpfen:'friedfisch',Schleie:'friedfisch',Brasse:'friedfisch',Rotauge:'friedfisch',Rotfeder:'friedfisch',
+        Döbel:'sonderfall',Rapfen:'sonderfall',
+      };
+      const w = wizState;
+      const fishType = FISH_TYPE[w.fish] || 'raubfisch';
+      const isRaub = fishType === 'raubfisch';
+      const isFried = fishType === 'friedfisch';
+      const isSonder = fishType === 'sonderfall';
+      const done = isRaub
+        ? [w.fish,w.turb,w.light,w.depth].filter(Boolean).length
+        : [w.fish,w.stelle,w.jahreszeit,w.wetter].filter(Boolean).length;
+      const allSet = done === 4;
+
+      const chip = (k,v,l) => `<button class="wiz-chip ${w[k]===v?'sel':''}" onclick="wizState['${k}']='${v}';renderView()">${l}</button>`;
+
+      // Friedfisch/Sonderfall Wizard Ergebnis
+      function friedResult() {
+        const {fish, stelle, jahreszeit, wetter} = w;
+        let recs = [];
+        // Jahreszeit-abhängige Köder
+        const koeder = {
+          Karpfen:{frühling:['Wurm','Mais','Pellets'],sommer:['Boilie','Mais','Pellets'],herbst:['Boilie','Pellets','Teig'],winter:['Teig','Pellets']},
+          Schleie:{frühling:['Wurm','Made'],sommer:['Made','Mais','Brot'],herbst:['Wurm','Made'],winter:['Wurm']},
+          Brasse:{frühling:['Made','Wurm'],sommer:['Made','Mais','Pellets'],herbst:['Mais','Pellets','Made'],winter:['Made','Wurm']},
+          Rotauge:{frühling:['Wurm','Made'],sommer:['Pellets','Made','Mais'],herbst:['Mais','Hanf','Made'],winter:['Hanf','Wurm']},
+          Rotfeder:{frühling:['Made','Wurm'],sommer:['Brot','Made','Mais'],herbst:['Made','Brot'],winter:['Wurm']},
+          Döbel:{frühling:['Wurm','Spinner','Wobbler'],sommer:['Kirsche','Brot','Spinner'],herbst:['Wobbler','Wurm','Spinner'],winter:['Wurm','Teig','Wobbler']},
+          Rapfen:{frühling:['Blinker/Spinner','Wobbler'],sommer:['Oberflächenköder','Blinker/Spinner'],herbst:['Wobbler','Blinker/Spinner'],winter:['Wobbler']},
+        };
+        const bestKoeder = koeder[fish]?.[jahreszeit] || ['Wurm','Made','Mais'];
+        const stelleNote = {
+          oberfläche:'Köder oberflächennah / treibend anbieten',
+          mittelwasser:'Pose auf mittlere Tiefe einstellen',
+          grund:'Grundmontage oder Feeder verwenden',
+        }[stelle] || '';
+        const wetterNote = {
+          sonnig:isSonder?'Sonnig: ideal für Oberflächenjagd!':'Sonnig: Fisch im Schatten suchen (Strukturen, Kraut)',
+          bewoelkt:'Bewölkt: Fisch aktiver, normalere Tiefen',
+          regen:'Regen: Sauerstoff steigt → gute Beißphase!',
+          kalt:'Kalt: tief und langsam angeln, kleine Köder',
+        }[wetter] || '';
+        recs = bestKoeder.slice(0,3).map((k,i) => ({rank:['🥇','🥈','🥉'][i], name:k, why: i===0?`Top-Köder für ${fish} im ${jahreszeit}`:i===1?stelleNote:wetterNote}));
+        return `<div style="margin-top:16px">
+          <div style="font-size:11px;font-weight:800;color:rgba(255,255,255,.38);text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px">Empfehlung: ${fish} · ${jahreszeit} · ${stelle}</div>
+          ${recs.map(r=>`<div style="border-radius:13px;padding:12px 14px;margin-bottom:8px;display:flex;gap:11px;background:rgba(103,211,63,.08);border:1px solid rgba(103,211,63,.2)">
+            <div style="font-size:20px">${r.rank}</div>
+            <div><div class="bait-icon" style="display:inline-block;vertical-align:middle;width:32px;height:32px">${BAIT_ICONS[BAIT_ALIAS[r.name]||r.name]||''}</div>
+            <span style="font-size:14px;font-weight:900;margin-left:8px">${r.name}</span>
+            <div style="font-size:12px;color:rgba(255,255,255,.55);margin-top:4px">${r.why}</div></div>
+          </div>`).join('')}
+          <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:13px;padding:12px;font-size:12px;color:rgba(255,255,255,.55);line-height:1.6">
+            ${isSonder?`⚡ <b style="color:rgba(255,255,255,.85)">Sonderfall ${fish}:</b> ${fish==='Döbel'?'Allesfresser – im Sommer Vegetarier, im Herbst/Winter räuberisch. Sehr misstrauisch!':'Einziger Karpfenfisch der offiziell jagd. Sonnenschein = Oberflächenjagd!'}`
+            :`🌿 <b style="color:rgba(255,255,255,.85)">Friedfisch ${fish}:</b> Geduld ist wichtig – langsam anfüttern, Köder natürlich präsentieren.`}
+          </div>
+        </div>`;
+      }
+
+      return `
+      <div class="panel">
+        <div class="sec" style="margin-bottom:12px">🪱 Köder-Wizard – Vor-Ort Empfehlung</div>
+        <div style="display:flex;gap:5px;margin-bottom:16px">${[0,1,2,3].map(i=>`<div style="height:3px;flex:1;border-radius:3px;background:${i<done?'#2ea8ff':'rgba(255,255,255,.1)'};transition:.3s"></div>`).join('')}</div>
+
+        <div class="wiz-label">🐟 Zielfisch</div>
+        <select onchange="wizState.fish=this.value;wizState.turb=null;wizState.light=null;wizState.depth=null;wizState.stelle=null;wizState.jahreszeit=null;wizState.wetter=null;renderView()"
+          style="width:100%;background:rgba(20,40,60,.95);border:1px solid rgba(46,168,255,.3);border-radius:13px;color:#fff;padding:11px 14px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:14px">
+          <option value="" style="background:#1a2a3a">– Fischart wählen –</option>
+          <optgroup label="🎣 Raubfische" style="background:#1a2a3a">${['Zander','Hecht','Barsch','Aal','Forelle'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#1a2a3a">${{Zander:'🟡',Hecht:'🟢',Barsch:'🔴',Aal:'⚫',Forelle:'🟠'}[f]} ${f}</option>`).join('')}</optgroup>
+          <optgroup label="🌿 Friedfische" style="background:#1a2a3a">${['Karpfen','Schleie','Brasse','Rotauge','Rotfeder'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#1a2a3a">${{Karpfen:'🟤',Schleie:'🟠',Brasse:'🥈',Rotauge:'🔵',Rotfeder:'🟣'}[f]} ${f}</option>`).join('')}</optgroup>
+          <optgroup label="⚡ Sonderfälle" style="background:#1a2a3a">${['Döbel','Rapfen'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#1a2a3a">${{Döbel:'🟫',Rapfen:'🔶'}[f]} ${f}</option>`).join('')}</optgroup>
+        </select>
+
+        ${!w.fish ? '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.3);font-size:13px">🐟 Fischart wählen</div>' : isRaub ? `
+          <div class="wiz-label">💧 Wassertrübung</div>
+          <div style="margin-bottom:12px">${chip('turb','klar','🔵 Glasklar')}${chip('turb','leicht','🟢 Leicht trüb')}${chip('turb','trüb','🟡 Trüb')}${chip('turb','sehrtrüb','🟠 Sehr trüb')}</div>
+          <div class="wiz-label">☀️ Licht / Wetter</div>
+          <div style="margin-bottom:12px">${chip('light','sonnig','☀️ Sonnig')}${chip('light','bewoelkt','⛅ Bewölkt')}${chip('light','daemmerung','🌅 Dämmerung')}${chip('light','nacht','🌙 Nacht')}</div>
+          <div class="wiz-label">📏 Angeltiefe</div>
+          <div style="margin-bottom:16px">${chip('depth','flach','🏖️ Flach (0–2m)')}${chip('depth','mittel','🌊 Mittel (2–6m)')}${chip('depth','tief','🌑 Tief (>6m)')}</div>
+          ${!allSet?`<div style="text-align:center;padding:18px;color:rgba(255,255,255,.3);font-size:13px">${['🎣 Zielfisch wählen','💧 Trübung wählen','☀️ Licht wählen','📏 Tiefe wählen'][done]}</div>`:wizardResult(w)+`<button onclick="wizState={fish:null,turb:null,light:null,depth:null,stelle:null,jahreszeit:null,wetter:null};renderView()" style="border:1px solid rgba(255,255,255,.15);background:transparent;color:rgba(255,255,255,.5);border-radius:10px;padding:8px 18px;font-size:12px;font-weight:700;cursor:pointer;margin-top:12px;font-family:inherit">↺ Neue Abfrage</button>`}
+        ` : `
+          <div class="wiz-label">📍 Angelstelle</div>
+          <div style="margin-bottom:12px">${chip('stelle','oberfläche','🌊 Oberfläche / Mittelwasser')}${chip('stelle','grund','🪨 Grund / Boden')}</div>
+          <div class="wiz-label">🍂 Jahreszeit</div>
+          <div style="margin-bottom:12px">${chip('jahreszeit','frühling','🌸 Frühling')}${chip('jahreszeit','sommer','☀️ Sommer')}${chip('jahreszeit','herbst','🍂 Herbst')}${chip('jahreszeit','winter','❄️ Winter')}</div>
+          <div class="wiz-label">🌦️ Wetter heute</div>
+          <div style="margin-bottom:16px">${chip('wetter','sonnig','☀️ Sonnig')}${chip('wetter','bewoelkt','⛅ Bewölkt')}${chip('wetter','regen','🌧️ Regen')}${chip('wetter','kalt','🥶 Kalt (<8°C)')}</div>
+          ${!allSet?`<div style="text-align:center;padding:18px;color:rgba(255,255,255,.3);font-size:13px">${['🐟 Fischart wählen','📍 Angelstelle wählen','🍂 Jahreszeit wählen','🌦️ Wetter wählen'][done]}</div>`:friedResult()+`<button onclick="wizState={fish:null,turb:null,light:null,depth:null,stelle:null,jahreszeit:null,wetter:null};renderView()" style="border:1px solid rgba(255,255,255,.15);background:transparent;color:rgba(255,255,255,.5);border-radius:10px;padding:8px 18px;font-size:12px;font-weight:700;cursor:pointer;margin-top:12px;font-family:inherit">↺ Neue Abfrage</button>`}
+        `}
+      </div>`;
+    },
+
+        weather: () => `
+      <div class="panel blue">
+        <div style="display:flex;align-items:center;gap:20px;margin-bottom:14px">
+          <div style="text-align:center"><div style="font-size:48px">⛅</div><div style="font-size:32px;font-weight:950;color:var(--blue)">${airTemp}°C</div><div class="muted" style="font-size:13px">Teilweise bewölkt</div></div>
+          <div style="flex:1">
+            ${[['💨 Wind',wind+' km/h SW'],['📊 Luftdruck',pressure+' hPa'],['💧 Luftfeuchtigkeit','68%'],['🌊 Wassertemp.',waterT+'°C'],['💨 O₂-Gehalt','9.8 mg/l'],['📏 Pegelstand','Normal +12cm']].map(([l,v])=>`<div class="wt-row"><span class="muted">${l}</span><b>${v}</b></div>`).join('')}
+          </div>
+        </div>
+        <div class="sec">Wettereinfluss auf Beißchance</div>
+        ${[['Temperatur',84],['Luftdruck',78],['Wind',65],['Niederschlag',92]].map(([l,v])=>`<div class="wi-row"><span class="wi-label">${l}</span><div class="wi-bar-wrap"><div class="wi-bar" style="width:${v}%;background:${sc(v)}"></div></div><span style="font-size:12px;font-weight:800;width:32px;text-align:right;color:${sc(v)}">${v}%</span></div>`).join('')}
+      </div>
+      <div class="panel">
+        <div class="sec">📊 Luftdruck-Verlauf & Prognose</div>
+        <div style="height:130px">
+          <svg id="pressureChart" viewBox="0 0 900 130" preserveAspectRatio="none" style="width:100%;height:100%"></svg>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:rgba(255,255,255,.5)">
+          <span>12h</span>
+          <span style="font-size:10px">━ Verlauf &nbsp; ╌ Prognose</span>
+          <span style="font-weight:800;color:var(--blue)">${pressure} hPa ↗</span>
+          <span>+12h</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="sec">🧭 Windrichtung & Stärke</div>
+        <div style="display:flex;align-items:center;gap:20px;padding:10px 0">
+          <div style="position:relative;width:80px;height:80px;flex-shrink:0">
+            <div style="width:80px;height:80px;border-radius:50%;border:2px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;position:relative">
+              ${['N','O','S','W'].map((d,i)=>`<span style="position:absolute;font-size:10px;font-weight:800;color:rgba(255,255,255,.5);${i===0?'top:2px;left:50%;transform:translateX(-50%)':i===1?'right:2px;top:50%;transform:translateY(-50%)':i===2?'bottom:2px;left:50%;transform:translateX(-50%)':'left:2px;top:50%;transform:translateY(-50%)'}">${d}</span>`).join('')}
+              <div style="width:4px;height:32px;background:linear-gradient(to top,transparent 50%,var(--blue) 50%);transform:rotate(225deg);transform-origin:center bottom;position:absolute;bottom:50%">
+                <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--blue);position:absolute;top:-8px;left:-3px"></div>
+              </div>
+            </div>
+          </div>
+          <div style="flex:1">
+            <div style="font-size:28px;font-weight:950;color:var(--blue)">${wind} km/h</div>
+            <div style="font-size:16px;font-weight:700;margin-top:4px">Südwest (SW)</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">Böen bis 35 km/h möglich</div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="sec">☀️ 7-Tage Vorschau</div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">
+          ${[['Fr','⛅',18,11],['Sa','🌤️',20,13],['So','🌧️',17,11],['Mo','⛅',19,12],['Di','☀️',21,14],['Mi','🌤️',18,11],['Do','⛅',16,10]].map(([d,i,h,l])=>`<div style="text-align:center;padding:8px 2px"><div style="font-size:10px;color:var(--muted)">${d}</div><div style="font-size:20px;margin:5px 0">${i}</div><div style="font-size:13px;font-weight:800">${h}°</div><div style="font-size:11px;color:var(--muted)">${l}°</div></div>`).join('')}
+        </div>
+      </div>`,
+
+    settings: () => `
+      <div class="panel">
+        <div class="sec">⚙️ Einstellungen</div>
+        ${[['Weather Entity','weather.home'],['Wassertemp. URL','wassertemperatur.site'],['Pegelstation','Pegelonline WSV'],['Version','v2.12.3'],['Sensoren','22 aktiv']].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        <div class="sec" style="margin-top:16px">Benachrichtigungen</div>
+        ${[['Beste Zeiten täglich',true],['Wetterwarnungen',true],['Fang-Erinnerungen',false]].map(([l,v])=>`<div class="set-row"><span>${l}</span><span style="color:${v?'#67d33f':'#ff6b6b'}">${v?'✅ Aktiv':'❌ Aus'}</span></div>`).join('')}
+      </div>`,
+  };
+
+  const html = `<style>${STYLES}</style>` + ((views[currentView] || views.overview)() || '');
+  document.getElementById('content').innerHTML = html;
+
+  // Add tab click handlers
+  document.querySelectorAll('.fc-tab').forEach(t => {
+    t.onclick = () => { document.querySelectorAll('.fc-tab').forEach(x => x.classList.remove('active')); t.classList.add('active'); };
+  });
+
+  // Draw charts after render
+  setTimeout(() => {
+    drawChart('dayChart', DAY, '#ff9d18');
+    drawChart('weekChart', WEEK, '#2ea8ff');
+    drawChart('specChart', fishData[selFish]?.curve || DAY, '#67d33f');
+    // Luftdruck-Verlauf (simuliert – Schwankung ±5 hPa)
+    const basePressure = parseFloat(pressure) || 1015;
+    const pressureData = [basePressure-4, basePressure-3, basePressure-5, basePressure-3, basePressure-2, basePressure-1, basePressure, basePressure+1, basePressure+1, basePressure+2, basePressure+2, basePressure+3];
+    drawChart('pressureChart', pressureData.map(v=>v-basePressure+50), '#2ea8ff');
+  }, 50);
+}
+
+function switchForecastTab(btn, tab) {
+  // Lese echte 7-Tage Daten aus HA-Sensor
+  const dailyForecast = haStates['sensor.fishing_tracker_daily_forecast']?.attributes?.days || null;
+  const useReal = dailyForecast && dailyForecast.length > 0;
+
+  document.querySelectorAll('.fc-tab').forEach(t => t.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const fc = document.getElementById('forecastContent');
+  if (!fc) return;
+  const factors = [['🌦️','Wetter',87],['🌙','Mondphase',91],['📊','Luftdruck',78],['💨','Wind',68],['💧','Wassertemp.',84]];
+  // Echte Daten aus HA oder Fallback
+  const weekDays = useReal
+    ? dailyForecast.slice(0,7).map(d => ({d: d.weekday, date: d.date_str, v: d.avg_score, peak: d.peak_score, isToday: d.is_today}))
+    : [{d:'Mo',v:72},{d:'Di',v:65},{d:'Mi',v:58},{d:'Do',v:71},{d:'Sa',v:68},{d:'So',v:74},{d:'Mo',v:62}];
+  const sc = v => v>=80?'#67d33f':v>=60?'#ffd23f':'#ff9d18';
+  const sol = haStates['sensor.solunar_beisszeiten']?.attributes || {};
+  if (tab === 'overview' || tab === '7days') {
+    fc.innerHTML = `
+      <div class="panel blue" style="margin-top:10px">
+        <div class="sec">📈 ${tab==='7days'?'7-Tage Prognose':'Aktivitätsprognose – 7 Tage'}</div>
+        <div class="chart-box"><svg id="weekChart" viewBox="0 0 900 200" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
+        <div style="display:flex;justify-content:space-around;margin-top:10px">
+          ${weekDays.map(w=>`<div style="text-align:center;${w.isToday?'background:rgba(46,168,255,.1);border-radius:8px;padding:2px 4px':''}">
+            <div style="font-size:11px;color:rgba(255,255,255,.45)">${w.d}</div>
+            ${w.date?`<div style="font-size:9px;color:rgba(255,255,255,.3)">${w.date}</div>`:''}
+            <div style="font-size:15px;font-weight:900;color:${sc(w.v)}">${w.v}%</div>
+            ${w.isToday?'<div style="font-size:9px;color:#2ea8ff">Heute</div>':''}
+          </div>`).join('')}
+        </div>
+      </div>
+      <div class="panel" style="margin-top:0">
+        <div class="sec">📊 Einflussfaktoren</div>
+        ${factors.map(([i,l,v])=>`<div class="wi-row"><span class="wi-label">${i} ${l}</span><div class="wi-bar-wrap"><div class="wi-bar" style="width:${v}%;background:${sc(v)}"></div></div><span style="font-size:12px;font-weight:800;width:32px;text-align:right;color:${sc(v)}">${v}%</span></div>`).join('')}
+      </div>
+      <div class="panel" style="margin-top:0">
+        <div class="sec">🌙 Solunar Beißzeiten</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div style="background:rgba(103,211,63,.1);border:1px solid rgba(103,211,63,.22);border-radius:13px;padding:11px;text-align:center"><div style="font-size:10px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.06em">Hauptzeit 1</div><div style="font-size:22px;font-weight:900;color:#67d33f;margin:4px 0">${sol.major1||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~2h Fenster</div></div>
+          <div style="background:rgba(103,211,63,.1);border:1px solid rgba(103,211,63,.22);border-radius:13px;padding:11px;text-align:center"><div style="font-size:10px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.06em">Hauptzeit 2</div><div style="font-size:22px;font-weight:900;color:#67d33f;margin:4px 0">${sol.major2||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~2h Fenster</div></div>
+          <div style="background:rgba(46,168,255,.08);border:1px solid rgba(46,168,255,.18);border-radius:13px;padding:11px;text-align:center"><div style="font-size:10px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.06em">Nebenzeit 1</div><div style="font-size:20px;font-weight:900;color:#2ea8ff;margin:4px 0">${sol.minor1||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~1h Fenster</div></div>
+          <div style="background:rgba(46,168,255,.08);border:1px solid rgba(46,168,255,.18);border-radius:13px;padding:11px;text-align:center"><div style="font-size:10px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.06em">Nebenzeit 2</div><div style="font-size:20px;font-weight:900;color:#2ea8ff;margin:4px 0">${sol.minor2||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~1h Fenster</div></div>
+        </div>
+      </div>`;
+    setTimeout(() => drawChart('weekChart', WEEK, '#2ea8ff'), 50);
+  } else if (tab === '24h') {
+    fc.innerHTML = `
+      <div class="panel blue" style="margin-top:10px">
+        <div class="sec">📈 24h Aktivitätsprognose – Heute</div>
+        <div class="chart-box"><svg id="dayChart24" viewBox="0 0 900 200" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
+      </div>
+      <div class="panel" style="margin-top:0">
+        <div class="sec">⏰ Stundenweise Prognose</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+          ${[6,9,12,15,18,19,20,21].map(h=>{const v=DAY[h]||50;return`<div style="background:rgba(255,255,255,.05);border-radius:10px;padding:8px;text-align:center"><div style="font-size:11px;color:rgba(255,255,255,.5)">${String(h).padStart(2,'0')}:00</div><div style="font-size:16px;font-weight:900;color:${sc(v)};margin-top:3px">${v}%</div></div>`}).join('')}
+        </div>
+      </div>`;
+    setTimeout(() => drawChart('dayChart24', DAY, '#ff9d18'), 50);
+  } else if (tab === '14days') {
+    const days14 = [76,82,68,85,91,72,78,65,80,88,75,70,82,77];
+    const dayNames = ['Fr','Sa','So','Mo','Di','Mi','Do','Fr','Sa','So','Mo','Di','Mi','Do'];
+    fc.innerHTML = `
+      <div class="panel blue" style="margin-top:10px">
+        <div class="sec">📈 14-Tage Prognose</div>
+        <div class="chart-box"><svg id="chart14" viewBox="0 0 900 200" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
+        <div style="display:flex;justify-content:space-around;margin-top:10px;flex-wrap:wrap;gap:4px">
+          ${days14.map((v,i)=>`<div style="text-align:center;min-width:28px"><div style="font-size:10px;color:rgba(255,255,255,.45)">${dayNames[i]}</div><div style="font-size:13px;font-weight:900;color:${sc(v)}">${v}%</div></div>`).join('')}
+        </div>
+      </div>`;
+    setTimeout(() => drawChart('chart14', days14, '#a78bfa'), 50);
+  }
+}
+
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  await connectHA();
+  buildNav();
+  renderView();
+  // Refresh HA states every 30s
+  setInterval(async () => {
+    await connectHA();
+    renderView();
+  }, 30000);
+}
+
+init();
+</script>
+</body>
+</html>
