@@ -70,13 +70,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register own sidebar panel (moderner HA-kompatibler Weg)
     try:
         from homeassistant.components import frontend as ha_frontend
+        # Cache-Buster: Version in URL → Browser lädt immer neue Version
+        versioned_url = f"{PANEL_URL}?v={FRONTEND_VERSION.replace('.', '')}"
         ha_frontend.async_register_built_in_panel(
             hass,
             component_name="iframe",
             sidebar_title=PANEL_TITLE,
             sidebar_icon=PANEL_ICON,
             frontend_url_path=PANEL_NAME,
-            config={"url": PANEL_URL},
+            config={"url": versioned_url},
             require_admin=False,
         )
     except Exception:
@@ -258,3 +260,25 @@ async def async_register_lovelace_resource(hass: HomeAssistant) -> None:
             await storage.async_save(data)
     except Exception:
         pass  # Fallback: manuell /local/fishing-tracker-card.js?v=2110 eintragen
+
+    # Barometer Card registrieren
+    baro_url = f"/local/fishing-barometer-card.js?v={FRONTEND_VERSION.replace('.', '')}"""
+    try:
+        storage2 = hass.helpers.storage.Store(1, "lovelace_resources")
+        data2 = await storage2.async_load() or {"items": []}
+        items2 = data2.get("items", [])
+        existing2 = next(
+            (i for i in items2 if i.get("url", "").startswith("/local/fishing-barometer-card.js")),
+            None,
+        )
+        if existing2:
+            if existing2.get("url") != baro_url:
+                existing2["url"] = baro_url
+                data2["items"] = items2
+                await storage2.async_save(data2)
+        else:
+            items2.append({"id": "fishing-barometer-card", "type": "module", "url": baro_url})
+            data2["items"] = items2
+            await storage2.async_save(data2)
+    except Exception:
+        pass

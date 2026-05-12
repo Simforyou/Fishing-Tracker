@@ -35,6 +35,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         BestTimeSensor(hass, entry, store),
         DayForecastSensor(hass, entry, store),
         WeekForecastSensor(hass, entry, store),
+        DailyForecastSensor(hass, entry, store),
         StatsSensor(entry, store),
         RecommendationSensor(entry, store),
         IntelligenceSensor(hass, entry, store),
@@ -140,6 +141,59 @@ class WeekForecastSensor(FishingBaseSensor):
         self._state = result["average"]
         self._attrs = result
 
+
+
+class DailyForecastSensor(FishingBaseSensor):
+    """7-Tage Prognose als tägliche Durchschnittswerte für das Panel."""
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_icon = "mdi:calendar-week"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "daily_forecast", "Tagesprognose 7 Tage")
+        self.hass = hass
+
+    async def async_update(self) -> None:
+        result = await _forecast(self.hass, self.entry, self.store.entries, 168)
+        points = result.get("points", [])
+
+        # Gruppiere nach Tag und berechne Durchschnitt
+        from collections import defaultdict
+        daily: dict = defaultdict(list)
+        for p in points:
+            try:
+                dt = datetime.fromisoformat(p["timestamp"])
+                day_key = dt.strftime("%Y-%m-%d")
+                daily[day_key].append(p["score"])
+            except Exception:
+                continue
+
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        days = []
+        for day_key in sorted(daily.keys()):
+            scores = daily[day_key]
+            avg = round(sum(scores) / len(scores), 1)
+            peak = round(max(scores), 1)
+            try:
+                dt = datetime.fromisoformat(day_key)
+                weekday = ["Mo","Di","Mi","Do","Fr","Sa","So"][dt.weekday()]
+                date_str = dt.strftime("%d.%m.")
+            except Exception:
+                weekday = "?"
+                date_str = day_key
+            days.append({
+                "date": day_key,
+                "date_str": date_str,
+                "weekday": weekday,
+                "avg_score": avg,
+                "peak_score": peak,
+                "is_today": day_key == today,
+            })
+
+        self._state = days[0]["avg_score"] if days else 50
+        self._attrs = {
+            "days": days[:7],
+            "best_day": max(days, key=lambda d: d["avg_score"])["date"] if days else None,
+        }
 
 class StatsSensor(FishingBaseSensor):
     _attr_native_unit_of_measurement = PERCENTAGE

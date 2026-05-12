@@ -54,7 +54,7 @@ def smart_fishing_score(
     fish_type = normalize_fish_name(fish_type)
     profile = get_fish_profile(fish_type)
 
-    score = 42.0
+    score = 35.0
     reasons: list[str] = []
     warnings: list[str] = []
 
@@ -68,11 +68,11 @@ def smart_fishing_score(
 
     # Time behavior
     if is_hour_in_windows(hour, profile.preferred_hours):
-        score += 11
+        score += 8
         reasons.append(f"{profile.name}: aktuelle Uhrzeit liegt in einem typischen Aktivitätsfenster")
     else:
-        score -= 4
-        warnings.append(f"{profile.name}: aktuelle Uhrzeit ist kein Hauptfenster")
+        score -= 10
+        warnings.append(f"{profile.name}: aktuelle Uhrzeit ist kein Hauptfenster – Aktivität deutlich reduziert")
 
     # Low light / night / dusk
     if hour <= 7 or hour >= 19:
@@ -87,7 +87,7 @@ def smart_fishing_score(
 
     # Season profile
     if month in profile.season_months:
-        score += 7
+        score += 5
         reasons.append(f"Saison passt gut zu {profile.name}")
     else:
         score -= 6
@@ -112,11 +112,10 @@ def smart_fishing_score(
         score -= profile.pressure_rising_penalty
         warnings.append("Stark steigender Luftdruck kann Aktivität bremsen")
     elif -1.0 <= pressure_trend <= 1.0:
-        score += 2
-        reasons.append("Stabiler Luftdruck wirkt berechenbar")
+        pass  # Stabiler Druck: neutral, kein Bonus
 
     if 1008 <= pressure <= 1022:
-        score += 4
+        score += 2
         reasons.append("Luftdruck liegt im nutzbaren Normalbereich")
     elif pressure < 995 or pressure > 1032:
         score -= 7
@@ -133,15 +132,11 @@ def smart_fishing_score(
         score -= 3
         warnings.append("Sehr wenig Wind kann das Wasser träge machen")
 
-    # Direction is not universally good/bad; add small stability context
-    if wind_bearing is not None:
-        if 180 <= wind_bearing <= 270:
-            score += 2
-            reasons.append("Süd-/Westwind kann aktive Uferkanten begünstigen")
+    # Windrichtung wird weiter unten vollständig bewertet (kein Doppelbonus hier)
 
     # Cloud / rain / light
     if 45 <= cloud_coverage <= 90:
-        score += profile.cloud_weight
+        score += round(profile.cloud_weight * 0.7, 1)
         reasons.append("Bewölkung reduziert Lichtdruck und erhöht Deckung")
     elif cloud_coverage < 15 and 10 <= hour <= 16:
         score -= 5
@@ -156,10 +151,9 @@ def smart_fishing_score(
 
     # Humidity and dew point
     if humidity is not None:
-        if 60 <= humidity <= 95:
-            score += 2
-        elif humidity < 35:
-            score -= 2
+        if humidity < 35:
+            score -= 2  # Sehr trockene Luft leicht negativ
+        # Normale Luftfeuchtigkeit: kein Bonus mehr
 
     if dew_point is not None and temperature is not None:
         # Small comfort/atmosphere indicator for humid evenings
@@ -271,13 +265,14 @@ def smart_fishing_score(
             score -= 4
             warnings.append("Nord-/Ostwind gilt als ungünstig für viele Fischarten")
 
-    # ── Saisonal-Tageszeit (Lieblingsköder + Barsch-Alarm) ────────────────────
+    # ── Saisonal (Tageszeit bereits oben gezählt – nur 35% hier) ───────────────
     try:
         time_bonus, time_desc = seasonal_time_score(profile.name, hour, month)
-        score += time_bonus
-        if time_bonus >= 8:
+        seasonal_adj = round(time_bonus * 0.35, 1)
+        score += seasonal_adj
+        if seasonal_adj >= 4:
             reasons.append(time_desc)
-        elif time_bonus <= -2:
+        elif seasonal_adj <= -3:
             warnings.append(time_desc)
     except Exception:
         pass
@@ -333,7 +328,7 @@ def smart_fishing_score(
     except Exception:
         pass
 
-    final = int(max(5, min(99, round(score))))
+    final = int(max(5, min(95, round(score))))
 
     if final >= 85:
         level = "Sehr gut"

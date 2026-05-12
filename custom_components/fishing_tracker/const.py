@@ -63,6 +63,8 @@ WWW_FILES = [
     "fishing_tracker_log.html",
     "fishing_tracker_dashboard.html",
     "fishing_tracker_panel.html",
+    "fishing-barometer-card.js",
+    "fishing_tracker_map_engine.js",
     "fishing_tracker_icon.png",
     "fishing-tracker-card.js",
 ]
