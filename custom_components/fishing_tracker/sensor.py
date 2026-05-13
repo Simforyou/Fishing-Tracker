@@ -571,6 +571,9 @@ async def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[
     attrs = await _async_weather_context(hass, entry, attrs)
     s = stats(entries)
 
+    # Stündliche Wettervorhersage aus HA
+    hourly_forecast = attrs.get("forecast") or (weather.attributes.get("forecast") if weather else None) or []
+
     moon = _get_moon_state(hass, entry)
     points = bite_forecast_series(
         temperature=_float(attrs.get("temperature"), 12),
@@ -588,6 +591,7 @@ async def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[
         apparent_temperature=_float(attrs.get("apparent_temperature"), None),
         uv_index=_float(attrs.get("uv_index"), None),
         wind_bearing=_float(attrs.get("wind_bearing"), None),
+        hourly_forecast=hourly_forecast,
     )
 
     values = [p["score"] for p in points]
