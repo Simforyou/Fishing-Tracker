@@ -81,7 +81,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub">v2.12.11 · Premium Intelligence</div>
+      <div class="ft-sub">v2.12.12 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -174,7 +174,7 @@ function smooth(pp) {
   return d;
 }
 
-function drawChart(id, pts, color = '#ff9d18') {
+function drawChart(id, pts, color = '#ff9d18', todayIdx = null) {
   const svg = document.getElementById(id);
   if (!svg) return;
   // Feste Dimensionen mit Y-Achse links
@@ -190,7 +190,8 @@ function drawChart(id, pts, color = '#ff9d18') {
   }
   const area = `M${pp[0][0]},${h-padB} ${smoothPath.slice(1)} L${pp[pp.length-1][0]},${h-padB} Z`;
   const nh = new Date().getHours();
-  const ni = Math.min(nh, pts.length-1);
+  // Wochenchart: todayIdx nutzen; Tages-Chart: aktuelle Stunde
+  const ni = (todayIdx !== null) ? Math.min(todayIdx, pts.length-1) : Math.min(nh, pts.length-1);
   const nx = pp[ni][0], ny = pp[ni][1];
   const labs = pts.length > 8 ? ['00','03','06','09','12','15','18','21'] : ['Mo','Di','Mi','Do','Fr','Sa','So'];
   // Y-Achse: 0/25/50/75/100%
@@ -321,7 +322,23 @@ let _wizFish = null;
 
 const sc = v => parseInt(v) >= 80 ? '#67d33f' : parseInt(v) >= 60 ? '#ffd23f' : '#ff9d18';
 
-const DAY  = [28,25,32,30,28,26,25,42,60,68,72,70,65,60,55,52,58,68,88,92,85,72,58,42];
+// 24h Prognose: aus HA-Sensor oder Demo-Daten
+const _dayForecast = haStates['sensor.fishing_tracker_bite_forecast_day']?.attributes;
+const DAY = (() => {
+  if (_dayForecast?.points && _dayForecast.points.length >= 20) {
+    // Echte Stundenwerte aus Backend
+    const pts = new Array(24).fill(0);
+    _dayForecast.points.forEach(p => {
+      try {
+        const h = new Date(p.timestamp).getHours();
+        pts[h] = Math.round(p.score);
+      } catch(e) {}
+    });
+    return pts;
+  }
+  // Fallback Demo
+  return [28,25,32,30,28,26,25,42,60,68,72,70,65,60,55,52,58,68,88,92,85,72,58,42];
+})();
 const WEEK = [76,82,68,85,91,72,78];
 const SPECIES_CURVES = {
   Zander: [22,20,30,28,25,22,20,38,55,65,60,58,55,50,48,50,55,62,88,92,85,72,58,42],
@@ -664,14 +681,20 @@ function renderView() {
       </div>`,
 
     forecast: () => {
-      // Direkt Inhalt rendern – kein setTimeout nötig
-      const fc = buildForecastTab('overview');
+      const tab = currentFcTab || 'overview';
+      const fc = buildForecastTab(tab);
+      setTimeout(() => {
+        const ti = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
+        if (tab==='overview'||tab==='7days') { drawChart('weekChart',WEEK,'#2ea8ff',ti); addChartTouch('weekChart',WEEK,'#2ea8ff'); }
+        else if (tab==='24h') { drawChart('dayChart24',DAY,'#ff9d18'); addChartTouch('dayChart24',DAY,'#ff9d18'); }
+        else if (tab==='14days') { const d14=[76,82,68,85,91,72,78,65,80,88,75,70,82,77]; drawChart('chart14',d14,'#a78bfa'); addChartTouch('chart14',d14,'#a78bfa'); }
+      }, 80);
       return `
       <div class="fc-tabs" id="fcTabs">
-        <button class="fc-tab active" onclick="selectFcTab(this,'overview')">Übersicht</button>
-        <button class="fc-tab" onclick="selectFcTab(this,'24h')">24 Stunden</button>
-        <button class="fc-tab" onclick="selectFcTab(this,'7days')">7 Tage</button>
-        <button class="fc-tab" onclick="selectFcTab(this,'14days')">14 Tage</button>
+        <button class="fc-tab ${tab==='overview'?'active':''}" onclick="currentFcTab='overview';renderView()">Übersicht</button>
+        <button class="fc-tab ${tab==='24h'?'active':''}" onclick="currentFcTab='24h';renderView()">24 Stunden</button>
+        <button class="fc-tab ${tab==='7days'?'active':''}" onclick="currentFcTab='7days';renderView()">7 Tage</button>
+        <button class="fc-tab ${tab==='14days'?'active':''}" onclick="currentFcTab='14days';renderView()">14 Tage</button>
       </div>
       <div id="forecastContent">${fc}</div>`;
     },
@@ -684,7 +707,7 @@ function renderView() {
       const noteBox = d.note ? `<div style="background:rgba(255,107,107,.07);border:1px solid rgba(255,107,107,.22);border-radius:13px;padding:10px 13px;margin-bottom:10px;font-size:12px;color:rgba(255,180,180,.9)">${d.note}</div>` : '';
       const sightBox = `<div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:13px;padding:10px 13px;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5"><b style="color:rgba(255,255,255,.85)">👁️ ${d.type==='sonderfall'?'Besonderheit':'Farbsehen'}:</b> ${d.sight||'–'}</div>`;
       return `
-      <button class="fish-select-btn" onclick="openFishSheet('selFish', () => renderView())">
+      <button class="fish-select-btn" onclick="openFishSheet('selFish', (f) => { selFish=f; renderView(); }, selFish)">
         <span style="display:flex;align-items:center;gap:10px">
           ${FISH_SVG[selFish]||''}
           <span>${selFish} – ${fishData[selFish]?.type==='raubfisch'?'Raubfisch':fishData[selFish]?.type==='sonderfall'?'Sonderfall':'Friedfisch'}</span>
@@ -731,7 +754,7 @@ function renderView() {
                 <td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.05);color:rgba(255,255,255,.7)">
                   ${isCurrentTemp ? `<span style="color:#2ea8ff;font-weight:800">📍 ${wt}°C</span><br><span style="font-size:10px;color:rgba(255,255,255,.4)">${r}</span>` : r}
                 </td>
-                <td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.05);font-weight:${cur||isCurrentTemp?800:400};color:${cur?'#67d33f':isCurrentTemp?'#2ea8ff':'inherit'}">${v}${cur?' ⭐':isCurrentTemp?' 📍':''}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.05);font-weight:${cur||isCurrentTemp?800:400};color:${cur?'#67d33f':isCurrentTemp?'#2ea8ff':'inherit'}">${v}${cur&&!isCurrentTemp?' ⭐':!cur&&isCurrentTemp?' 📍':cur&&isCurrentTemp?' ⭐📍':''}</td>
               </tr>`;
             }).join('');
           })()}</tbody>
@@ -893,7 +916,7 @@ function renderView() {
         <div style="display:flex;gap:5px;margin-bottom:16px">${[0,1,2,3].map(i=>`<div style="height:3px;flex:1;border-radius:3px;background:${i<done?'#2ea8ff':'rgba(255,255,255,.1)'};transition:.3s"></div>`).join('')}</div>
 
         <div class="wiz-label">🐟 Zielfisch</div>
-        <button class="fish-select-btn" onclick="openFishSheet('_wizFish', (f) => { wizState.fish=f;wizState.turb=null;wizState.light=null;wizState.depth=null;wizState.stelle=null;wizState.jahreszeit=null;wizState.wetter=null;renderView(); })">
+        <button class="fish-select-btn" onclick="openFishSheet('_wizFish', (f) => { wizState.fish=f; wizState.turb=null; wizState.light=null; wizState.depth=null; wizState.stelle=null; wizState.jahreszeit=null; wizState.wetter=null; renderView(); }, wizState.fish)">
           <span style="display:flex;align-items:center;gap:10px">
             ${w.fish ? (FISH_SVG[w.fish]||'') : '<span style="font-size:22px">🎣</span>'}
             <span>${w.fish || '– Fischart wählen –'}</span>
@@ -961,6 +984,33 @@ function renderView() {
             <div style="font-size:12px;color:var(--muted);margin-top:4px">Böen bis 35 km/h möglich</div>
           </div>
         </div>
+      </div>
+      <div class="panel">
+        <div class="sec">🌧️ Niederschlagsprognose (mm)</div>
+        ${(() => {
+          const fc = haStates['weather.home']?.attributes?.forecast || [];
+          const rain = fc.slice(0,8).map((h,i) => ({
+            t: h.datetime ? new Date(h.datetime).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : `+${i}h`,
+            mm: h.precipitation || 0,
+            prob: h.precipitation_probability || 0,
+          }));
+          if (!rain.length) return '<div class="muted" style="font-size:13px;padding:8px 0">Keine Niederschlagsdaten verfügbar</div>';
+          const maxMm = Math.max(...rain.map(r=>r.mm), 1);
+          return `<div style="display:flex;align-items:flex-end;gap:4px;height:80px;margin-bottom:6px">
+            ${rain.map(r=>`<div style="flex:1;display:flex;flex-direction:column;align-items:center;height:100%">
+              <div style="flex:1;width:100%;display:flex;align-items:flex-end">
+                <div style="width:100%;border-radius:3px 3px 0 0;min-height:2px;background:${r.prob>70?'#2ea8ff':r.prob>30?'#7ec8ff':'rgba(46,168,255,.3)'};height:${Math.max(4,Math.round(r.mm/maxMm*100))}%;position:relative">
+                  ${r.mm>0?`<span style="position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:800;color:#2ea8ff;white-space:nowrap">${r.mm.toFixed(1)}</span>`:''}
+                </div>
+              </div>
+              <div style="font-size:8px;color:rgba(255,255,255,.4);margin-top:4px;text-align:center">${r.t}</div>
+            </div>`).join('')}
+          </div>
+          <div style="display:flex;gap:12px;font-size:11px;color:rgba(255,255,255,.5);margin-top:4px">
+            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#2ea8ff;margin-right:4px"></span>>70% Wahrscheinlichkeit</span>
+            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgba(46,168,255,.3);margin-right:4px"></span>Gering</span>
+          </div>`;
+        })()}
       </div>
       <div class="panel">
         <div class="sec">☀️ 7-Tage Vorschau</div>
@@ -1127,7 +1177,19 @@ function addChartTouch(svgId, pts, color) {
   setTimeout(() => {
     drawChart('dayChart', DAY, '#ff9d18');
     addChartTouch('dayChart', DAY, '#ff9d18');
-    drawChart('weekChart', WEEK, '#2ea8ff');
+    // Mini-Karte in Übersicht
+    if (typeof L !== 'undefined') {
+      const omEl = document.getElementById('overviewMap');
+      if (omEl && !omEl._leaflet_id) {
+        const om = L.map('overviewMap', { zoomControl:false, attributionControl:false, dragging:false, scrollWheelZoom:false, tap:false });
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(om);
+        om.setView([52.4821, 9.7832], 13);
+        const ic = L.divIcon({ className:'', html:'<div style="background:#67d33f;border:3px solid #fff;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#000;box-shadow:0 2px 8px rgba(0,0,0,.5)">91%</div>', iconSize:[36,36], iconAnchor:[18,18] });
+        L.marker([52.4821, 9.7832], {icon:ic}).addTo(om);
+      }
+    }
+    const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
+        drawChart('weekChart', WEEK, '#2ea8ff', _todayIdx);
     addChartTouch('weekChart', WEEK, '#2ea8ff');
     drawChart('specChart', fishData[selFish]?.curve || DAY, '#67d33f');
     addChartTouch('specChart', fishData[selFish]?.curve || DAY, '#67d33f');
@@ -1160,7 +1222,8 @@ function selectFcTab(btn, tab) {
     setTimeout(() => {
       try {
         if (tab === 'overview' || tab === '7days') {
-          drawChart('weekChart', WEEK, '#2ea8ff');
+          const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
+        drawChart('weekChart', WEEK, '#2ea8ff', _todayIdx);
           addChartTouch('weekChart', WEEK, '#2ea8ff');
         } else if (tab === '24h') {
           drawChart('dayChart24', DAY, '#ff9d18');
@@ -1345,7 +1408,22 @@ function initSpotMap(spots) {
 
 function locateUser() {
   if (!_spotMap) return;
-  _spotMap.locate({ setView: true, maxZoom: 14 });
+  // Erst HA person-Entity versuchen (HA Companion App)
+  const person = haStates['person.christian_rduch'] ||
+    Object.values(haStates).find(s => s.entity_id?.startsWith('person.'));
+  const lat = person?.attributes?.latitude;
+  const lng = person?.attributes?.longitude;
+  if (lat && lng) {
+    if (_userMarker) _userMarker.remove();
+    _userMarker = L.circleMarker([lat, lng], {
+      radius: 10, fillColor: '#2ea8ff', color: '#fff',
+      weight: 3, opacity: 1, fillOpacity: 0.9,
+    }).addTo(_spotMap).bindPopup('📍 Dein Standort (HA)').openPopup();
+    _spotMap.flyTo([lat, lng], 13, { animate: true, duration: 0.8 });
+    return;
+  }
+  // Fallback: Browser GPS
+  _spotMap.locate({ setView: true, maxZoom: 13 });
   _spotMap.once('locationfound', (e) => {
     if (_userMarker) _userMarker.remove();
     _userMarker = L.circleMarker(e.latlng, {
@@ -1354,7 +1432,11 @@ function locateUser() {
     }).addTo(_spotMap).bindPopup('📍 Dein Standort').openPopup();
   });
   _spotMap.once('locationerror', () => {
-    alert('GPS nicht verfügbar. Bitte Standort-Zugriff erlauben.');
+    const msg = document.createElement('div');
+    msg.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(255,100,100,.9);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;z-index:9999';
+    msg.textContent = '📍 Standort nicht verfügbar';
+    document.body.appendChild(msg);
+    setTimeout(() => msg.remove(), 3000);
   });
 }
 
@@ -1394,7 +1476,8 @@ function showSpotDetail(i) {
 
 
 // ── Custom Fisch-Dropdown ────────────────────────────────────────────────────
-function openFishSheet(targetVar, onSelect) {
+function openFishSheet(targetVar, onSelect, currentVal) {
+  const getCurrent = () => currentVal || window[targetVar] || '';
   const GROUPS = [
     { label: '🎣 Raubfische', fish: ['Zander','Hecht','Barsch','Aal','Forelle'] },
     { label: '🌿 Friedfische', fish: ['Karpfen','Schleie','Brasse','Rotauge','Rotfeder'] },
@@ -1418,7 +1501,7 @@ function openFishSheet(targetVar, onSelect) {
     g.fish.forEach(f => {
       const d = fishData[f] || {};
       const item = document.createElement('div');
-      item.className = 'fish-sheet-item' + (f === window[targetVar] ? ' active' : '');
+      item.className = 'fish-sheet-item' + (f === getCurrent() ? ' active' : '');
       const svgIcon = (FISH_SVG && FISH_SVG[f]) || '';
       const sc4 = d.score >= 80 ? '#67d33f' : d.score >= 65 ? '#ffd23f' : '#ff9d18';
       item.innerHTML = `
