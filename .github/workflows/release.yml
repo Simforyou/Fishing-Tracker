@@ -1,1 +1,45 @@
+name: Create Release
 
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'custom_components/fishing_tracker/manifest.json'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get Version
+        id: version
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('custom_components/fishing_tracker/manifest.json'))['version'])")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build ZIP
+        run: |
+          zip -r fishing_tracker_v${{ steps.version.outputs.version }}.zip \
+            custom_components/ \
+            hacs.json \
+            README.md \
+            logo.png \
+            icon.png 2>/dev/null || true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Fishing Tracker v${{ steps.version.outputs.version }}
+          body: |
+            ## Fishing Tracker v${{ steps.version.outputs.version }}
+            HACS → Fishing Tracker → Update → HA Neustart
+          files: fishing_tracker_v${{ steps.version.outputs.version }}.zip
+          draft: false
+          prerelease: false
