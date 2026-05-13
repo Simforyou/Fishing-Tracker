@@ -81,7 +81,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub">v2.12.18 · Premium Intelligence</div>
+      <div class="ft-sub">v2.12.21 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -167,8 +167,9 @@ function smooth(pp) {
   if (pp.length < 2) return pp.map((p,i)=>(i?'L':'M')+p[0]+','+p[1]).join(' ');
   let d = 'M'+pp[0][0]+','+pp[0][1];
   for (let i=0; i<pp.length-1; i++) {
-    const cp1x = pp[i][0]+(pp[i+1][0]-pp[i][0])*0.4;
-    const cp2x = pp[i+1][0]-(pp[i+1][0]-pp[i][0])*0.4;
+    const t = 0.25;
+    const cp1x = pp[i][0]+(pp[i+1][0]-pp[i][0])*t;
+    const cp2x = pp[i+1][0]-(pp[i+1][0]-pp[i][0])*t;
     d += ' C'+cp1x+','+pp[i][1]+' '+cp2x+','+pp[i+1][1]+' '+pp[i+1][0]+','+pp[i+1][1];
   }
   return d;
@@ -185,7 +186,10 @@ function drawChart(id, pts, color = '#ff9d18', todayIdx = null) {
   // Bezier smooth
   let smoothPath = 'M'+pp[0][0]+','+pp[0][1];
   for (let i=0; i<pp.length-1; i++) {
-    const cx1=pp[i][0]+(pp[i+1][0]-pp[i][0])*0.4, cx2=pp[i+1][0]-(pp[i+1][0]-pp[i][0])*0.4;
+    // Tension 0.25: glatt aber nah an Datenpunkten → kein Schweben
+    const tension = 0.25;
+    const cx1=pp[i][0]+(pp[i+1][0]-pp[i][0])*tension;
+    const cx2=pp[i+1][0]-(pp[i+1][0]-pp[i][0])*tension;
     smoothPath += ` C${cx1},${pp[i][1]} ${cx2},${pp[i+1][1]} ${pp[i+1][0]},${pp[i+1][1]}`;
   }
   const area = `M${pp[0][0]},${h-padB} ${smoothPath.slice(1)} L${pp[pp.length-1][0]},${h-padB} Z`;
@@ -210,9 +214,9 @@ function drawChart(id, pts, color = '#ff9d18', todayIdx = null) {
     ${labs.map((l,i)=>`<text x="${padL+i*(w-padL-padR)/(labs.length-1)}" y="${h-5}" fill="rgba(255,255,255,.4)" font-size="10" text-anchor="middle" font-family="system-ui">${l}</text>`).join('')}
     <path d="${area}" fill="url(#g${id})"/>
     <path d="${smoothPath}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="${nx}" y1="${padT+18}" x2="${nx}" y2="${h-padB}" stroke="rgba(255,215,0,.5)" stroke-width="1.5" stroke-dasharray="4 3"/>
-    <text x="${nx}" y="${padT+14}" fill="#ffd23f" font-size="10" font-weight="800" text-anchor="middle" font-family="system-ui">Jetzt</text>
-    <circle cx="${nx}" cy="${ny}" r="5" fill="#ffd23f" stroke="#fff" stroke-width="2"/>`;
+    <line x1="${nx}" y1="${padT+18}" x2="${nx}" y2="${h-padB}" stroke="rgba(255,215,0,.6)" stroke-width="2" stroke-dasharray="5 3"/>
+    <rect x="${nx-18}" y="${padT+2}" width="36" height="16" rx="4" fill="rgba(255,215,0,.15)" stroke="rgba(255,215,0,.5)" stroke-width="1"/>
+    <text x="${nx}" y="${padT+13}" fill="#ffd23f" font-size="10" font-weight="800" text-anchor="middle" font-family="system-ui">Jetzt</text>`;
 }
 
 // ── CSS ───────────────────────────────────────────────────────────────────────
@@ -746,8 +750,63 @@ const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
             drawChart('dayChart24', DAY, '#ff9d18');
             addChartTouch('dayChart24', DAY, '#ff9d18');
           } else if (tab==='14days') {
-            const d14=[76,82,68,85,91,72,78,65,80,88,75,70,82,77];
-            drawChart('chart14', d14, '#a78bfa');
+            // 14-Tage Prognose aus echten HA-Wetterdaten
+const d14 = (() => {
+  const fcDays = haStates['weather.home']?.attributes?.forecast || [];
+  if (fcDays.length < 7) return WEEK.concat(WEEK); // Fallback
+
+  // Für jeden Vorhersage-Tag einen Angelwetter-Score berechnen
+  return fcDays.slice(0,14).map((fc, i) => {
+    // Basiswert aus 7-Tage-Sensor wenn verfügbar
+    let base = WEEK[i] || 65;
+
+    // Wetterfaktoren aus Tagesvorhersage
+    const temp = parseFloat(fc.temperature || fc.temperature_low || 12);
+    const rain = parseFloat(fc.precipitation || 0);
+    const rainProb = parseFloat(fc.precipitation_probability || 0);
+    const wind = parseFloat(fc.wind_speed || 10);
+    const condition = (fc.condition || '').toLowerCase();
+
+    let mod = 0;
+
+    // Temperatur
+    if (temp < 3) mod -= 10;
+    else if (temp < 8) mod -= 5;
+    else if (temp >= 12 && temp <= 20) mod += 5;
+    else if (temp > 28) mod -= 8;
+
+    // Niederschlag
+    if (rain > 8) mod -= 12;
+    else if (rain > 3) mod -= 6;
+    else if (rain > 0.5 && rain <= 3) mod += 3; // leichter Regen gut
+    if (rainProb > 85) mod -= 8;
+    else if (rainProb > 60) mod -= 3;
+
+    // Wind
+    if (wind > 35) mod -= 12;
+    else if (wind > 25) mod -= 6;
+    else if (wind > 15) mod -= 2;
+    else if (wind < 10) mod += 3; // Windstill gut
+
+    // Wetterlage
+    if (condition.includes('sunny') || condition.includes('clear')) mod += 3;
+    if (condition.includes('storm') || condition.includes('thunder')) mod -= 15;
+    if (condition.includes('fog')) mod -= 4;
+    if (condition.includes('cloudy') && !condition.includes('partly')) mod += 2;
+
+    // Nur für erste 7 Tage: WEEK-Werte nutzen wenn vorhanden
+    if (i < WEEK.length && WEEK[i]) {
+      // Mix: 70% Sensor, 30% Wetterberechnung
+      base = Math.round(WEEK[i] * 0.7 + (65 + mod) * 0.3);
+    } else {
+      base = Math.round(65 + mod);
+    }
+
+    return Math.min(95, Math.max(15, base));
+  });
+})();
+            const ti14 = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
+            drawChart('chart14', d14, '#a78bfa', ti14);
             addChartTouch('chart14', d14, '#a78bfa');
           }
         } catch(e) { console.error('Chart:', e); }
@@ -770,13 +829,11 @@ const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
       const noteBox = d.note ? `<div style="background:rgba(255,107,107,.07);border:1px solid rgba(255,107,107,.22);border-radius:13px;padding:10px 13px;margin-bottom:10px;font-size:12px;color:rgba(255,180,180,.9)">${d.note}</div>` : '';
       const sightBox = `<div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:13px;padding:10px 13px;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5"><b style="color:rgba(255,255,255,.85)">👁️ ${d.type==='sonderfall'?'Besonderheit':'Farbsehen'}:</b> ${d.sight||'–'}</div>`;
       return `
-      <button class="fish-select-btn" onclick="openSpeciesSheet()">
-        <span style="display:flex;align-items:center;gap:10px">
-          ${FISH_SVG[selFish]||''}
-          <span>${selFish} – ${fishData[selFish]?.type==='raubfisch'?'Raubfisch':fishData[selFish]?.type==='sonderfall'?'Sonderfall':'Friedfisch'}</span>
-        </span>
-        <svg width="12" height="8" viewBox="0 0 12 8" fill="rgba(255,255,255,.5)"><path d="M0 0l6 8 6-8z"/></svg>
-      </button>
+      <select onchange="selFish=this.value;renderView()" style="width:100%;background:rgba(15,30,50,.98);border:1.5px solid rgba(46,168,255,.4);border-radius:13px;color:#fff;padding:13px 16px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:14px;-webkit-appearance:none;appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'8\'><path d=\'M0 0l6 8 6-8z\' fill=\'rgba(255,255,255,0.5)\'/></svg>');background-repeat:no-repeat;background-position:right 14px center">
+        <optgroup label="🎣 Raubfische">${['Zander','Hecht','Barsch','Aal','Forelle'].map(f=>`<option value="${f}" ${f===selFish?'selected':''} style="background:#0a1520">${{'Zander':'🟡','Hecht':'🟢','Barsch':'🔴','Aal':'⚫','Forelle':'🟠'}[f]} ${f}</option>`).join('')}</optgroup>
+        <optgroup label="🌿 Friedfische">${['Karpfen','Schleie','Brasse','Rotauge','Rotfeder'].map(f=>`<option value="${f}" ${f===selFish?'selected':''} style="background:#0a1520">${{'Karpfen':'🟤','Schleie':'🟠','Brasse':'🥈','Rotauge':'🔵','Rotfeder':'🟣'}[f]} ${f}</option>`).join('')}</optgroup>
+        <optgroup label="⚡ Sonderfälle">${['Döbel','Rapfen'].map(f=>`<option value="${f}" ${f===selFish?'selected':''} style="background:#0a1520">${{'Döbel':'🟫','Rapfen':'🔶'}[f]} ${f}</option>`).join('')}</optgroup>
+      </select>
       <div class="panel green">
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
           <div style="font-size:52px">${d.emoji}</div>
@@ -979,13 +1036,12 @@ const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
         <div style="display:flex;gap:5px;margin-bottom:16px">${[0,1,2,3].map(i=>`<div style="height:3px;flex:1;border-radius:3px;background:${i<done?'#2ea8ff':'rgba(255,255,255,.1)'};transition:.3s"></div>`).join('')}</div>
 
         <div class="wiz-label">🐟 Zielfisch</div>
-        <button class="fish-select-btn" onclick="openWizardSheet()">
-          <span style="display:flex;align-items:center;gap:10px">
-            ${w.fish ? (FISH_SVG[w.fish]||'') : '<span style="font-size:22px">🎣</span>'}
-            <span>${w.fish || '– Fischart wählen –'}</span>
-          </span>
-          <svg width="12" height="8" viewBox="0 0 12 8" fill="rgba(255,255,255,.5)"><path d="M0 0l6 8 6-8z"/></svg>
-        </button>
+        <select onchange="wizState.fish=this.value;wizState.turb=null;wizState.light=null;wizState.depth=null;wizState.stelle=null;wizState.jahreszeit=null;wizState.wetter=null;renderView()" style="width:100%;background:rgba(15,30,50,.98);border:1.5px solid rgba(46,168,255,.4);border-radius:13px;color:#fff;padding:13px 16px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:14px;-webkit-appearance:none;appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'8\'><path d=\'M0 0l6 8 6-8z\' fill=\'rgba(255,255,255,0.5)\'/></svg>');background-repeat:no-repeat;background-position:right 14px center">
+          <option value="" style="background:#0a1520">– Fischart wählen –</option>
+          <optgroup label="🎣 Raubfische">${['Zander','Hecht','Barsch','Aal','Forelle'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#0a1520">${{'Zander':'🟡','Hecht':'🟢','Barsch':'🔴','Aal':'⚫','Forelle':'🟠'}[f]} ${f}</option>`).join('')}</optgroup>
+          <optgroup label="🌿 Friedfische">${['Karpfen','Schleie','Brasse','Rotauge','Rotfeder'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#0a1520">${{'Karpfen':'🟤','Schleie':'🟠','Brasse':'🥈','Rotauge':'🔵','Rotfeder':'🟣'}[f]} ${f}</option>`).join('')}</optgroup>
+          <optgroup label="⚡ Sonderfälle">${['Döbel','Rapfen'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#0a1520">${{'Döbel':'🟫','Rapfen':'🔶'}[f]} ${f}</option>`).join('')}</optgroup>
+        </select>
 
         ${!w.fish ? '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.3);font-size:13px">🐟 Fischart wählen</div>' : isRaub ? `
           <div class="wiz-label">💧 Wassertrübung</div>
@@ -1304,7 +1360,61 @@ function selectFcTab(btn, tab) {
           drawChart('dayChart24', DAY, '#ff9d18');
           addChartTouch('dayChart24', DAY, '#ff9d18');
         } else if (tab === '14days') {
-          const d14=[76,82,68,85,91,72,78,65,80,88,75,70,82,77];
+          // 14-Tage Prognose aus echten HA-Wetterdaten
+const d14 = (() => {
+  const fcDays = haStates['weather.home']?.attributes?.forecast || [];
+  if (fcDays.length < 7) return WEEK.concat(WEEK); // Fallback
+
+  // Für jeden Vorhersage-Tag einen Angelwetter-Score berechnen
+  return fcDays.slice(0,14).map((fc, i) => {
+    // Basiswert aus 7-Tage-Sensor wenn verfügbar
+    let base = WEEK[i] || 65;
+
+    // Wetterfaktoren aus Tagesvorhersage
+    const temp = parseFloat(fc.temperature || fc.temperature_low || 12);
+    const rain = parseFloat(fc.precipitation || 0);
+    const rainProb = parseFloat(fc.precipitation_probability || 0);
+    const wind = parseFloat(fc.wind_speed || 10);
+    const condition = (fc.condition || '').toLowerCase();
+
+    let mod = 0;
+
+    // Temperatur
+    if (temp < 3) mod -= 10;
+    else if (temp < 8) mod -= 5;
+    else if (temp >= 12 && temp <= 20) mod += 5;
+    else if (temp > 28) mod -= 8;
+
+    // Niederschlag
+    if (rain > 8) mod -= 12;
+    else if (rain > 3) mod -= 6;
+    else if (rain > 0.5 && rain <= 3) mod += 3; // leichter Regen gut
+    if (rainProb > 85) mod -= 8;
+    else if (rainProb > 60) mod -= 3;
+
+    // Wind
+    if (wind > 35) mod -= 12;
+    else if (wind > 25) mod -= 6;
+    else if (wind > 15) mod -= 2;
+    else if (wind < 10) mod += 3; // Windstill gut
+
+    // Wetterlage
+    if (condition.includes('sunny') || condition.includes('clear')) mod += 3;
+    if (condition.includes('storm') || condition.includes('thunder')) mod -= 15;
+    if (condition.includes('fog')) mod -= 4;
+    if (condition.includes('cloudy') && !condition.includes('partly')) mod += 2;
+
+    // Nur für erste 7 Tage: WEEK-Werte nutzen wenn vorhanden
+    if (i < WEEK.length && WEEK[i]) {
+      // Mix: 70% Sensor, 30% Wetterberechnung
+      base = Math.round(WEEK[i] * 0.7 + (65 + mod) * 0.3);
+    } else {
+      base = Math.round(65 + mod);
+    }
+
+    return Math.min(95, Math.max(15, base));
+  });
+})();
           drawChart('chart14', d14, '#a78bfa');
           addChartTouch('chart14', d14, '#a78bfa');
         }
@@ -1367,7 +1477,61 @@ function buildForecastTab(tab) {
         </div>
       </div>`;
   } else {
-    const d14=[76,82,68,85,91,72,78,65,80,88,75,70,82,77];
+    // 14-Tage Prognose aus echten HA-Wetterdaten
+const d14 = (() => {
+  const fcDays = haStates['weather.home']?.attributes?.forecast || [];
+  if (fcDays.length < 7) return WEEK.concat(WEEK); // Fallback
+
+  // Für jeden Vorhersage-Tag einen Angelwetter-Score berechnen
+  return fcDays.slice(0,14).map((fc, i) => {
+    // Basiswert aus 7-Tage-Sensor wenn verfügbar
+    let base = WEEK[i] || 65;
+
+    // Wetterfaktoren aus Tagesvorhersage
+    const temp = parseFloat(fc.temperature || fc.temperature_low || 12);
+    const rain = parseFloat(fc.precipitation || 0);
+    const rainProb = parseFloat(fc.precipitation_probability || 0);
+    const wind = parseFloat(fc.wind_speed || 10);
+    const condition = (fc.condition || '').toLowerCase();
+
+    let mod = 0;
+
+    // Temperatur
+    if (temp < 3) mod -= 10;
+    else if (temp < 8) mod -= 5;
+    else if (temp >= 12 && temp <= 20) mod += 5;
+    else if (temp > 28) mod -= 8;
+
+    // Niederschlag
+    if (rain > 8) mod -= 12;
+    else if (rain > 3) mod -= 6;
+    else if (rain > 0.5 && rain <= 3) mod += 3; // leichter Regen gut
+    if (rainProb > 85) mod -= 8;
+    else if (rainProb > 60) mod -= 3;
+
+    // Wind
+    if (wind > 35) mod -= 12;
+    else if (wind > 25) mod -= 6;
+    else if (wind > 15) mod -= 2;
+    else if (wind < 10) mod += 3; // Windstill gut
+
+    // Wetterlage
+    if (condition.includes('sunny') || condition.includes('clear')) mod += 3;
+    if (condition.includes('storm') || condition.includes('thunder')) mod -= 15;
+    if (condition.includes('fog')) mod -= 4;
+    if (condition.includes('cloudy') && !condition.includes('partly')) mod += 2;
+
+    // Nur für erste 7 Tage: WEEK-Werte nutzen wenn vorhanden
+    if (i < WEEK.length && WEEK[i]) {
+      // Mix: 70% Sensor, 30% Wetterberechnung
+      base = Math.round(WEEK[i] * 0.7 + (65 + mod) * 0.3);
+    } else {
+      base = Math.round(65 + mod);
+    }
+
+    return Math.min(95, Math.max(15, base));
+  });
+})();
     const dn=['Mo','Di','Mi','Do','Fr','Sa','So','Mo','Di','Mi','Do','Fr','Sa','So'];
     return `
       <div class="panel blue" style="margin-top:10px">
