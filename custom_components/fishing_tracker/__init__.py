@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -44,15 +45,24 @@ from .const import (
 )
 
 
+SERVICE_DELETE_CATCH    = "delete_catch"
+SERVICE_DELETE_SCHEMA = vol.Schema({
+    vol.Required("timestamp"): cv.string,
+})
+
 SERVICE_LOG_SCHEMA = vol.Schema({
     vol.Optional("fish_type"): cv.string,
     vol.Optional("spot"): cv.string,
     vol.Optional("bait"): cv.string,
     vol.Optional("length_cm"): vol.Any(cv.string, vol.Coerce(float)),
+    vol.Optional("weight_kg"): vol.Any(cv.string, vol.Coerce(float)),
     vol.Optional("angler"): cv.string,
     vol.Optional("latitude"): vol.Coerce(float),
     vol.Optional("longitude"): vol.Coerce(float),
     vol.Optional("notes", default=""): cv.string,
+    vol.Optional("photo_data"): cv.string,       # base64 JPEG
+    vol.Optional("water_temp"): vol.Coerce(float),
+    vol.Optional("angelwetter_index"): vol.Coerce(int),
 })
 
 SERVICE_IMPORT_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker.csv"): cv.string})
@@ -132,6 +142,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_register_lovelace_resource(hass)
         async_dispatcher_send(hass, SIGNAL_UPDATED)
 
+    async def handle_delete_catch(call: ServiceCall) -> None:
+        store: FishingStore = hass.data[DOMAIN][entry.entry_id]["store"]
+        removed = await store.async_remove_entry(call.data["timestamp"])
+        if removed:
+            async_dispatcher_send(hass, SIGNAL_UPDATED)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_DELETE_CATCH):
+        hass.services.async_register(DOMAIN, SERVICE_DELETE_CATCH, handle_delete_catch, schema=SERVICE_DELETE_SCHEMA)
+
     if not hass.services.has_service(DOMAIN, SERVICE_LOG_CATCH):
         hass.services.async_register(DOMAIN, SERVICE_LOG_CATCH, handle_log_catch, schema=SERVICE_LOG_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_LOG_NO_CATCH):
@@ -155,7 +174,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id, None)
 
     if not hass.data.get(DOMAIN):
-        for service in (SERVICE_LOG_CATCH, SERVICE_LOG_NO_CATCH, SERVICE_IMPORT_CSV, SERVICE_EXPORT_CSV, SERVICE_EXPORT_JSON):
+        for service in (SERVICE_LOG_CATCH, SERVICE_LOG_NO_CATCH, SERVICE_DELETE_CATCH, SERVICE_IMPORT_CSV, SERVICE_EXPORT_CSV, SERVICE_EXPORT_JSON):
             if hass.services.has_service(DOMAIN, service):
                 hass.services.async_remove(DOMAIN, service)
 
@@ -187,6 +206,35 @@ async def async_log_entry(hass: HomeAssistant, entry: ConfigEntry, caught: int, 
     cloud = _float(weather_attrs.get("cloud_coverage"), 50)
     precipitation = _float(weather_attrs.get("precipitation"), 0)
 
+    # Lokale Wetterstation Haftenkamp (Priorität über weather entity)
+    def _hs(entity_id, default=None):
+        s = hass.states.get(entity_id)
+        return _float(s.state, default) if s and s.state not in ("unknown","unavailable") else default
+
+    hs_temp    = _hs("sensor.haftenkamp_temperatur")
+    hs_wind    = _hs("sensor.haftenkamp_windgeschwindigkeit")
+    hs_gusts   = _hs("sensor.haftenkamp_windboen")
+    hs_bearing = _hs("sensor.haftenkamp_windrichtung")
+    hs_press   = _hs("sensor.haftenkamp_druck")
+    hs_rain    = _hs("sensor.haftenkamp_niederschlag")
+    hs_cloud   = _hs("sensor.haftenkamp_bewolkungsgrad")
+    hs_solar   = _hs("sensor.haftenkamp_sonneneinstrahlung")
+    hs_humid   = _hs("sensor.haftenkamp_relative_luftfeuchtigkeit")
+
+    if hs_temp  is not None: temperature   = hs_temp
+    if hs_wind  is not None: wind_speed     = hs_wind
+    if hs_press is not None: pressure       = hs_press
+    if hs_rain  is not None: precipitation  = hs_rain
+    if hs_cloud is not None: cloud          = hs_cloud
+
+    # Wassertemperatur
+    water_temp_sensor = hass.states.get("sensor.wassertemperatur_gewaesser")
+    water_temp = data.get("water_temp") or (
+        _float(water_temp_sensor.state)
+        if water_temp_sensor and water_temp_sensor.state not in ("unknown","unavailable")
+        else None
+    )
+
     s = stats(store.entries)
     moon = hass.states.get("sensor.moon")
     chance = current_weather_score(
@@ -202,6 +250,26 @@ async def async_log_entry(hass: HomeAssistant, entry: ConfigEntry, caught: int, 
         history_score=s.get("history_score", 50),
     )
 
+    # Foto speichern
+    photo_url = None
+    photo_data = data.get("photo_data")
+    if photo_data and len(photo_data) > 100:
+        import base64, uuid as _uuid
+        photo_dir = Path(hass.config.path()) / "www" / "fishing_tracker" / "photos"
+        photo_dir.mkdir(parents=True, exist_ok=True)
+        photo_id = _uuid.uuid4().hex[:12]
+        photo_filename = f"catch_{photo_id}.jpg"
+        photo_path = photo_dir / photo_filename
+        try:
+            raw = photo_data.split(",", 1)[-1]
+            await hass.async_add_executor_job(
+                lambda: photo_path.write_bytes(base64.b64decode(raw))
+            )
+            photo_url = f"/local/fishing_tracker/photos/{photo_filename}"
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Foto konnte nicht gespeichert werden: %s", exc)
+
     new_entry = {
         "timestamp": now.isoformat(),
         "angler": data.get("angler") or entry.data.get(CONF_NAME, DEFAULT_NAME),
@@ -211,14 +279,22 @@ async def async_log_entry(hass: HomeAssistant, entry: ConfigEntry, caught: int, 
         "caught": caught,
         "spot": data.get("spot") or settings.get("spot"),
         "bait": data.get("bait") or settings.get("bait"),
-        "length_cm": data.get("length_cm", settings.get("length_cm", 0)),
+        "length_cm": (lambda v: float(v) if v else 0)(data.get("length_cm") or settings.get("length_cm") or 0),
+        "weight_kg": (lambda v: float(v) if v else None)(data.get("weight_kg") or None),
         "notes": data.get("notes", ""),
+        "photo_url": photo_url,
         "chance": chance,
+        "angelwetter_index": data.get("angelwetter_index"),
         "pressure": pressure,
         "temperature": temperature,
         "wind_speed": wind_speed,
+        "wind_bearing": hs_bearing,
+        "wind_gusts": hs_gusts,
         "cloud_coverage": cloud,
         "precipitation": precipitation,
+        "solar_radiation": hs_solar,
+        "humidity": hs_humid,
+        "water_temp": water_temp,
     }
 
     await store.async_add_entry(new_entry)

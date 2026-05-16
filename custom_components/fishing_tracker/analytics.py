@@ -370,18 +370,32 @@ def bite_forecast_series(
     longitude: float | None = None,
     sunrise_hour: float | None = None,
     sunset_hour: float | None = None,
+    hourly_forecast: list[dict] | None = None,
 ) -> list[dict[str, Any]]:
     from datetime import datetime, timedelta
     import math
     import random
 
     entries = entries or []
+    hourly_forecast = hourly_forecast or []
     fish_type = normalize_fish_name(fish_type)
     now = datetime.now().astimezone().replace(minute=0, second=0, microsecond=0)
     points: list[dict[str, Any]] = []
 
     seed_base = int(now.strftime("%Y%m%d")) + int(temperature * 10) + int(pressure) + len(entries) * 17
     rng = random.Random(seed_base)
+
+    # Stündliche Vorhersage in Dict umwandeln: {datetime_hour_key: forecast_data}
+    hourly_map: dict = {}
+    for fc in hourly_forecast:
+        try:
+            from datetime import datetime as dt
+            fc_dt = dt.fromisoformat(str(fc.get("datetime","")).replace("Z","+00:00"))
+            fc_local = fc_dt.astimezone()
+            key = fc_local.strftime("%Y-%m-%d %H")
+            hourly_map[key] = fc
+        except Exception:
+            pass
 
     daily = {}
     for i in range(hours):
@@ -401,12 +415,27 @@ def bite_forecast_series(
         slow_angle = 2 * math.pi * (i / 53.0)
         micro_angle = 2 * math.pi * (i / 11.0)
 
-        temp_sim = temperature + daily[day_key]["temp"] + math.sin(hour_angle - 1.2) * 2.4 + math.sin(slow_angle) * 0.8
-        pressure_sim = pressure + daily[day_key]["pressure"] + math.sin(slow_angle + 1.1) * 4.8 + math.sin(micro_angle) * 1.1
-        wind_sim = max(0, wind_speed + daily[day_key]["wind"] + math.sin(hour_angle + 0.7) * 3.2 + math.sin(micro_angle + 2.2) * 1.4)
-        cloud_sim = min(100, max(0, cloud_coverage + daily[day_key]["cloud"] + math.sin(slow_angle - 0.4) * 18 + math.sin(hour_angle * 2) * 9))
-        rain_sim = max(0, precipitation + daily[day_key]["rain"] + max(0, math.sin(slow_angle + 2.8)) * 1.1 - max(0, math.sin(hour_angle - 0.6)) * 0.4)
-        pressure_trend = math.cos(slow_angle + 1.1) * 2.8 + math.cos(micro_angle) * 0.6 + daily[day_key]["pressure"] * 0.10
+        # Echte stündliche Wetterdaten wenn vorhanden, sonst Simulation
+        fc_key = ts.strftime("%Y-%m-%d %H")
+        fc_hour = hourly_map.get(fc_key, {})
+
+        if fc_hour:
+            # Echte Vorhersage-Daten nutzen
+            temp_sim = float(fc_hour.get("temperature", temperature))
+            wind_sim = max(0, float(fc_hour.get("wind_speed", wind_speed)))
+            cloud_sim = min(100, max(0, float(fc_hour.get("cloud_coverage",
+                          fc_hour.get("condition_cloudcover", cloud_coverage) or cloud_coverage)))  )
+            rain_sim = max(0, float(fc_hour.get("precipitation", precipitation)))
+            pressure_sim = float(fc_hour.get("pressure", pressure + daily[day_key]["pressure"]))
+            pressure_trend = pressure_sim - pressure
+        else:
+            # Simulation wenn keine echten Daten
+            temp_sim = temperature + daily[day_key]["temp"] + math.sin(hour_angle - 1.2) * 2.4 + math.sin(slow_angle) * 0.8
+            pressure_sim = pressure + daily[day_key]["pressure"] + math.sin(slow_angle + 1.1) * 4.8 + math.sin(micro_angle) * 1.1
+            wind_sim = max(0, wind_speed + daily[day_key]["wind"] + math.sin(hour_angle + 0.7) * 3.2 + math.sin(micro_angle + 2.2) * 1.4)
+            cloud_sim = min(100, max(0, cloud_coverage + daily[day_key]["cloud"] + math.sin(slow_angle - 0.4) * 18 + math.sin(hour_angle * 2) * 9))
+            rain_sim = max(0, precipitation + daily[day_key]["rain"] + max(0, math.sin(slow_angle + 2.8)) * 1.1 - max(0, math.sin(hour_angle - 0.6)) * 0.4)
+            pressure_trend = math.cos(slow_angle + 1.1) * 2.8 + math.cos(micro_angle) * 0.6 + daily[day_key]["pressure"] * 0.10
 
         score, explanation = smart_fishing_score(
             fish_type=fish_type,

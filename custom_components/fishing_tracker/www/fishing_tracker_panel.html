@@ -81,7 +81,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub">v2.12.12 · Premium Intelligence</div>
+      <div class="ft-sub">v2.14.6 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -167,8 +167,9 @@ function smooth(pp) {
   if (pp.length < 2) return pp.map((p,i)=>(i?'L':'M')+p[0]+','+p[1]).join(' ');
   let d = 'M'+pp[0][0]+','+pp[0][1];
   for (let i=0; i<pp.length-1; i++) {
-    const cp1x = pp[i][0]+(pp[i+1][0]-pp[i][0])*0.4;
-    const cp2x = pp[i+1][0]-(pp[i+1][0]-pp[i][0])*0.4;
+    const t = 0.25;
+    const cp1x = pp[i][0]+(pp[i+1][0]-pp[i][0])*t;
+    const cp2x = pp[i+1][0]-(pp[i+1][0]-pp[i][0])*t;
     d += ' C'+cp1x+','+pp[i][1]+' '+cp2x+','+pp[i+1][1]+' '+pp[i+1][0]+','+pp[i+1][1];
   }
   return d;
@@ -185,7 +186,10 @@ function drawChart(id, pts, color = '#ff9d18', todayIdx = null) {
   // Bezier smooth
   let smoothPath = 'M'+pp[0][0]+','+pp[0][1];
   for (let i=0; i<pp.length-1; i++) {
-    const cx1=pp[i][0]+(pp[i+1][0]-pp[i][0])*0.4, cx2=pp[i+1][0]-(pp[i+1][0]-pp[i][0])*0.4;
+    // Tension 0.25: glatt aber nah an Datenpunkten → kein Schweben
+    const tension = 0.25;
+    const cx1=pp[i][0]+(pp[i+1][0]-pp[i][0])*tension;
+    const cx2=pp[i+1][0]-(pp[i+1][0]-pp[i][0])*tension;
     smoothPath += ` C${cx1},${pp[i][1]} ${cx2},${pp[i+1][1]} ${pp[i+1][0]},${pp[i+1][1]}`;
   }
   const area = `M${pp[0][0]},${h-padB} ${smoothPath.slice(1)} L${pp[pp.length-1][0]},${h-padB} Z`;
@@ -210,10 +214,9 @@ function drawChart(id, pts, color = '#ff9d18', todayIdx = null) {
     ${labs.map((l,i)=>`<text x="${padL+i*(w-padL-padR)/(labs.length-1)}" y="${h-5}" fill="rgba(255,255,255,.4)" font-size="10" text-anchor="middle" font-family="system-ui">${l}</text>`).join('')}
     <path d="${area}" fill="url(#g${id})"/>
     <path d="${smoothPath}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="${nx}" y1="${padT}" x2="${nx}" y2="${h-padB}" stroke="rgba(255,215,0,.55)" stroke-width="1.5" stroke-dasharray="4 3"/>
-    <circle cx="${nx}" cy="${ny}" r="7" fill="#ffd23f" stroke="#fff" stroke-width="2"/>
-    <circle cx="${nx}" cy="${ny}" r="3" fill="#fff"/>
-    <text x="${nx+11}" y="${ny-8}" fill="#ffd23f" font-size="11" font-weight="800" font-family="system-ui">Jetzt</text>`;
+    <line x1="${nx}" y1="${padT+18}" x2="${nx}" y2="${h-padB}" stroke="rgba(255,215,0,.6)" stroke-width="2" stroke-dasharray="5 3"/>
+    <rect x="${nx-18}" y="${padT+2}" width="36" height="16" rx="4" fill="rgba(255,215,0,.15)" stroke="rgba(255,215,0,.5)" stroke-width="1"/>
+    <text x="${nx}" y="${padT+13}" fill="#ffd23f" font-size="10" font-weight="800" text-anchor="middle" font-family="system-ui">Jetzt</text>`;
 }
 
 // ── CSS ───────────────────────────────────────────────────────────────────────
@@ -322,24 +325,76 @@ let _wizFish = null;
 
 const sc = v => parseInt(v) >= 80 ? '#67d33f' : parseInt(v) >= 60 ? '#ffd23f' : '#ff9d18';
 
-// 24h Prognose: aus HA-Sensor oder Demo-Daten
-const _dayForecast = haStates['sensor.fishing_tracker_bite_forecast_day']?.attributes;
+// ── Einheitliche Datenbasis: DAY + WEEK aus HA-Sensoren ─────────────────────
+// DAY: 24 Stundenwerte – Backend-Sensor + stündliche Wettermodulation
+const _dayForecastAttr = haStates['sensor.fishing_tracker_bite_forecast_day']?.attributes;
+const _hourlyFc = haStates['weather.home']?.attributes?.forecast || [];
+
+// Stündliche Wettermodifikatoren berechnen
+const _hourlyMod = new Array(24).fill(0);
+_hourlyFc.forEach(fc => {
+  try {
+    const h = new Date(fc.datetime).getHours();
+    let mod = 0;
+    const rain = parseFloat(fc.precipitation || 0);
+    const rainProb = parseFloat(fc.precipitation_probability || 0);
+    const wind = parseFloat(fc.wind_speed || 0);
+    const temp = parseFloat(fc.temperature || 12);
+    // Regen: leichter Regen gut (+3), starker Regen schlecht (-8)
+    if (rain > 5) mod -= 8;
+    else if (rain > 2) mod -= 4;
+    else if (rain > 0.5) mod += 3;
+    // Hohe Regenwahrscheinlichkeit
+    if (rainProb > 80) mod -= 5;
+    else if (rainProb > 60) mod -= 2;
+    // Starker Wind
+    if (wind > 30) mod -= 8;
+    else if (wind > 20) mod -= 3;
+    // Temperatur
+    if (temp < 3) mod -= 5;
+    else if (temp > 25) mod -= 3;
+    _hourlyMod[h] = mod;
+  } catch(e) {}
+});
+
 const DAY = (() => {
-  if (_dayForecast?.points && _dayForecast.points.length >= 20) {
-    // Echte Stundenwerte aus Backend
-    const pts = new Array(24).fill(0);
-    _dayForecast.points.forEach(p => {
+  if (_dayForecastAttr?.points?.length >= 20) {
+    const pts = new Array(24).fill(50);
+    _dayForecastAttr.points.forEach(p => {
       try {
         const h = new Date(p.timestamp).getHours();
-        pts[h] = Math.round(p.score);
-      } catch(e) {}
+        // Backend-Score + stündliche Wettermodulation
+        const raw = Math.round(p.score) + _hourlyMod[h];
+        pts[h] = Math.min(95, Math.max(5, raw));
+      } catch(e){}
     });
     return pts;
   }
-  // Fallback Demo
-  return [28,25,32,30,28,26,25,42,60,68,72,70,65,60,55,52,58,68,88,92,85,72,58,42];
+  // Fallback: Demo mit Wettermodulation
+  const base = [28,25,32,30,28,26,25,42,60,68,72,70,65,60,55,52,58,68,88,92,85,72,58,42];
+  return base.map((v,h) => Math.min(95, Math.max(5, v + _hourlyMod[h])));
 })();
-const WEEK = [76,82,68,85,91,72,78];
+
+// WEEK: 7 Tageswerte aus sensor.fishing_tracker_daily_forecast
+// DIESELBE Datenquelle wie die Anzeige unten → keine Inkonsistenz!
+const _weekForecastAttr = haStates['sensor.fishing_tracker_daily_forecast']?.attributes?.days;
+const WEEK_DATA = (() => {
+  if (_weekForecastAttr?.length >= 7) {
+    return _weekForecastAttr.slice(0,7).map(d => ({
+      d: d.weekday, date: d.date_str, v: Math.round(d.avg_score), isToday: d.is_today
+    }));
+  }
+  // Fallback: Mo-So ab aktuellem Montag
+  const days = ['Mo','Di','Mi','Do','Fr','Sa','So'];
+  const vals = [72,65,58,71,68,74,62];
+  const todayDow = new Date().getDay();
+  const moOff = todayDow===0?6:todayDow-1;
+  return days.map((d,i) => ({
+    d, v: vals[i], isToday: i===moOff,
+    date: (() => { const dt=new Date(); dt.setDate(dt.getDate()-moOff+i); return dt.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'}); })()
+  }));
+})();
+const WEEK = WEEK_DATA.map(w => w.v); // Einheitliche Datenquelle für Chart + Tooltip
 const SPECIES_CURVES = {
   Zander: [22,20,30,28,25,22,20,38,55,65,60,58,55,50,48,50,55,62,88,92,85,72,58,42],
   Hecht:  [31,28,42,38,35,32,30,50,62,68,64,60,55,52,50,52,58,65,70,68,62,55,42,35],
@@ -531,98 +586,752 @@ function wizardResult(w) {
 }
 
 
+
+
+// ── Multi-Source Wetterverifikation ──────────────────────────────────────────
+// Priorität: 1. Lokale Wetterstation (haftenkamp_*) → präziseste Daten
+//            2. Online-Wetter-Entities (weather.home, dwd_weather usw.)
+//            3. Vergleich beider Quellen → Konfidenz-Indikator
+function getVerifiedWeather() {
+
+  // ── 1. LOKALE WETTERSTATION ─────────────────────────────────────────────
+  const localStation = {
+    temperature:    parseFloat(haStates['sensor.haftenkamp_temperatur']?.state),
+    wind_speed:     parseFloat(haStates['sensor.haftenkamp_windgeschwindigkeit']?.state),
+    wind_gusts:     parseFloat(haStates['sensor.haftenkamp_windboen']?.state),
+    wind_bearing:   parseFloat(haStates['sensor.haftenkamp_windrichtung']?.state),
+    pressure:       parseFloat(haStates['sensor.haftenkamp_druck']?.state),
+    precipitation:  parseFloat(haStates['sensor.haftenkamp_niederschlag']?.state),
+    cloud_coverage: parseFloat(haStates['sensor.haftenkamp_bewolkungsgrad']?.state),
+    humidity:       parseFloat(haStates['sensor.haftenkamp_relative_luftfeuchtigkeit']?.state),
+    solar_radiation:parseFloat(haStates['sensor.haftenkamp_sonneneinstrahlung']?.state),
+  };
+  const localAvailable = !isNaN(localStation.temperature) && !isNaN(localStation.wind_speed);
+
+  // ── 2. ONLINE-WETTER-ENTITIES ───────────────────────────────────────────
+  const ONLINE_ENTITIES = [
+    'weather.home', 'weather.dwd_weather', 'weather.dwd_weather_hourly',
+    'weather.met_no', 'weather.openweathermap', 'weather.open_meteo',
+    'weather.accuweather', 'weather.buienradar', 'weather.pirateweather',
+    'weather.tomorrow_io', 'weather.home_2',
+  ];
+  const onlineSources = [];
+  for (const entity of ONLINE_ENTITIES) {
+    const s = haStates[entity];
+    if (!s?.attributes?.temperature) continue;
+    const a = s.attributes;
+    onlineSources.push({
+      entity,
+      temperature:    parseFloat(a.temperature   || 0),
+      wind_speed:     parseFloat(a.wind_speed     || 0),
+      wind_bearing:   parseFloat(a.wind_bearing   || 0),
+      pressure:       parseFloat(a.pressure       || 1015),
+      precipitation:  parseFloat(a.precipitation  || 0),
+      cloud_coverage: parseFloat(a.cloud_coverage || 50),
+      humidity:       parseFloat(a.humidity       || 70),
+      forecast:       a.forecast || [],
+    });
+  }
+
+  // Mittelwert aller Online-Quellen
+  const onlineAvg = key => onlineSources.length
+    ? onlineSources.reduce((s, x) => s + (x[key] || 0), 0) / onlineSources.length
+    : null;
+
+  // ── 3. ZUSAMMENFÜHREN ──────────────────────────────────────────────────
+  // Lokale Station hat Priorität wo vorhanden
+  const merged = {
+    temperature:    localAvailable && !isNaN(localStation.temperature)
+                      ? localStation.temperature
+                      : onlineAvg('temperature') ?? 12,
+    wind_speed:     localAvailable && !isNaN(localStation.wind_speed)
+                      ? localStation.wind_speed
+                      : onlineAvg('wind_speed') ?? 10,
+    wind_gusts:     localAvailable && !isNaN(localStation.wind_gusts)
+                      ? localStation.wind_gusts
+                      : (onlineAvg('wind_speed') ?? 10) * 1.3,
+    wind_bearing:   localAvailable && !isNaN(localStation.wind_bearing)
+                      ? localStation.wind_bearing
+                      : onlineAvg('wind_bearing') ?? 0,
+    pressure:       localAvailable && !isNaN(localStation.pressure)
+                      ? localStation.pressure
+                      : onlineAvg('pressure') ?? 1015,
+    precipitation:  localAvailable && !isNaN(localStation.precipitation)
+                      ? localStation.precipitation
+                      : onlineAvg('precipitation') ?? 0,
+    cloud_coverage: localAvailable && !isNaN(localStation.cloud_coverage)
+                      ? localStation.cloud_coverage
+                      : onlineAvg('cloud_coverage') ?? 50,
+    humidity:       localAvailable && !isNaN(localStation.humidity)
+                      ? localStation.humidity
+                      : onlineAvg('humidity') ?? 70,
+    // Solar nur von lokaler Station – kein API hat das!
+    solar_radiation: !isNaN(localStation.solar_radiation) ? localStation.solar_radiation : null,
+    // Forecast nur von Online (lokale Station hat keine Vorhersage)
+    forecast:       onlineSources[0]?.forecast || [],
+  };
+
+  // ── 4. KONFIDENZ / VERIFIKATION ────────────────────────────────────────
+  let confidence = 'single', deviation = 0, sourceLabel = '';
+  const totalSources = (localAvailable ? 1 : 0) + onlineSources.length;
+
+  if (localAvailable && onlineSources.length > 0) {
+    const onlineTemp = onlineAvg('temperature');
+    deviation = Math.abs(localStation.temperature - onlineTemp);
+    deviation = Math.round(deviation * 10) / 10;
+    if (deviation <= 1.0)      confidence = 'high';
+    else if (deviation <= 2.5) confidence = 'medium';
+    else                        confidence = 'low';
+    const onlineName = onlineSources[0].entity.replace('weather.','');
+    sourceLabel = `Haftenkamp + ${onlineName}`;
+  } else if (localAvailable) {
+    confidence = 'local_only';
+    sourceLabel = 'Wetterstation Haftenkamp';
+  } else if (onlineSources.length > 0) {
+    confidence = onlineSources.length > 1 ? 'online_multi' : 'single';
+    sourceLabel = onlineSources.map(s => s.entity.replace('weather.','')).join(' + ');
+  }
+
+  return { ...merged, sourceCount: totalSources, confidence, deviation, sourceLabel,
+           localAvailable, onlineCount: onlineSources.length };
+}
+
+// Konfidenz-Badge für UI
+function weatherConfidenceBadge(wx) {
+  if (!wx || wx.sourceCount === 0)
+    return '<span style="color:rgba(255,255,255,.3);font-size:10px">⚠ Keine Wetterdaten</span>';
+  if (wx.confidence === 'local_only')
+    return `<span style="color:#67d33f;font-size:10px">📡 ${wx.sourceLabel}</span>`;
+  if (wx.confidence === 'high')
+    return `<span style="color:#67d33f;font-size:10px">✅ ${wx.sourceLabel} · Δ${wx.deviation}°C</span>`;
+  if (wx.confidence === 'medium')
+    return `<span style="color:#f0b429;font-size:10px">⚠️ ${wx.sourceLabel} · Δ${wx.deviation}°C</span>`;
+  if (wx.confidence === 'low')
+    return `<span style="color:#e53e3e;font-size:10px">❌ Differenz ${wx.deviation}°C – Lokale Station bevorzugt</span>`;
+  if (wx.confidence === 'online_multi')
+    return `<span style="color:#67d33f;font-size:10px">✅ ${wx.sourceCount} Online-Quellen</span>`;
+  return `<span style="color:rgba(255,255,255,.4);font-size:10px">📡 ${wx.sourceLabel}</span>`;
+}
+
+
+
+// Konfidenz-Badge für die UI
+function weatherConfidenceBadge(wx) {
+  if (wx.sourceCount === 0) return '<span style="color:rgba(255,255,255,.3);font-size:10px">⚠ Keine Wetterdaten</span>';
+  if (wx.sourceCount === 1) return `<span style="color:rgba(255,255,255,.4);font-size:10px">📡 ${wx.sources[0].replace('weather.','')}</span>`;
+  const col = wx.confidence === 'high' ? '#67d33f' : wx.confidence === 'medium' ? '#f0b429' : '#e53e3e';
+  const icon = wx.confidence === 'high' ? '✅' : wx.confidence === 'medium' ? '⚠️' : '❌';
+  return `<span style="color:${col};font-size:10px">${icon} ${wx.sourceCount} Quellen · Δ${wx.deviation}°C</span>`;
+}
+
+// ── Allgemeiner Angelwetter-Tagesindex (NICHT fischart- oder uhrzeit-spezifisch) ──
+// Basiert auf wissenschaftlicher Gewichtung (IGB Berlin, Guidesly, LAVB Brandenburg):
+//   35% Wassertemperatur, 30% Wetter, 20% Saison, 10% Mondphase, 5% Luftdrucktrend
+function calcAngelwetterIndex() {
+  const wx       = getVerifiedWeather();
+  const waterT   = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+  const cloud    = wx.cloud_coverage;
+  const wind     = wx.wind_speed;
+  const windBear = wx.wind_bearing;
+  const rain     = wx.precipitation;
+  const solar    = wx.solar_radiation;  // W/m² – nur von lokaler Station
+  const moonPh   = String(haStates['sensor.moon']?.state || '').toLowerCase();
+  const trend    = parseFloat(haStates['sensor.fishing_tracker_pressure_trend']?.state || 0);
+  const month    = new Date().getMonth() + 1;
+
+  // ── 35% Wassertemperatur (volle 0-100 Skala) ─────────────────────────────
+  // Idealbereich Süßwasserfische: 14-20°C (Center 17°C)
+  let waterScore;
+  if (waterT >= 15 && waterT <= 19)       waterScore = 100;  // Perfekt!
+  else if (waterT >= 13 && waterT <= 21)  waterScore = 85;   // Sehr gut
+  else if (waterT >= 11 && waterT <= 23)  waterScore = 70;   // Gut
+  else if (waterT >= 8 && waterT <= 26)   waterScore = 50;   // Mittel
+  else if (waterT >= 5 && waterT <= 28)   waterScore = 30;   // Schwach
+  else                                     waterScore = 12;   // Extrem
+
+  // ── 30% Wetter (volle 0-100 Skala) ──────────────────────────────────────
+  let weatherScore = 40;  // Basis
+  // Bewölkung
+  if (cloud >= 50 && cloud <= 80)         weatherScore += 22;  // Perfekt
+  else if (cloud >= 35 && cloud < 50)     weatherScore += 16;
+  else if (cloud > 80 && cloud <= 95)     weatherScore += 12;
+  else if (cloud > 20 && cloud < 35)      weatherScore += 5;
+  else if (cloud > 95)                    weatherScore += 4;
+  else                                     weatherScore -= 10;  // Knallsonne
+  // Wind (8-15 km/h ideal)
+  if (wind >= 8 && wind <= 15)            weatherScore += 18;
+  else if (wind > 15 && wind <= 22)       weatherScore += 12;
+  else if (wind >= 4 && wind < 8)         weatherScore += 8;
+  else if (wind > 22 && wind <= 30)       weatherScore += 3;
+  else if (wind > 35)                     weatherScore -= 20;
+  else                                     weatherScore -= 5;  // Windstille
+  // Windrichtung (SW/W ideal)
+  if (windBear >= 180 && windBear <= 270) weatherScore += 10;
+  else if (windBear > 270 && windBear <= 315) weatherScore += 6;
+  else if (windBear >= 0 && windBear <= 60) weatherScore -= 6;
+  // Niederschlag (leicht ideal)
+  if (rain >= 0.3 && rain <= 1.5)         weatherScore += 12;
+  else if (rain > 1.5 && rain <= 3)       weatherScore += 6;
+  else if (rain > 0 && rain < 0.3)        weatherScore += 4;
+  else if (rain > 8)                       weatherScore -= 20;
+  else if (rain > 3 && rain <= 8)         weatherScore -= 5;
+  // Sonneneinstrahlung: präziser als Bewölkungsgrad allein
+  // Niedrig = gut (Dämmerung/bewölkt), hoch = schlecht (Mittagssonne blendet Fische)
+  if (solar !== null && !isNaN(solar)) {
+    if (solar < 50)          weatherScore += 8;   // Dunkel/Dämmerung: ideal
+    else if (solar < 200)    weatherScore += 4;   // Leicht
+    else if (solar < 500)    weatherScore += 0;   // Moderat: neutral
+    else if (solar < 800)    weatherScore -= 6;   // Hell: ungünstig
+    else                     weatherScore -= 12;  // Volles Sonnenlicht: schlecht
+  }
+  weatherScore = Math.max(0, Math.min(100, weatherScore));
+
+  // ── 20% Saison (volle 0-100 Skala) ──────────────────────────────────────
+  let seasonScore;
+  if (month === 5 || month === 6)         seasonScore = 100;  // Mai/Juni Peak
+  else if (month === 9 || month === 10)   seasonScore = 95;   // Herbst-Fresswelle
+  else if (month === 4)                    seasonScore = 88;   // April
+  else if (month === 7 || month === 8)    seasonScore = 70;   // Sommer (Hitze)
+  else if (month === 3 || month === 11)   seasonScore = 65;   // Übergang
+  else if (month === 2)                    seasonScore = 45;
+  else if (month === 12 || month === 1)   seasonScore = 30;   // Winter
+
+  // ── 10% Mondphase (volle 0-100 Skala) ───────────────────────────────────
+  let moonScore = 50;
+  if (moonPh.includes('voll') || moonPh.includes('full'))      moonScore = 100;
+  else if (moonPh.includes('neu') || moonPh.includes('new'))   moonScore = 95;
+  else if (moonPh.includes('zunehmend_dreiviertel') || moonPh.includes('abnehmend_dreiviertel') ||
+           moonPh.includes('waxing_gibbous') || moonPh.includes('waning_gibbous')) moonScore = 75;
+  else if (moonPh.includes('viertel') || moonPh.includes('quarter')) moonScore = 60;
+  else if (moonPh.includes('sichel') || moonPh.includes('crescent')) moonScore = 55;
+
+  // ── 5% Luftdrucktrend (volle 0-100 Skala) ───────────────────────────────
+  // Fallender Druck = Fressfenster vor Front
+  let pressureScore;
+  if (trend >= -2 && trend < -1)          pressureScore = 100;  // Ideal: leicht fallend
+  else if (trend >= -3 && trend < -2)     pressureScore = 90;
+  else if (trend >= -1 && trend < -0.3)   pressureScore = 75;
+  else if (trend >= -0.3 && trend <= 0.5) pressureScore = 55;   // Stabil
+  else if (trend > 0.5 && trend <= 1.5)   pressureScore = 40;
+  else if (trend > 1.5 && trend <= 3)     pressureScore = 25;
+  else if (trend > 3)                      pressureScore = 12;   // Stark steigend
+  else                                     pressureScore = 70;   // Stark fallend (Sturm)
+
+  return Math.round(
+    waterScore    * 0.35 +
+    weatherScore  * 0.30 +
+    seasonScore   * 0.20 +
+    moonScore     * 0.10 +
+    pressureScore * 0.05
+  );
+}
+
+
+
+
+// Nächsten Regen aus sensor.neuenhaus_radar_nachster_niederschlag
+function getNextRainInfo() {
+  const s = haStates['sensor.neuenhaus_radar_nachster_niederschlag'];
+  if (!s || !s.state || s.state === 'unknown' || s.state === 'unavailable') return null;
+
+  // Deutschen Datumsstring parsen: "16. Mai 2026 um 11:30 Uhr"
+  const months = {Januar:0,Februar:1,März:2,April:3,Mai:4,Juni:5,
+                  Juli:6,August:7,September:8,Oktober:9,November:10,Dezember:11};
+  const raw = s.state.trim();
+  let target = null;
+
+  // Format: "16. Mai 2026 um 11:30 Uhr"
+  const m = raw.match(/(\d+)\.\s+(\w+)\s+(\d{4})\s+um\s+(\d+):(\d+)/);
+  if (m) {
+    const mo = months[m[2]];
+    if (mo !== undefined) {
+      target = new Date(parseInt(m[3]), mo, parseInt(m[1]), parseInt(m[4]), parseInt(m[5]));
+    }
+  }
+  // Fallback: direkt als Date parsen
+  if (!target || isNaN(target)) target = new Date(raw);
+  if (!target || isNaN(target)) return { label: raw, diff: null };
+
+  const diffMs  = target - new Date();
+  const diffMin = Math.round(diffMs / 60000);
+
+  let label;
+  if (diffMin < 0)       label = 'Regen aktiv';
+  else if (diffMin < 60) label = 'in ' + diffMin + ' Min';
+  else if (diffMin < 1440) {
+    const h = Math.floor(diffMin/60), min = diffMin%60;
+    label = 'in ' + h + 'h' + (min>0?' '+min+'min':'');
+  } else {
+    const days = Math.floor(diffMin/1440);
+    label = 'in ' + days + ' Tag' + (days>1?'en':'');
+  }
+
+  return {
+    label,
+    raw,
+    target,
+    diffMin,
+    isImminent: diffMin >= 0 && diffMin < 60,
+    isToday: target.toDateString() === new Date().toDateString(),
+  };
+}
+
+// ── Fangbuch Form State ────────────────────────────────────────────────────────
+let catchFormActive = false;
+let catchPhotoData  = null;  // base64
+// Persistente Formulardaten – überleben jeden renderView()
+let catchFormData = {
+  fish: 'Zander', length: '', weight: '', spot: '', bait: 'Gummifisch', notes: ''
+};
+
+function openCatchForm() { catchFormActive = true; catchPhotoData = null; renderView(); }
+function closeCatchForm() {
+  catchFormActive = false;
+  catchPhotoData  = null;
+  catchFormData   = { fish:'Zander', length:'', weight:'', spot:'', bait:'Gummifisch', notes:'' };
+  renderView();
+}
+// Wird von jedem Input-Feld aufgerufen → sichert Wert vor Re-Render
+function cfSave(field, value) { catchFormData[field] = value; }
+
+async function callHAService(domain, service, data) {
+  const haEl = window.parent?.document?.querySelector('home-assistant');
+  const hass  = haEl?.hass;
+
+  // Methode 1: hass.callService (Standard-HA-API)
+  if (hass?.callService) {
+    try {
+      await hass.callService(domain, service, data);
+      return true;
+    } catch(e) {
+      console.warn('callService fehlgeschlagen:', e.message);
+    }
+  }
+
+  // Methode 2: WebSocket Connection direkt (zuverlässigste Methode im Panel)
+  const conn = hass?.connection;
+  if (conn?.sendMessagePromise) {
+    try {
+      await conn.sendMessagePromise({
+        type: 'call_service',
+        domain,
+        service,
+        service_data: data,
+      });
+      return true;
+    } catch(e) {
+      console.warn('WS sendMessagePromise fehlgeschlagen:', e.message);
+    }
+  }
+
+  // Methode 3: REST API mit Access Token aus HA-Connection
+  try {
+    const token = hass?.auth?.data?.access_token
+               || hass?.connection?.options?.auth?.data?.access_token
+               || '';
+    const res = await fetch('/api/services/' + domain + '/' + service, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? {'Authorization': 'Bearer ' + token} : {}),
+      },
+      credentials: 'include',
+      body: JSON.stringify(data),
+    });
+    if (res.ok) return true;
+    const txt = await res.text();
+    let msg = txt;
+    try { msg = JSON.parse(txt).message || txt; } catch(e) {}
+    console.error('REST ' + res.status + ':', txt);
+    alert('Fehler ' + res.status + ':\n' + msg.slice(0, 300));
+    return false;
+  } catch(e) {
+    console.error('Netzwerkfehler:', e);
+    alert('Netzwerkfehler:\n' + e.message);
+    return false;
+  }
+}
+
+
+
+function showPhotoLightbox(url) {
+  const lb = document.createElement('div');
+  lb.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+  lb.onclick = () => lb.remove();
+  const img = document.createElement('img');
+  img.src = url;
+  img.style.cssText = 'max-width:95vw;max-height:90vh;border-radius:12px;object-fit:contain;box-shadow:0 0 40px rgba(0,0,0,.8)';
+  const close = document.createElement('div');
+  close.textContent = '✕';
+  close.style.cssText = 'position:absolute;top:20px;right:24px;color:#fff;font-size:28px;font-weight:900;cursor:pointer;opacity:.7';
+  lb.appendChild(img);
+  lb.appendChild(close);
+  document.body.appendChild(lb);
+}
+
+async function deleteCatch(timestamp) {
+  if (!confirm('Fang löschen?\n' + new Date(timestamp).toLocaleString('de-DE'))) return;
+  const ok = await callHAService('fishing_tracker', 'delete_catch', {timestamp});
+  if (ok) {
+    renderView();
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#3a0909;border:1px solid #ff6b6b;color:#ff6b6b;padding:12px 24px;border-radius:12px;font-weight:800;font-size:14px;z-index:9999;';
+    toast.textContent = '🗑️ Fang gelöscht';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2000);
+  } else {
+    alert('Fehler beim Löschen.');
+  }
+}
+
+async function saveCatch() {
+  // Letzten DOM-Stand sichern vor dem Speichern
+  ['fish','length','weight','spot','bait','notes'].forEach(k => {
+    const el = document.getElementById('cf_' + k);
+    if (el) catchFormData[k] = el.value;
+  });
+
+  const fish = catchFormData.fish;
+  const len  = parseFloat(catchFormData.length || 0);
+  const spot = (catchFormData.spot || '').trim();
+  const bait = catchFormData.bait;
+
+  if (!fish || !len || !spot || !bait) {
+    alert('Bitte Fischart, Länge, Spot und Köder angeben.');
+    return;
+  }
+
+  const weight = parseFloat(catchFormData.weight || 0) || null;
+  const notes  = (catchFormData.notes || '').trim();
+  const wx      = getVerifiedWeather();
+  const waterT  = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 0) || null;
+  const person  = haStates['person.christian_rduch']?.attributes;
+  const lat     = person?.latitude  ?? null;
+  const lon     = person?.longitude ?? null;
+  const awIdx   = calcAngelwetterIndex();
+
+  const payload = {
+    fish_type:         fish,
+    length_cm:         len,
+    spot:              spot,
+    bait:              bait,
+    notes:             notes,
+    angelwetter_index: awIdx,
+    ...(weight ? {weight_kg: weight} : {}),
+    ...(lat    ? {latitude: lat, longitude: lon} : {}),
+    ...(catchPhotoData ? {photo_data: catchPhotoData} : {}),
+    ...(waterT ? {water_temp: waterT} : {}),
+  };
+
+  const btn = document.getElementById('cf_save');
+  if (btn) { btn.textContent = '⏳ Speichern…'; btn.disabled = true; }
+
+  const ok = await callHAService('fishing_tracker', 'log_catch', payload);
+  if (ok) {
+    catchFormActive = false;
+    catchPhotoData  = null;
+    renderView();
+    // Kurze Erfolgsmeldung
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#07391b;border:1px solid #67d33f;color:#67d33f;padding:12px 24px;border-radius:12px;font-weight:800;font-size:14px;z-index:9999;';
+    toast.textContent = '✅ Fang gespeichert!';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2500);
+  } else {
+    alert('⚠️ Fehler beim Speichern. Prüfe HA-Verbindung.');
+    if (btn) { btn.textContent = '💾 Fang speichern'; btn.disabled = false; }
+  }
+}
+
+function onPhotoSelected(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    // Bild auf max 1200px verkleinern + JPEG 82% komprimieren
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+        else       { w = Math.round(w * MAX / h); h = MAX; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      catchPhotoData = canvas.toDataURL('image/jpeg', 0.82);
+      const kb = Math.round(catchPhotoData.length * 0.75 / 1024);
+      const lbl = document.getElementById('cf_photo_label');
+      if (lbl) lbl.textContent = '✅ ' + file.name + ' (' + kb + ' KB)';
+      renderView();  // Preview aktualisieren
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+
+function catchFormView() {
+  const ALL_FISH = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse',
+                    'Rotauge','Rotfeder','Döbel','Rapfen','Forelle'];
+  const ALL_BAITS = ['Gummifisch','Wobbler','Spinner','Blinker','Boilie','Mais',
+                     'Wurm','Made','Pellets','Teig','Brot','Hanf','Naturköder'];
+
+  const wx     = getVerifiedWeather();
+  const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state) || null;
+  const person = haStates['person.christian_rduch']?.attributes;
+  // Spot: gespeicherter Wert hat Vorrang, dann GPS-Sensor
+  if (!catchFormData.spot) {
+    catchFormData.spot = haStates['sensor.fishing_tracker_spot_analysis']?.attributes?.nearest_spot || '';
+  }
+  const now    = new Date().toLocaleString('de-DE',{day:'2-digit',month:'2-digit',
+                   year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const awIdx  = calcAngelwetterIndex();
+
+  // Felder aus persistentem State befüllen
+  const inp = (id, label, type, placeholder='', extra='') =>
+    `<div style="margin-bottom:14px">
+       <label style="display:block;font-size:11px;color:rgba(255,255,255,.5);font-weight:700;
+                     text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">${label}</label>
+       <input id="cf_${id}" type="${type}"
+         value="${(catchFormData[id]||'').toString().replace(/"/g,'&quot;')}"
+         placeholder="${placeholder}" ${extra}
+         oninput="cfSave('${id}',this.value)"
+         style="width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
+                border-radius:9px;padding:10px 12px;color:#fff;font-size:14px;font-family:inherit;box-sizing:border-box">
+     </div>`;
+
+  const sel = (id, label, opts) =>
+    `<div style="margin-bottom:14px">
+       <label style="display:block;font-size:11px;color:rgba(255,255,255,.5);font-weight:700;
+                     text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">${label}</label>
+       <select id="cf_${id}" onchange="cfSave('${id}',this.value)"
+         style="width:100%;background:rgba(30,30,40,.95);border:1px solid rgba(255,255,255,.12);
+                border-radius:9px;padding:10px 12px;color:#fff;font-size:14px;font-family:inherit;box-sizing:border-box">
+         ${opts.map(o => `<option value="${o}" ${o===(catchFormData[id]||opts[0])?'selected':''}>${o}</option>`).join('')}
+       </select>
+     </div>`;
+
+  return `
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <div style="font-size:18px;font-weight:900">🎣 Fang erfassen</div>
+      <button onclick="closeCatchForm()"
+        style="border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);
+               color:#fff;padding:7px 14px;border-radius:9px;font-size:13px;cursor:pointer">✕ Abbrechen</button>
+    </div>
+
+    ${sel('fish', '🐟 Fischart *', ALL_FISH)}
+    ${inp('length', '📏 Länge (cm) *', 'number', 'z.B. 68', 'min="1" max="200"')}
+    ${inp('weight', '⚖️ Gewicht (kg)', 'number', 'Optional', 'min="0" max="50" step="0.1"')}
+    ${inp('spot', '📍 Spot / Gewässer *', 'text', 'z.B. Geheimer Bucht')}
+    ${sel('bait', '🎣 Köder *', ALL_BAITS)}
+    ${inp('notes', '📝 Notizen', 'text', 'Optional')}
+
+    <!-- Foto -->
+    <div style="margin-bottom:18px">
+      <label style="display:block;font-size:11px;color:rgba(255,255,255,.5);font-weight:700;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📷 Foto</label>
+      <label style="display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);
+                    border:1px dashed rgba(255,255,255,.15);border-radius:10px;padding:12px;cursor:pointer">
+        <span id="cf_photo_label" style="font-size:13px;color:rgba(255,255,255,.6)">
+          ${catchPhotoData ? '✅ Foto ausgewählt' : '📷 Foto aufnehmen oder auswählen'}
+        </span>
+        <input type="file" accept="image/*" capture="environment" style="display:none"
+          onchange="onPhotoSelected(this)">
+      </label>
+      ${catchPhotoData
+        ? '<img src="' + catchPhotoData + '" id="cf_photo_preview" style="width:100%;border-radius:10px;margin-top:8px;max-height:220px;object-fit:cover;border:2px solid rgba(103,211,63,.4)">' +
+          '<button onclick="catchPhotoData=null;renderView()" style="width:100%;margin-top:6px;background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);color:#ff6b6b;border-radius:8px;padding:6px;font-size:12px;cursor:pointer">🗑️ Foto entfernen</button>'
+        : '<img id="cf_photo_preview" style="display:none">'}
+    </div>
+
+    <!-- Auto-Daten -->
+    <div style="background:rgba(103,211,63,.07);border:1px solid rgba(103,211,63,.2);
+                border-radius:10px;padding:12px;margin-bottom:20px;font-size:12px">
+      <div style="font-weight:800;color:#67d33f;margin-bottom:6px">🤖 Automatisch erfasst</div>
+      <div style="color:rgba(255,255,255,.6);display:grid;grid-template-columns:1fr 1fr;gap:4px">
+        <span>🕐 ${now}</span>
+        ${person?.latitude ? `<span>📍 GPS: ${person.latitude.toFixed(4)}, ${person.longitude.toFixed(4)}</span>` : '<span>📍 Kein GPS</span>'}
+        <span>🌡️ Luft: ${Math.round(wx.temperature*10)/10}°C</span>
+        ${waterT ? `<span>💧 Wasser: ${waterT}°C</span>` : '<span>💧 Kein Sensor</span>'}
+        <span>💨 Wind: ${Math.round(wx.wind_speed)} km/h SW</span>
+        <span>☁️ Bedeckt: ${Math.round(wx.cloud_coverage)}%</span>
+        <span>📊 ${wx.sourceLabel || 'Haftenkamp'}</span>
+        <span>🎣 Index: ${awIdx}%</span>
+      </div>
+    </div>
+
+    <button id="cf_save" onclick="saveCatch()"
+      style="width:100%;background:linear-gradient(145deg,#07391b,#0a5228);border:1px solid #67d33f;
+             color:#67d33f;padding:14px;border-radius:12px;font-size:16px;font-weight:900;
+             cursor:pointer;font-family:inherit">
+      💾 Fang speichern
+    </button>
+  </div>`;
+}
+
 // ── Views ─────────────────────────────────────────────────────────────────────
 function renderView() {
   // Try to get live HA data
-  const chance   = getState('sensor.fishing_tracker_bite_chance', getState('sensor.beisschance','87'));
+  const chance   = calcAngelwetterIndex();
   const bestTime = getState('sensor.fishing_tracker_best_time', getState('sensor.beste_angelzeit','18:00–21:00'));
   const waterT   = getState('sensor.wassertemperatur_gewaesser', getState('sensor.water_temp','13.2'));
   const sol      = haStates['sensor.solunar_beisszeiten']?.attributes || {};
   const ranking  = haStates['sensor.fishing_tracker_species_ranking']?.attributes?.ranking ||
                    [{fish_type:'Zander',score:91},{fish_type:'Barsch',score:84},{fish_type:'Hecht',score:76},{fish_type:'Karpfen',score:68}];
   const weather  = haStates['weather.home']?.attributes || {};
-  const airTemp  = weather.temperature || '18.7';
-  const wind     = weather.wind_speed || '12';
-  const pressure = weather.pressure || '1015';
+  const _wx      = getVerifiedWeather();
+  const airTemp  = Math.round(_wx.temperature*10)/10 || weather.temperature || '18.7';
+  const wind     = Math.round(_wx.wind_speed) || weather.wind_speed || '12';
+  const pressure = Math.round(_wx.pressure) || weather.pressure || '1015';
 
-  const tops = [{h:'18:00',v:91},{h:'19:00',v:88},{h:'20:00',v:84},{h:'07:00',v:79},{h:'08:00',v:74},{h:'06:00',v:68}];
+  // Top Beißzeiten direkt aus DAY-Array berechnen
+const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
+  .sort((a,b) => b.v-a.v)
+  .slice(0,6);
   // Echte 7-Tage Daten aus HA-Sensor
   const dailyForecast = haStates['sensor.fishing_tracker_daily_forecast']?.attributes?.days || null;
   const useReal = dailyForecast && dailyForecast.length > 0;
   const weekDays = useReal
     ? dailyForecast.slice(0,7).map(d => ({d: d.weekday, date: d.date_str, v: d.avg_score, peak: d.peak_score, isToday: d.is_today}))
     : [{d:'Mo',v:72},{d:'Di',v:65},{d:'Mi',v:58},{d:'Do',v:71},{d:'Sa',v:68},{d:'So',v:74},{d:'Mo',v:62}];
-  const factors = [['🌦️','Wetter',87],['🌙','Mondphase',91],['📊','Luftdruck',78],['💨','Wind',68],['💧','Wassertemp.',84]];
+  const factors = calcFactors();
 
   const fishData = {
-    Zander:{emoji:'🟡',type:'raubfisch',score:91,best:'19:00–24:00',temp:'12–18°C',
-      act:[['<8°C','Alle 15–30 Tage',false],['12–18°C','Alle 1–3 Tage ⭐',true],['>20°C','Stark reduziert – nur Nacht',false]],
-      baits:['Gummifisch 7–12cm','Jig (vertikal)','Wobbler (Nacht)','Twister'],
-      sight:'Restlichtverstärker – Kontrast > Farbe. Sehr lichtempfindlich.',
-      spots:['Kanten zum Tiefwasser','Häfen & Einläufe','Strömungsunterbrechungen','Brücken & Spundwände'],
-      curve:[22,20,30,28,25,22,20,38,55,65,60,58,55,50,48,50,55,62,88,92,85,72,58,42]},
-    Hecht:{emoji:'🟢',type:'raubfisch',score:76,best:'05:00–09:00 / Dämmerung',temp:'15–17°C',
-      act:[['4–6°C','Alle 15–30 Tage',false],['15–17°C','Alle 1–2 Tage ⭐',true],['>19°C','Stark reduziert',false]],
-      baits:['Swimbaits','Wobbler','Spinner','Popper (Dämmerung)','Deadbait (Winter)'],
-      sight:'Kein Blau/UV (gelbe Hornhaut, PCR 2019). Sieht Grün & Rot.',
-      spots:['Uferkanten mit Vegetation','Schilf- und Krautränder','Einläufe & Kanäle','Kanten'],
-      curve:[31,28,42,38,35,32,30,50,62,68,64,60,55,52,50,52,58,65,70,68,62,55,42,35],
-      note:'⚠️ Juli: Hechte überfüttert – schlechteste Fangquoten (Fischfindertest)'},
-    Barsch:{emoji:'🔴',type:'raubfisch',score:84,best:'10:00–15:00 (Winter!)',temp:'14–20°C',
-      act:[['<8°C','Sporadisch (Großbarsch!)',false],['14–20°C','Intensive Fenster ⭐',true],['>22°C','Nur früh/abends',false]],
-      baits:['Gummifisch 5–8cm','Drop-Shot','Micro-Jig','Spinner'],
-      sight:'Kein Blau/UV (wie Hecht). Grün & Rot. Starker Futterneid im Schwarm.',
-      spots:['Steinpackungen & Spundwände','Krautfelder','Einlassströmungen','Plateaus'],
-      curve:[25,22,35,32,30,28,26,45,60,70,72,68,65,62,62,65,72,78,76,70,62,52,40,30]},
-    Karpfen:{emoji:'🟤',type:'friedfisch',score:79,best:'04:00–08:00 / 20:00–24:00',temp:'18–24°C',
-      act:[['<5°C','Kaum aktiv',false],['14–18°C','Zunehmend',false],['18–24°C','Optimale Fressphasen ⭐',true],['>25°C','Reduziert',false]],
-      baits:['Boilie','Mais','Pellets','Tigernüsse','Wurm'],
-      sight:'Breites Farbspektrum – Geruchssinn dominant.',
-      spots:['Flache Buchten','Windseite','Krautfelder','Einläufe'],
-      curve:[18,18,22,20,20,18,18,28,40,50,55,58,60,64,68,72,75,79,78,75,68,55,40,28]},
-    Aal:{emoji:'⚫',type:'raubfisch',score:71,best:'20:00–05:00 (Nacht!)',temp:'18–24°C',
-      act:[['<10°C','Winterschlaf',false],['10–15°C','Erwachend',false],['18–24°C','Optimale Jagd Nacht ⭐',true],['>26°C','Reduziert',false]],
-      baits:['Wurm (Nacht)','Tauwurm','Kleinfisch','Innereien'],
-      sight:'Nachtspezialist – olfaktorisch und vibrationssensitiv.',
-      spots:['Wurzeln & Totholz','Tiefe Löcher','Einläufe','Schlammige Uferzonen'],
-      curve:[8,10,10,9,8,8,10,12,14,16,18,20,22,24,26,30,35,45,62,80,88,91,82,70]},
-    Schleie:{emoji:'🟠',type:'friedfisch',score:58,best:'05:00–09:00 / 19:00–22:00',temp:'17–22°C',
-      act:[['<13°C','Kaum aktiv',false],['13–17°C','Gering',false],['17–22°C','Optimale Fressphasen ⭐',true],['>24°C','Reduziert',false]],
-      baits:['Wurm','Mais','Made','Brot'],
-      sight:'Friedfisch – breites Farbspektrum, Geruch wichtig.',
-      spots:['Krautfelder','Seerosenfelder','Buchten','Schilf'],
-      curve:[18,18,20,19,18,18,20,22,30,40,48,55,60,65,68,72,78,79,76,72,62,50,38,28]},
-    Brasse:{emoji:'🥈',type:'friedfisch',score:65,best:'06:00–11:00 / 18:00–23:00',temp:'15–22°C',
-      act:[['<12°C','Kaum aktiv',false],['12–15°C','Gering',false],['15–22°C','Optimale Fressphasen ⭐',true],['>24°C','Tiefere Zonen',false]],
-      baits:['Made','Mais','Wurm','Brot','Pellets'],
-      sight:'Friedfisch – breites Farbspektrum, Geruch wichtig.',
-      spots:['Tiefe Futterplätze','Flussrinnen','Schilfränder','Ruhige Buchten'],
-      curve:[18,18,22,20,18,18,20,28,42,55,60,65,68,70,72,74,78,76,70,65,55,42,30,20]},
-    Rotauge:{emoji:'🔵',type:'friedfisch',score:62,best:'08:00–12:00 / 15:00–19:00',temp:'12–20°C',
-      act:[['<8°C','Gering',false],['8–12°C','Zunehmend',false],['12–20°C','Optimale Fressphasen ⭐',true],['>22°C','Reduziert',false]],
-      baits:['Made','Pinkies','Brot','Mais','Wurm'],
-      sight:'Breites Farbspektrum – vorsichtig in klarem Wasser. Beste Jahreszeit: Frühjahr & Herbst.',
-      spots:['Krautränder','Ufernahe Strukturen','Brücken','Einläufe'],
-      curve:[20,20,24,22,20,20,22,32,48,60,64,62,60,58,56,58,62,66,62,58,48,36,26,22]},
-    Rotfeder:{emoji:'🟣',type:'friedfisch',score:55,best:'06:00–10:00 / 18:00–22:00',temp:'18–24°C',
-      act:[['<12°C','Kaum aktiv',false],['12–18°C','Zunehmend',false],['18–24°C','Optimale Fressphasen ⭐',true],['>26°C','Reduziert',false]],
-      baits:['Brot','Made','Mais','Pinkies','Fliegenfischen'],
-      sight:'Typischer Sommerfisch. Sehr sensibel auf Störungen. Oberflächennah bei Sonne.',
-      spots:['Krautbänke','Seerosenfelder','Oberflächennahe Zonen','Ufernah'],
-      curve:[15,15,18,17,16,15,18,22,32,45,55,62,68,70,68,65,60,55,48,38,28,20,16,15]},
-    Döbel:{emoji:'🟫',type:'sonderfall',score:68,best:'Frühe Morgen- / Abendstunden (kurze Fenster!)',temp:'14–20°C',
-      act:[['<8°C','Gering – räuberisch (fleischliche Köder)',false],['8–14°C','Zunehmend',false],['14–20°C','Optimale Phase ⭐',true],['>22°C','Sommer: oft Vegetarier (Insekten/Früchte)',false]],
-      baits:['Kleine Wobbler','Spinner','Brot/Früchte (Sommer)','Wurm','Fliegenfischen'],
-      sight:'🎯 Sonderfall: Friedfisch der mit Größe räuberisch wird. Ganzjährig aktiv – keine Winterruhe! Sehr misstrauisch.',
-      spots:['Strömungskanten','Überhängende Äste','Buhnen','Wehre','Treibholz'],
-      curve:[30,28,32,30,28,26,28,42,58,65,68,65,60,55,50,48,55,65,70,68,62,52,40,32]},
-    Rapfen:{emoji:'🔶',type:'sonderfall',score:72,best:'06:00–09:00 / 19:00–21:00 (Oberfläche!)',temp:'16–22°C',
-      act:[['<10°C','Gering (tiefere Schichten)',false],['10–16°C','Zunehmend',false],['16–22°C','Intensive Jagd Oberfläche ⭐',true],['>24°C','Strömungsreiche Stellen',false]],
-      baits:['Blinker/Spinner','Oberflächenköder','Kleine Wobbler','Gummifisch (bewölkt)'],
-      sight:'🎯 Sonderfall: Einziger Karpfenfisch als offizieller Raubfisch. Verrät sich durch lautes Platschen. Sonnenschein = Jagd! Sehr scheu.',
-      spots:['Unterhalb von Wehren','Kühlwassereinläufe','Strömungskanten','Buhnenköpfe'],
-      curve:[15,14,18,16,15,14,16,25,42,55,62,65,68,65,60,58,62,70,72,68,58,42,28,18]},
-  };
+    Zander:{emoji:'🟡',type:'raubfisch',score:91,
+      best:'19:00–24:00 / Dämmerung',temp:'18–22°C',
+      act:[['<8°C','Alle 20–40 Tage (Winterlethargie)',false],
+           ['8–14°C','Alle 5–10 Tage',false],
+           ['18–22°C','Alle 1–3 Tage (Optimum)',true],
+           ['>24°C','Reduziert – nur Nacht',false]],
+      baits:['Gummifisch 7–12cm','Jig vertikal','Twister','Wobbler (Nacht)','Kleinfisch'],
+      sight:'Tapetum lucidum – Nachtsicht exzellent. Kein Blau/UV. Gelb & Orange gut sichtbar.',
+      spots:['Tiefwasserkanten 4–10m','Brücken & Spundwände','Strömungsunterbrechungen','Einläufe nachts'],
+      curve:[45, 38, 30, 25, 22, 28, 40, 52, 48, 38, 30, 25, 22, 20, 22, 28, 40, 62, 85, 95, 92, 80, 65, 52],
+      note:'⚠️ April–Mai: Laichzeit bei 12–14°C Wassertemperatur. Schutzzeit beachten!'},
+    Hecht:{emoji:'🟢',type:'raubfisch',score:76,
+      best:'05:00–09:00 / Dämmerung',temp:'14–18°C',
+      act:[['<4°C','Sporadisch (Großhecht aktiv!)',false],
+           ['10–18°C','Alle 2–4 Tage (Optimum)',true],
+           ['18–22°C','Alle 4–7 Tage (überhitzt)',false],
+           ['>24°C','Stark reduziert – Tiefenwasser',false]],
+      baits:['Wobbler 8–14cm','Swimbaits','Popper (Dämmerung)','Spinner','Deadbait (Winter)'],
+      sight:'UV-sensitiv! Sieht Grün, Gelb, Orange. Kein Rot bei Dämmerlicht. Laterallinie stark.',
+      spots:['Schilf- & Krautränder','Einläufe & Kanäle','Flache Buchten (Morgendämmerung)','Totholz'],
+      curve:[22, 18, 15, 14, 18, 45, 68, 75, 70, 58, 45, 35, 28, 26, 28, 35, 45, 55, 62, 58, 48, 38, 30, 24],
+      note:'⚠️ Feb–Apr: Laichzeit bei 6–10°C. Extrem schwieriger Fang. Juli: Sommerflaute durch Sättigung.'},
+    Barsch:{emoji:'🔴',type:'raubfisch',score:84,
+      best:'06:00–10:00 / 14:00–18:00',temp:'18–22°C',
+      act:[['<8°C','Sporadisch (Großbarsch in Tiefe)',false],
+           ['12–18°C','Täglich aktiv – Schwarmjagd',false],
+           ['18–22°C','Intensive Aktivitätsfenster (Optimum)',true],
+           ['>24°C','Nur früh morgens & abends',false]],
+      baits:['Gummifisch 3–7cm','Drop-Shot','Micro-Jig','Spinner','Twister'],
+      sight:'Kein Blau/UV (wie Hecht). Grün & Orange dominant. Starker Futterneid im Schwarm.',
+      spots:['Steinpackungen & Spundwände','Krautfelder – Außenkanten','Einlassströmungen','Plateaukanten'],
+      curve:[15, 12, 10, 8, 10, 22, 45, 65, 78, 82, 78, 70, 62, 58, 62, 72, 78, 75, 68, 58, 45, 32, 22, 18]},
+    Karpfen:{emoji:'🟤',type:'friedfisch',score:79,
+      best:'04:00–08:00 / 20:00–24:00',temp:'18–24°C',
+      act:[['<8°C','Winterlethargie – kaum aktiv',false],
+           ['12–17°C','Zunehmende Aktivität',false],
+           ['18–24°C','Optimale Fressphasen',true],
+           ['>26°C','Tiefere kühlere Zonen',false]],
+      baits:['Boilie','Pellets','Mais','Tigernüsse','Hanfsamen','Teig'],
+      sight:'Breitbandiges Farbspektrum. Geruchssinn 10.000x stärker als Mensch. Barteln ertasten Nahrung.',
+      spots:['Flache Buchten (Morgen)','Windseite (Nahrungseintrag)','Krautfelder','Bänke & Plateaus'],
+      curve:[48, 52, 55, 50, 42, 35, 28, 18, 14, 12, 14, 18, 24, 30, 38, 50, 65, 78, 85, 82, 72, 62, 55, 50],
+      note:'⚠️ Mai–Jun: Laichzeit bei 18–20°C Wassertemp. Starke Aktivität kurz VOR Laichzeit.'},
+    Schleie:{emoji:'🟠',type:'friedfisch',score:58,
+      best:'04:00–08:00 / 20:00–23:00',temp:'20–26°C',
+      act:[['<10°C','Nahezu inaktiv (eingegraben)',false],
+           ['14–19°C','Langsam aktiver',false],
+           ['20–26°C','Optimale Fressphasen',true],
+           ['>28°C','Sauerstoffmangel – inaktiv',false]],
+      baits:['Tauwurm','Made','Mais','Brot','Teig','Kleine Boilies'],
+      sight:'Schlechte Sehkraft – Nahrungs­suche über Geruch & Tastsinn (Barteln).',
+      spots:['Dichte Vegetation (Seerosen)','Schlammiger Grund','Stille Buchten','Rohrkolben-Zonen'],
+      curve:[35, 40, 38, 32, 28, 45, 58, 55, 42, 30, 24, 20, 18, 18, 20, 26, 38, 52, 62, 65, 58, 48, 40, 36],
+      note:'⚠️ Jun–Jul: Laichzeit. Schleie sehr schwer fangbar. Frühmorgens beste Chancen.'},
+    Aal:{emoji:'⚫',type:'raubfisch',score:71,
+      best:'21:00–03:00 (Nacht)',temp:'14–22°C',
+      act:[['<10°C','Winterschlaf im Schlamm',false],
+           ['12–18°C','Dämmerung aktiv',false],
+           ['18–24°C','Nächte optimal',true],
+           ['>26°C','Reduziert',false]],
+      baits:['Tauwurm','Rotwurm','Regenwurm','Innereien','Kleinfisch'],
+      sight:'Riechorgan exzellent. Nachts orientierungslos ohne Geruch. Kein UV.',
+      spots:['Tiefe Löcher & Kolke','Brücken & Ufermauern','Steinige Ufer','Abflüsse'],
+      curve:[62, 70, 72, 68, 55, 38, 18, 8, 5, 4, 4, 4, 4, 4, 4, 5, 8, 18, 38, 55, 68, 75, 72, 65],
+      note:'Wanderfisch: Frühling = Gelbaale kommen; Herbst = Blankaalabwanderung. Dann beste Chancen!'},
+    Brasse:{emoji:'🥈',type:'friedfisch',score:65,
+      best:'22:00–05:00 / Frühdämmerung',temp:'16–22°C',
+      act:[['<8°C','Tief & inaktiv',false],
+           ['12–15°C','Gering',false],
+           ['16–22°C','Optimale Fressphasen – bevorzugt Nacht',true],
+           ['>24°C','Tiefere Zonen, reduziert',false]],
+      baits:['Tauwurm','Made','Pinkies','Mais','Kleine Pellets','Hanfsamen'],
+      sight:'Bodenfresser. Maul nach unten gerichtet. Rüsselt Nahrung aus Schlamm. Geruch wichtig.',
+      spots:['Schlammiger Tiefengrund 4–8m','Ruhige Buchten','Flussläufe mit Strömungspausen','Angeln: Posen auf Grund'],
+      curve:[55, 60, 58, 52, 45, 72, 82, 75, 55, 35, 28, 25, 22, 22, 24, 28, 38, 58, 72, 78, 70, 62, 58, 55],
+      note:'Typischer Nacht- & Frühmorgen-Fisch. Anfüttern mit Groundbait entscheidend.'},
+    Rotauge:{emoji:'🔵',type:'friedfisch',score:62,
+      best:'07:00–11:00 / 16:00–19:00',temp:'12–20°C',
+      act:[['<6°C','Gering – Winterruhige',false],
+           ['8–12°C','Zunehmend',false],
+           ['12–20°C','Aktiv – auch Oberfläche',true],
+           ['>22°C','Reduziert – tiefere Zonen',false]],
+      baits:['Made','Kleine Pellets','Brot (treibend)','Hanfsamen','Rotwurm'],
+      sight:'Breites Farbspektrum. Sieht auch Oberfläche. Schneller als Brasse. Schwarmorientiert.',
+      spots:['Krautränder & Schilf','Mittlere Wassertiefen 1–4m','Brücken & Stege','Strömungsschatten'],
+      curve:[10, 8, 7, 7, 8, 18, 35, 52, 62, 68, 70, 68, 62, 55, 55, 62, 68, 65, 55, 42, 28, 18, 12, 10],
+      note:'Gegensatz zur Brasse: Tagaktiv & Freiwasserfisch. Reagiert gut auf schwimmende Köder.'},
+    Rotfeder:{emoji:'🟣',type:'friedfisch',score:55,
+      best:'09:00–13:00 / 16:00–20:00',temp:'16–22°C',
+      act:[['<10°C','Sehr gering – Winterruhige',false],
+           ['14–16°C','Zunehmend',false],
+           ['16–22°C','Optimale Fressphasen – Tagaktiv',true],
+           ['>24°C','Oberfläche früh & abends',false]],
+      baits:['Brot (schwimmend)','Kleine Fliege','Made','Algenfäden','Mini-Pellets'],
+      sight:'Oberflächenorientiert. Sieht nach oben. Hellrote Flossen = Erkennungsmerkmal.',
+      spots:['Seerosenfelder','Schilfränder flach 0.5–2m','Warme Buchten (Südufer)','Wasserpflanzen'],
+      curve:[8, 6, 5, 5, 6, 12, 22, 38, 52, 62, 68, 70, 72, 70, 68, 65, 60, 52, 40, 28, 16, 10, 8, 8],
+      note:'Wärmster Fisch im Süßwasser. Erst ab Mai/Jun wirklich aktiv. Laichzeit Jun–Jul in Kraut.'},
+    Döbel:{emoji:'🟫',type:'sonderfall',score:68,
+      best:'08:00–12:00 / 18:00–21:00',temp:'14–22°C',
+      act:[['<6°C','Sehr gering – Tiefenwinter',false],
+           ['10–14°C','Langsam aktiver – Boden',false],
+           ['14–22°C','Allesfresser – sehr aktiv',true],
+           ['>24°C','Reduziert',false]],
+      baits:['Kirsche/Mais (Sommer)','Spinner klein','Brot (Oberfläche)','Tauwurm','Kleine Wobbler'],
+      sight:'Omnivorer Allesfresser: Früchte, Insekten, kleine Fische, Krebstiere. UV-sensitiv.',
+      spots:['Strömende Gewässer – Strömungspausen','Wehre & Brücken','Oberfläche unter Bäumen','Furt-Zonen'],
+      curve:[12, 10, 8, 7, 8, 18, 38, 58, 70, 75, 72, 65, 58, 52, 55, 62, 68, 65, 58, 45, 32, 22, 15, 12],
+      note:'Schlauster Fisch im Süßwasser. Sehr misstrauisch – dünne Schnur (0.18mm) entscheidend.'},
+    Rapfen:{emoji:'🔶',type:'sonderfall',score:72,
+      best:'05:00–09:00 / 18:00–21:00',temp:'14–20°C',
+      act:[['<8°C','Tiefenwinter – inaktiv',false],
+           ['10–14°C','Sporadisch aktiv',false],
+           ['14–20°C','Aktivste Jagd – Oberfläche',true],
+           ['>22°C','Früh & spät',false]],
+      baits:['Blinker/Spinner','Oberflächenköder','Kleinfisch (lebend)','Wobbler schnell','Popper'],
+      sight:'Einziger Karpfenfisch der räuberisch jagt. Sieht nach oben. UV-sensitiv. Blitz-Angriff.',
+      spots:['Offenes Freiwasser','Flussbiegungen','Unterhalb von Wehren','Seeausläufe','Strömungsringe'],
+      curve:[12, 10, 8, 8, 14, 38, 62, 72, 68, 58, 48, 38, 30, 28, 32, 42, 55, 65, 68, 60, 45, 30, 18, 13],
+      note:'Jagd in Schwärmen auf Kleinfische an Oberfläche. Sichtbares "Kochen" = Rapfen aktiv!'},
+    Forelle:{emoji:'🟠',type:'raubfisch',score:77,
+      best:'06:00–10:00 / 17:00–21:00',temp:'10–18°C',
+      act:[['<4°C','Gering – sehr langsam',false],
+           ['8–14°C','Optimal – Kaltwasserfisch!',true],
+           ['18–22°C','Reduziert – Sauerstoffmangel',false],
+           ['>22°C','Kritisch – Hitzestress',false]],
+      baits:['Spinner 2–4g','Kleine Wobbler','Tauwurm','Fliege (Trockenfliege)','Kleine Gummifische'],
+      sight:'Exzellentes Farbsehen inkl. UV. Sehr scheu – Schatten vermeiden! Polarisationsbrille hilft.',
+      spots:['Klare kalte Bäche & Flüsse','Sauerstoffreiche Zonen','Unterspülte Ufer','Strömungsschatten'],
+      curve:[18, 14, 12, 10, 14, 35, 58, 72, 75, 68, 58, 48, 38, 32, 35, 45, 58, 70, 75, 68, 52, 35, 22, 18],
+      note:'Kaltwasserfisch! Leidet ab 20°C. Sommerhitze = schlechteste Zeit. Herbst & Frühjahr optimal.'},
+  };;
   const FISHES_ORDER = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse','Rotauge','Rotfeder','Döbel','Rapfen'];
 
   const views = {
@@ -631,10 +1340,10 @@ function renderView() {
         <div class="kpi" style="border-color:rgba(103,211,63,.25);background:radial-gradient(circle at 0 0,rgba(103,211,63,.13),transparent 50%),linear-gradient(145deg,rgba(8,22,16,.96),rgba(3,7,5,.98))">
           <div class="kpi-label">Angelwetter Index</div>
           <div class="kpi-val greenText">${chance}%</div>
-          <div class="kpi-delta">${parseInt(chance)>=85?'⭐ Sehr gut':parseInt(chance)>=70?'✓ Gut':'~ Mittel'}</div>
+          <div class="kpi-delta">${parseInt(chance)>=75?'⭐ Sehr gut':parseInt(chance)>=55?'✓ Gut':parseInt(chance)>=35?'~ Mittel':'✗ Schwach'}</div>
         </div>
         <div class="kpi"><div class="kpi-label">Beste Zeit heute</div><div class="kpi-val blueText" style="font-size:16px">${bestTime}</div><div class="kpi-delta">Aktivität hoch</div></div>
-        <div class="kpi"><div class="kpi-label">Wetter</div><div class="kpi-val" style="font-size:18px">${airTemp}°C</div><div class="kpi-delta muted">Wind ${wind} km/h · ${pressure} hPa</div></div>
+        <div class="kpi"><div class="kpi-label">Wetter</div><div class="kpi-val" style="font-size:18px">${airTemp}°C</div><div class="kpi-delta muted">Wind ${wind} km/h · ${pressure} hPa</div><div style="margin-top:4px">${weatherConfidenceBadge(getVerifiedWeather())}</div></div>
         <div class="kpi"><div class="kpi-label">Wassertemp.</div><div class="kpi-val blueText">${waterT}°C</div><div class="kpi-delta muted">🌊 Gewässertemperatur</div></div>
       </div>
       <div class="panel blue">
@@ -682,21 +1391,85 @@ function renderView() {
 
     forecast: () => {
       const tab = currentFcTab || 'overview';
-      const fc = buildForecastTab(tab);
       setTimeout(() => {
-        const ti = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
-        if (tab==='overview'||tab==='7days') { drawChart('weekChart',WEEK,'#2ea8ff',ti); addChartTouch('weekChart',WEEK,'#2ea8ff'); }
-        else if (tab==='24h') { drawChart('dayChart24',DAY,'#ff9d18'); addChartTouch('dayChart24',DAY,'#ff9d18'); }
-        else if (tab==='14days') { const d14=[76,82,68,85,91,72,78,65,80,88,75,70,82,77]; drawChart('chart14',d14,'#a78bfa'); addChartTouch('chart14',d14,'#a78bfa'); }
-      }, 80);
+        try {
+          const ti = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
+          if (tab==='overview'||tab==='7days') {
+            drawChart('weekChart', WEEK, '#2ea8ff', ti);
+            addChartTouch('weekChart', WEEK, '#2ea8ff');
+          } else if (tab==='24h') {
+            drawChart('dayChart24', DAY, '#ff9d18');
+            addChartTouch('dayChart24', DAY, '#ff9d18');
+          } else if (tab==='14days') {
+            // 14-Tage Prognose aus echten HA-Wetterdaten
+const d14 = (() => {
+  const fcDays = haStates['weather.home']?.attributes?.forecast || [];
+  if (fcDays.length < 7) return WEEK.concat(WEEK); // Fallback
+
+  // Für jeden Vorhersage-Tag einen Angelwetter-Score berechnen
+  return fcDays.slice(0,14).map((fc, i) => {
+    // Basiswert aus 7-Tage-Sensor wenn verfügbar
+    let base = WEEK[i] || 65;
+
+    // Wetterfaktoren aus Tagesvorhersage
+    const temp = parseFloat(fc.temperature || fc.temperature_low || 12);
+    const rain = parseFloat(fc.precipitation || 0);
+    const rainProb = parseFloat(fc.precipitation_probability || 0);
+    const wind = parseFloat(fc.wind_speed || 10);
+    const condition = (fc.condition || '').toLowerCase();
+
+    let mod = 0;
+
+    // Temperatur
+    if (temp < 3) mod -= 10;
+    else if (temp < 8) mod -= 5;
+    else if (temp >= 12 && temp <= 20) mod += 5;
+    else if (temp > 28) mod -= 8;
+
+    // Niederschlag
+    if (rain > 8) mod -= 12;
+    else if (rain > 3) mod -= 6;
+    else if (rain > 0.5 && rain <= 3) mod += 3; // leichter Regen gut
+    if (rainProb > 85) mod -= 8;
+    else if (rainProb > 60) mod -= 3;
+
+    // Wind
+    if (wind > 35) mod -= 12;
+    else if (wind > 25) mod -= 6;
+    else if (wind > 15) mod -= 2;
+    else if (wind < 10) mod += 3; // Windstill gut
+
+    // Wetterlage
+    if (condition.includes('sunny') || condition.includes('clear')) mod += 3;
+    if (condition.includes('storm') || condition.includes('thunder')) mod -= 15;
+    if (condition.includes('fog')) mod -= 4;
+    if (condition.includes('cloudy') && !condition.includes('partly')) mod += 2;
+
+    // Nur für erste 7 Tage: WEEK-Werte nutzen wenn vorhanden
+    if (i < WEEK.length && WEEK[i]) {
+      // Mix: 70% Sensor, 30% Wetterberechnung
+      base = Math.round(WEEK[i] * 0.7 + (65 + mod) * 0.3);
+    } else {
+      base = Math.round(65 + mod);
+    }
+
+    return Math.min(95, Math.max(15, base));
+  });
+})();
+            const ti14 = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
+            drawChart('chart14', d14, '#a78bfa', ti14);
+            addChartTouch('chart14', d14, '#a78bfa');
+          }
+        } catch(e) { console.error('Chart:', e); }
+      }, 100);
       return `
       <div class="fc-tabs" id="fcTabs">
-        <button class="fc-tab ${tab==='overview'?'active':''}" onclick="currentFcTab='overview';renderView()">Übersicht</button>
-        <button class="fc-tab ${tab==='24h'?'active':''}" onclick="currentFcTab='24h';renderView()">24 Stunden</button>
-        <button class="fc-tab ${tab==='7days'?'active':''}" onclick="currentFcTab='7days';renderView()">7 Tage</button>
-        <button class="fc-tab ${tab==='14days'?'active':''}" onclick="currentFcTab='14days';renderView()">14 Tage</button>
+        <button class="fc-tab ${tab==='overview'?'active':''}" data-fctab="overview">Übersicht</button>
+        <button class="fc-tab ${tab==='24h'?'active':''}" data-fctab="24h">24 Stunden</button>
+        <button class="fc-tab ${tab==='7days'?'active':''}" data-fctab="7days">7 Tage</button>
+        <button class="fc-tab ${tab==='14days'?'active':''}" data-fctab="14days">14 Tage</button>
       </div>
-      <div id="forecastContent">${fc}</div>`;
+      ${buildForecastTab(tab)}`;
     },
 
     species: () => {
@@ -704,16 +1477,17 @@ function renderView() {
       const d = fishData[selFish] || fishData['Zander'];
       const actLabel = d.type==='friedfisch' ? 'Fressphasen' : d.type==='sonderfall' ? 'Fressphasen & Jagd' : 'Jagdfrequenz';
       const typeBadge = `<span style="display:inline-block;font-size:11px;font-weight:800;border-radius:6px;padding:3px 10px;margin-left:8px;${d.type==='raubfisch'?'background:rgba(255,107,107,.18);color:#ff8080':d.type==='friedfisch'?'background:rgba(103,211,63,.18);color:#67d33f':'background:rgba(255,157,24,.18);color:#ff9d18'}">${d.type==='raubfisch'?'🎣 Raubfisch':d.type==='friedfisch'?'🌿 Friedfisch':'⚡ Sonderfall'}</span>`;
-      const noteBox = d.note ? `<div style="background:rgba(255,107,107,.07);border:1px solid rgba(255,107,107,.22);border-radius:13px;padding:10px 13px;margin-bottom:10px;font-size:12px;color:rgba(255,180,180,.9)">${d.note}</div>` : '';
+      // Note nur anzeigen wenn der Monat relevant ist
+      const _curMonth = new Date().toLocaleString('de-DE',{month:'long'});
+      const _noteRelevant = !d.note || d.note.toLowerCase().includes(_curMonth.toLowerCase());
+      const noteBox = (d.note && _noteRelevant) ? `<div style="background:rgba(255,107,107,.07);border:1px solid rgba(255,107,107,.22);border-radius:13px;padding:10px 13px;margin-bottom:10px;font-size:12px;color:rgba(255,180,180,.9)">${d.note}</div>` : '';
       const sightBox = `<div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:13px;padding:10px 13px;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5"><b style="color:rgba(255,255,255,.85)">👁️ ${d.type==='sonderfall'?'Besonderheit':'Farbsehen'}:</b> ${d.sight||'–'}</div>`;
       return `
-      <button class="fish-select-btn" onclick="openFishSheet('selFish', (f) => { selFish=f; renderView(); }, selFish)">
-        <span style="display:flex;align-items:center;gap:10px">
-          ${FISH_SVG[selFish]||''}
-          <span>${selFish} – ${fishData[selFish]?.type==='raubfisch'?'Raubfisch':fishData[selFish]?.type==='sonderfall'?'Sonderfall':'Friedfisch'}</span>
-        </span>
-        <svg width="12" height="8" viewBox="0 0 12 8" fill="rgba(255,255,255,.5)"><path d="M0 0l6 8 6-8z"/></svg>
-      </button>
+      <select onchange="selFish=this.value;renderView()" style="width:100%;background:rgba(15,30,50,.98);border:1.5px solid rgba(46,168,255,.4);border-radius:13px;color:#fff;padding:13px 16px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:14px;-webkit-appearance:none;appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'8\'><path d=\'M0 0l6 8 6-8z\' fill=\'rgba(255,255,255,0.5)\'/></svg>');background-repeat:no-repeat;background-position:right 14px center">
+        <optgroup label="🎣 Raubfische">${['Zander','Hecht','Barsch','Aal','Forelle'].map(f=>`<option value="${f}" ${f===selFish?'selected':''} style="background:#0a1520">${{'Zander':'🟡','Hecht':'🟢','Barsch':'🔴','Aal':'⚫','Forelle':'🟠'}[f]} ${f}</option>`).join('')}</optgroup>
+        <optgroup label="🌿 Friedfische">${['Karpfen','Schleie','Brasse','Rotauge','Rotfeder'].map(f=>`<option value="${f}" ${f===selFish?'selected':''} style="background:#0a1520">${{'Karpfen':'🟤','Schleie':'🟠','Brasse':'🥈','Rotauge':'🔵','Rotfeder':'🟣'}[f]} ${f}</option>`).join('')}</optgroup>
+        <optgroup label="⚡ Sonderfälle">${['Döbel','Rapfen'].map(f=>`<option value="${f}" ${f===selFish?'selected':''} style="background:#0a1520">${{'Döbel':'🟫','Rapfen':'🔶'}[f]} ${f}</option>`).join('')}</optgroup>
+      </select>
       <div class="panel green">
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
           <div style="font-size:52px">${d.emoji}</div>
@@ -776,78 +1550,226 @@ function renderView() {
     },
 
     spots: () => {
-      const spotData = [
-        {n:'Geheimer Bucht',s:91,l:'Sehr gut',fish:'Zander · Hecht · Barsch',type:'See',depth:'6–12m',lat:52.4821,lng:9.7832,tip:'Bester Spot! Tiefkante bei 8m. Abends Zander aktiv.'},
-        {n:'Alte Kiesgrube',s:88,l:'Sehr gut',fish:'Barsch · Zander · Schleie',type:'Baggersee',depth:'4–8m',lat:52.4695,lng:9.7541,tip:'Baggersee mit Unterwasserstruktur. Morgenstunden für Barsch.'},
-        {n:'Steinbruch See',s:84,l:'Gut',fish:'Karpfen · Hecht · Aal',type:'Steinbruchsee',depth:'8–15m',lat:52.4912,lng:9.8103,tip:'Tiefer See. Hecht an den Krauträndern. Nachts Aal.'},
-        {n:'Flussbiegung',s:76,l:'Gut',fish:'Zander · Aal · Döbel',type:'Fluss',depth:'3–6m',lat:52.4633,lng:9.7918,tip:'Strömungskante bei der Biegung. Döbel an der Oberfläche.'},
-        {n:'Karpfenteich',s:68,l:'Mittel',fish:'Karpfen · Schleie · Brasse',type:'Teich',depth:'2–4m',lat:52.4758,lng:9.8247,tip:'Flacher Teich. Karpfen in der Flachwasserzone. Frühmorgens.'},
-      ];
-      setTimeout(() => initSpotMap(spotData), 100);
-      return `
-      <div class="panel" style="padding-bottom:0">
-        <div class="sec">🗺️ Spot-Karte <span style="font-size:10px;color:rgba(255,255,255,.35);font-weight:400">– Tippe einen Marker an</span></div>
-        <div id="spotMap"></div>
-      </div>
-      <div id="spotDetail" class="spot-detail-panel"></div>
-      <div class="panel" style="margin-top:10px">
-        <div class="sec">📍 Spot Liste</div>
-        ${spotData.map((spot,i)=>`
-        <div class="sp-row" onclick="focusSpot(${i})" style="cursor:pointer">
-          <span style="font-size:18px">📍</span>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:800">${spot.n}</div>
-            <div class="muted" style="font-size:11px">${spot.fish}</div>
-            <div style="font-size:10px;color:rgba(255,255,255,.3);margin-top:1px">${spot.type} · ${spot.depth}</div>
-          </div>
-          <span class="sp-score" style="color:${sc(spot.s)}">${spot.s}%</span>
-          <span class="sp-label" style="color:${sc(spot.s)}">${spot.l}</span>
-        </div>`).join('')}
-      </div>`;
+      const md = haStates['sensor.fishing_tracker_map_data']?.attributes || {};
+      const allCatches = (md.catches || []).filter(c => c.caught >= 1 && c.lat && c.lon);
+      const realSpots  = (md.spots  || []).filter(s => s.catches > 0 && s.lat && s.lon);
+      const fishTypes  = [...new Set(allCatches.map(c => c.fish_type).filter(Boolean))].sort();
+      const filtered   = spotFishFilter ? allCatches.filter(c => c.fish_type === spotFishFilter) : allCatches;
+
+      setTimeout(() => initCatchMap(filtered, realSpots, spotFishFilter), 100);
+
+      let out = '<div class="panel" style="padding-bottom:0">';
+      out += '<div class="sec">🗺️ Alle Fänge <span style="font-size:10px;color:rgba(255,255,255,.35);font-weight:400">– Tippe einen Marker an</span></div>';
+
+      if (fishTypes.length > 0) {
+        out += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">';
+        ['Alle'].concat(fishTypes).forEach(function(f) {
+          const isActive = f === 'Alle' ? !spotFishFilter : spotFishFilter === f;
+          const col    = isActive ? '#67d33f'               : 'rgba(255,255,255,.5)';
+          const bg     = isActive ? 'rgba(103,211,63,.15)'  : 'rgba(255,255,255,.05)';
+          const border = isActive ? 'rgba(103,211,63,.5)'   : 'rgba(255,255,255,.1)';
+          // onclick über data-Attribut → Event-Listener
+          out += '<button class="fish-filter-btn" data-fish="' + (f==='Alle'?'':f) + '"' +
+            ' style="border:1px solid '+border+';background:'+bg+';color:'+col+
+            ';padding:5px 12px;border-radius:20px;font-size:12px;font-weight:800;cursor:pointer">'+f+'</button>';
+        });
+        out += '</div>';
+      }
+
+      out += '<div id="spotMap"></div></div>';
+      out += '<div id="spotDetail" class="spot-detail-panel"></div>';
+
+      if (realSpots.length > 0) {
+        out += '<div class="panel" style="margin-top:10px"><div class="sec">🎯 Hit Spots' +
+          (spotFishFilter ? ' – ' + spotFishFilter : '') + '</div>';
+        realSpots.slice(0, 8).forEach(function(s) {
+          const cnt = spotFishFilter
+            ? filtered.filter(c => (c.spot||'') === s.spot).length
+            : s.catches;
+          if (spotFishFilter && cnt === 0) return;
+          out += '<div class="sp-row"><span style="font-size:18px">📍</span>' +
+            '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:13px;font-weight:800">'+s.spot+'</div>' +
+            '<div class="muted" style="font-size:11px">'+(s.top_fish||'')+(s.top_bait?' · '+s.top_bait:'')+'</div>' +
+            '</div><span style="font-size:18px;font-weight:900;color:#67d33f">'+cnt+'</span></div>';
+        });
+        out += '</div>';
+      } else {
+        out += '<div class="panel" style="text-align:center;padding:30px;color:rgba(255,255,255,.3)">' +
+          '📍 Noch keine Fänge mit GPS-Daten<br><small>Fänge werden automatisch mit GPS erfasst</small></div>';
+      }
+      return out;
     },
 
-    logbook: () => `
+    logbook: () => {
+      if (catchFormActive) return catchFormView();
+      // Echte Einträge aus HA-Sensor
+      const _histSensor = haStates['sensor.fishing_tracker_history'];
+      const _attrs      = _histSensor?.attributes || {};
+      const _sensorExists = !!_histSensor;
+      const _entriesRaw   = _attrs.entries || [];
+      const _latestRaw    = _attrs.latest  || [];
+
+      // Kombiniere entries + latest, filtere auf caught>=1, dedupliziere
+      const _isCatch = e => { try { return parseInt(e.caught||0) >= 1; } catch(ex) { return false; } };
+      const _all = [
+        ..._entriesRaw,
+        ..._latestRaw.filter(_isCatch),
+      ];
+      const _seen = new Set();
+      const _raw = _all.filter(e => {
+        if (!e.timestamp || _seen.has(e.timestamp)) return false;
+        _seen.add(e.timestamp); return true;
+      }).filter(_isCatch);
+      const entries = [..._raw].sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+      // Debug-Banner (verschwindet wenn Fänge da sind)
+      const _debugInfo = !entries.length ? `<div style="background:rgba(255,160,0,.1);border:1px solid rgba(255,160,0,.3);border-radius:10px;padding:12px;margin-bottom:12px;font-size:11px;color:rgba(255,180,0,.8)">
+        🔍 Debug: Sensor ${_sensorExists?'✅ vorhanden':'❌ fehlt'} &nbsp;|&nbsp;
+        entries: ${_entriesRaw.length} &nbsp;|&nbsp;
+        latest: ${_latestRaw.length} &nbsp;|&nbsp;
+        alle Einträge (inkl. nicht-Fang): ${_latestRaw.length}<br>
+        ${_latestRaw.length>0?'Letzter Eintrag caught='+_latestRaw[0]?.caught+' fish='+_latestRaw[0]?.fish_type:'Keine Einträge in latest'}
+      </div>` : '';
+
+      const fmtDate = ts => {
+        const d = new Date(ts);
+        return d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'})
+             + ' ' + d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+      };
+      const fishEmoji = f => ({Zander:'🟡',Hecht:'🟢',Barsch:'🔴',Karpfen:'🟤',
+        Schleie:'🟠',Aal:'⚫',Brasse:'⚪',Rotauge:'🔵',Forelle:'🟣',
+        Rotfeder:'🟠',Döbel:'🟡',Rapfen:'⚡'}[f] || '🐟');
+
+      return `
       <div class="panel">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <div class="sec" style="margin-bottom:0">📘 Fangbuch</div>
-          <button style="border:0;border-radius:9px;background:#145da0;color:#fff;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">+ Neuer Fang</button>
+          <button style="border:0;border-radius:9px;background:#145da0;color:#fff;padding:8px 16px;font-size:13px;font-weight:800;cursor:pointer"
+            onclick="openCatchForm()">+ Fang erfassen</button>
         </div>
-        ${[['🟡','Zander','68 cm · 3.2 kg','Geheimer Bucht','Gummifisch','22.05.2026'],['🔴','Barsch','34 cm · 0.6 kg','Alte Kiesgrube','Spinner','18.05.2026'],['🟢','Hecht','71 cm · 4.1 kg','Geheimer Bucht','Wobbler','15.05.2026'],['🟤','Karpfen','54 cm · 2.7 kg','Alte Kiesgrube','Boilie','10.05.2026']].map(([e,f,s,sp,b,d])=>`
-        <div class="lb-entry">
-          <div class="lb-icon">${e}</div>
-          <div style="flex:1">
-            <div style="font-size:14px;font-weight:800">${f}</div>
-            <div style="font-size:12px;color:rgba(255,255,255,.7);margin-top:2px">${s} · ${sp}</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:1px">${b} · ${d}</div>
+        ${_debugInfo}
+        ${entries.length === 0
+          ? '<div style="text-align:center;padding:30px;color:rgba(255,255,255,.3)">🐟 Noch keine Fänge gespeichert.<br><br><button style="border:1px solid rgba(103,211,63,.4);background:rgba(103,211,63,.1);color:#67d33f;padding:10px 20px;border-radius:10px;font-weight:800;cursor:pointer;font-size:13px" onclick="openCatchForm()">Ersten Fang erfassen</button></div>'
+          : entries.map(e => `
+        <div class="lb-entry" style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+          ${e.photo_url
+            ? `<img src="${e.photo_url}"
+                onclick="showPhotoLightbox('${e.photo_url}')"
+                style="width:64px;height:64px;border-radius:10px;object-fit:cover;flex-shrink:0;cursor:zoom-in;border:2px solid rgba(103,211,63,.3)">`
+            : `<div style="width:64px;height:64px;border-radius:10px;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0">${fishEmoji(e.fish_type)}</div>`}
+          <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:900">${e.fish_type || '–'}</div>
+            <div style="font-size:13px;color:rgba(255,255,255,.8);margin-top:2px">
+              ${e.length_cm ? e.length_cm + ' cm' : ''}${e.weight_kg ? ' · ' + e.weight_kg + ' kg' : ''}
+            </div>
+            <div style="font-size:12px;color:rgba(255,255,255,.5);margin-top:2px">
+              ${e.spot || ''} · ${e.bait || ''}
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">
+              🕐 ${fmtDate(e.timestamp)}
+              ${e.water_temp ? ' · 💧 ' + e.water_temp + '°C' : ''}
+              ${e.angelwetter_index ? ' · 🎣 ' + e.angelwetter_index + '%' : ''}
+            </div>
           </div>
+          <button onclick="deleteCatch('${e.timestamp}')"
+            style="align-self:center;background:rgba(255,107,107,.12);border:1px solid rgba(255,107,107,.3);
+                   color:#ff6b6b;border-radius:8px;padding:6px 10px;font-size:16px;cursor:pointer;
+                   flex-shrink:0;line-height:1" title="Fang löschen">🗑️</button>
         </div>`).join('')}
-        <div style="text-align:center;padding:20px;color:rgba(255,255,255,.3);font-size:13px;border-top:1px solid rgba(255,255,255,.06);margin-top:8px">
-          🐟 Detailansicht mit Fotos kommt im nächsten Update
-        </div>
-      </div>`,
+      </div>
+      ${(()=>{
+        const withGPS = entries.filter(e => e.latitude && e.longitude);
+        if (withGPS.length === 0) return '';
+        setTimeout(() => initLogMap(withGPS), 150);
+        return '<div class="panel" style="padding-bottom:0"><div class="sec">🗺️ Fänge auf der Karte</div><div id="logMap" style="height:220px;border-radius:0 0 14px 14px"></div></div>';
+      })()}`;
+    },
 
-    stats: () => `
-      <div class="kpi-row">
-        <div class="kpi"><div class="kpi-label">Gesamtfänge</div><div class="kpi-val">120</div><div class="kpi-delta">+23% vs. 2024</div></div>
-        <div class="kpi"><div class="kpi-label">Gesamtgewicht</div><div class="kpi-val">45.7 kg</div><div class="kpi-delta">+18% vs. 2024</div></div>
-        <div class="kpi"><div class="kpi-label">Durchschnitt</div><div class="kpi-val">0.38 kg</div><div class="kpi-delta">+12% vs. 2024</div></div>
-        <div class="kpi"><div class="kpi-label">Angeltage</div><div class="kpi-val">28</div><div class="kpi-delta">+8% vs. 2024</div></div>
-      </div>
-      <div class="panel">
-        <div class="sec">📊 Fänge nach Art</div>
-        ${[['🟡 Zander',45,37,'#2ea8ff'],['🔴 Barsch',38,32,'#67d33f'],['🟢 Hecht',22,18,'#ff9d18'],['🟤 Karpfen',15,13,'#ffd23f']].map(([f,n,pct,col])=>`
-        <div class="rank-row">
-          <span style="font-size:13px;font-weight:800;width:90px">${f}</span>
-          <div class="bar-wrap"><div class="bar-fill" style="width:${pct*2.5}%;background:${col}"></div></div>
-          <span style="font-size:13px;font-weight:800;color:${col}">${n} (${pct}%)</span>
-        </div>`).join('')}
-      </div>
-      <div class="panel blue">
-        <div class="sec">📈 Fänge pro Monat</div>
-        <div style="display:flex;align-items:flex-end;gap:4px;height:100px;padding-bottom:18px">
-          ${[2,3,8,14,22,18,12,15,28,35,24,8].map((v,i)=>{const mx=35;const labs=['J','F','M','A','M','J','J','A','S','O','N','D'];return`<div style="flex:1;display:flex;flex-direction:column;align-items:center;height:100%"><div style="flex:1;width:100%;display:flex;align-items:flex-end"><div style="width:100%;border-radius:3px 3px 0 0;background:linear-gradient(to top,#2ea8ff,#67d33f);height:${Math.round(v/mx*100)}%"></div></div><div style="font-size:9px;color:var(--muted);margin-top:4px">${labs[i]}</div></div>`;}).join('')}
-        </div>
-      </div>`,
+    stats: () => {
+      const h   = haStates['sensor.fishing_tracker_history']?.attributes || {};
+      const md  = haStates['sensor.fishing_tracker_map_data']?.attributes || {};
+      const total   = h.total_catches || 0;
+      const totalW  = h.total_weight_kg || 0;
+      const avgLen  = h.avg_length_cm || 0;
+      const maxLen  = h.max_length_cm || 0;
+      const monthly = h.monthly || Array(12).fill(0);
+      const fishRank= h.fish_ranking || [];
+      const spots   = (md.spots || []).filter(s => s.catches > 0);
+      const maxMonth= Math.max(...monthly, 1);
+      const maxFish = Math.max(...fishRank.map(f=>f.count), 1);
+      const fishColors = {Zander:'#2ea8ff',Hecht:'#67d33f',Barsch:'#ff9d18',
+        Karpfen:'#ffd23f',Schleie:'#ff6b6b',Aal:'#a78bfa',Brasse:'#94a3b8',
+        Rotauge:'#34d399',Rotfeder:'#fb923c',Döbel:'#60a5fa',Rapfen:'#f472b6',Forelle:'#4ade80'};
+      const monthLabs = ['J','F','M','A','M','J','J','A','S','O','N','D'];
+
+      let out = '';
+
+      // KPI-Zeile
+      out += '<div class="kpi-row">';
+      out += '<div class="kpi"><div class="kpi-label">Gesamtfänge</div><div class="kpi-val">'+total+'</div></div>';
+      out += '<div class="kpi"><div class="kpi-label">Gesamtgewicht</div><div class="kpi-val">'+(totalW>0?totalW.toFixed(1)+' kg':'–')+'</div></div>';
+      out += '<div class="kpi"><div class="kpi-label">Ø Länge</div><div class="kpi-val">'+(avgLen>0?Math.round(avgLen)+' cm':'–')+'</div></div>';
+      out += '<div class="kpi"><div class="kpi-label">Rekord</div><div class="kpi-val">'+(maxLen>0?Math.round(maxLen)+' cm':'–')+'</div></div>';
+      out += '</div>';
+
+      if (total === 0)
+        out += '<div class="panel" style="text-align:center;padding:30px;color:rgba(255,255,255,.3)">📊 Noch keine Fänge – erfasse deinen ersten Fang im Fangbuch!</div>';
+
+      // Fänge nach Art
+      out += '<div class="panel"><div class="sec">🐟 Fänge nach Art</div>';
+      if (fishRank.length === 0) {
+        out += '<div class="muted">Keine Daten</div>';
+      } else {
+        fishRank.forEach(function(item) {
+          const col = fishColors[item.fish] || '#2ea8ff';
+          const pct = Math.round(item.count/maxFish*100);
+          out += '<div class="rank-row">';
+          out += '<span style="font-size:13px;font-weight:800;width:90px">'+item.fish+'</span>';
+          out += '<div class="bar-wrap"><div class="bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div>';
+          out += '<span style="font-size:13px;font-weight:800;color:'+col+'">'+item.count+'</span>';
+          out += '</div>';
+        });
+      }
+      out += '</div>';
+
+      // Monatliche Verteilung
+      out += '<div class="panel blue"><div class="sec">📈 Fänge pro Monat</div>';
+      out += '<div style="display:flex;align-items:flex-end;gap:4px;height:100px;padding-bottom:18px">';
+      monthly.forEach(function(v, i) {
+        const h = Math.max(v>0?6:2, Math.round(v/maxMonth*100));
+        const bg = v>0 ? 'linear-gradient(to top,#2ea8ff,#67d33f)' : 'rgba(255,255,255,.06)';
+        out += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;height:100%">';
+        out += '<div style="flex:1;width:100%;display:flex;align-items:flex-end">';
+        out += '<div style="width:100%;border-radius:3px 3px 0 0;background:'+bg+';height:'+h+'%"></div>';
+        out += '</div>';
+        out += '<div style="font-size:9px;color:var(--muted);margin-top:4px">'+monthLabs[i]+'</div>';
+        if (v>0) out += '<div style="font-size:8px;color:#67d33f;font-weight:800">'+v+'</div>';
+        out += '</div>';
+      });
+      out += '</div></div>';
+
+      // Hit Spots Ranking
+      if (spots.length > 0) {
+        out += '<div class="panel"><div class="sec">🎯 Hit Spots (nach Fängen)</div>';
+        spots.slice(0,5).forEach(function(s, i) {
+          const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':(i+1)+'';
+          const bg = i===0?'#ffd23f':i===1?'rgba(255,255,255,.2)':'rgba(255,255,255,.1)';
+          out += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06)">';
+          out += '<div style="width:28px;height:28px;border-radius:50%;background:'+bg+';display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;flex-shrink:0">'+medal+'</div>';
+          out += '<div style="flex:1">';
+          out += '<div style="font-size:14px;font-weight:800">'+s.spot+'</div>';
+          out += '<div style="font-size:12px;color:rgba(255,255,255,.6)">'+s.catches+' Fang'+(s.catches!==1?'e':'')+' · '+s.success_rate+'% Erfolg'+(s.top_fish?' · '+s.top_fish:'')+'</div>';
+          if (s.top_bait) out += '<div style="font-size:11px;color:var(--muted)">🎣 Bester Köder: '+s.top_bait+'</div>';
+          out += '</div>';
+          out += '<div style="font-size:20px;font-weight:900;color:#67d33f">'+s.catches+'</div>';
+          out += '</div>';
+        });
+        out += '</div>';
+      }
+
+      return out;
+    },
 
     bait: () => {
       const ALL_FISH = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse','Rotauge','Rotfeder','Döbel','Rapfen','Forelle'];
@@ -916,13 +1838,12 @@ function renderView() {
         <div style="display:flex;gap:5px;margin-bottom:16px">${[0,1,2,3].map(i=>`<div style="height:3px;flex:1;border-radius:3px;background:${i<done?'#2ea8ff':'rgba(255,255,255,.1)'};transition:.3s"></div>`).join('')}</div>
 
         <div class="wiz-label">🐟 Zielfisch</div>
-        <button class="fish-select-btn" onclick="openFishSheet('_wizFish', (f) => { wizState.fish=f; wizState.turb=null; wizState.light=null; wizState.depth=null; wizState.stelle=null; wizState.jahreszeit=null; wizState.wetter=null; renderView(); }, wizState.fish)">
-          <span style="display:flex;align-items:center;gap:10px">
-            ${w.fish ? (FISH_SVG[w.fish]||'') : '<span style="font-size:22px">🎣</span>'}
-            <span>${w.fish || '– Fischart wählen –'}</span>
-          </span>
-          <svg width="12" height="8" viewBox="0 0 12 8" fill="rgba(255,255,255,.5)"><path d="M0 0l6 8 6-8z"/></svg>
-        </button>
+        <select onchange="wizState.fish=this.value;wizState.turb=null;wizState.light=null;wizState.depth=null;wizState.stelle=null;wizState.jahreszeit=null;wizState.wetter=null;renderView()" style="width:100%;background:rgba(15,30,50,.98);border:1.5px solid rgba(46,168,255,.4);border-radius:13px;color:#fff;padding:13px 16px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:14px;-webkit-appearance:none;appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'8\'><path d=\'M0 0l6 8 6-8z\' fill=\'rgba(255,255,255,0.5)\'/></svg>');background-repeat:no-repeat;background-position:right 14px center">
+          <option value="" style="background:#0a1520">– Fischart wählen –</option>
+          <optgroup label="🎣 Raubfische">${['Zander','Hecht','Barsch','Aal','Forelle'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#0a1520">${{'Zander':'🟡','Hecht':'🟢','Barsch':'🔴','Aal':'⚫','Forelle':'🟠'}[f]} ${f}</option>`).join('')}</optgroup>
+          <optgroup label="🌿 Friedfische">${['Karpfen','Schleie','Brasse','Rotauge','Rotfeder'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#0a1520">${{'Karpfen':'🟤','Schleie':'🟠','Brasse':'🥈','Rotauge':'🔵','Rotfeder':'🟣'}[f]} ${f}</option>`).join('')}</optgroup>
+          <optgroup label="⚡ Sonderfälle">${['Döbel','Rapfen'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:#0a1520">${{'Döbel':'🟫','Rapfen':'🔶'}[f]} ${f}</option>`).join('')}</optgroup>
+        </select>
 
         ${!w.fish ? '<div style="text-align:center;padding:20px;color:rgba(255,255,255,.3);font-size:13px">🐟 Fischart wählen</div>' : isRaub ? `
           <div class="wiz-label">💧 Wassertrübung</div>
@@ -953,7 +1874,19 @@ function renderView() {
           </div>
         </div>
         <div class="sec">Wettereinfluss auf Beißchance</div>
-        ${[['Temperatur',84],['Luftdruck',78],['Wind',65],['Niederschlag',92]].map(([l,v])=>`<div class="wi-row"><span class="wi-label">${l}</span><div class="wi-bar-wrap"><div class="wi-bar" style="width:${v}%;background:${sc(v)}"></div></div><span style="font-size:12px;font-weight:800;width:32px;text-align:right;color:${sc(v)}">${v}%</span></div>`).join('')}
+        ${(() => {
+          const wf = calcFactors();
+          const _wxr = getVerifiedWeather();
+          const rain = _wxr.precipitation;
+          const rainProb = parseFloat(haStates['weather.home']?.attributes?.precipitation_probability || 0);
+          const niederschlag = Math.min(99, Math.max(5, rain===0 ? 95 : rain<2 ? 85 : rain<5 ? 60 : 35));
+          return [
+            ['Temperatur', wf[0][2]],
+            ['Luftdruck',  wf[2][2]],
+            ['Wind',       wf[3][2]],
+            ['Niederschlag', niederschlag],
+          ].map(([l,v])=>`<div class="wi-row"><span class="wi-label">${l}</span><div class="wi-bar-wrap"><div class="wi-bar" style="width:${v}%;background:${sc(v)}"></div></div><span style="font-size:12px;font-weight:800;width:32px;text-align:right;color:${sc(v)}">${v}%</span></div>`).join('');
+        })()}
       </div>
       <div class="panel">
         <div class="sec">📊 Luftdruck-Verlauf & Prognose</div>
@@ -973,43 +1906,124 @@ function renderView() {
           <div style="position:relative;width:80px;height:80px;flex-shrink:0">
             <div style="width:80px;height:80px;border-radius:50%;border:2px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;position:relative">
               ${['N','O','S','W'].map((d,i)=>`<span style="position:absolute;font-size:10px;font-weight:800;color:rgba(255,255,255,.5);${i===0?'top:2px;left:50%;transform:translateX(-50%)':i===1?'right:2px;top:50%;transform:translateY(-50%)':i===2?'bottom:2px;left:50%;transform:translateX(-50%)':'left:2px;top:50%;transform:translateY(-50%)'}">${d}</span>`).join('')}
-              <div style="width:4px;height:32px;background:linear-gradient(to top,transparent 50%,var(--blue) 50%);transform:rotate(225deg);transform-origin:center bottom;position:absolute;bottom:50%">
+              <div style="width:4px;height:32px;background:linear-gradient(to top,transparent 50%,var(--blue) 50%);transform:rotate(${parseFloat(haStates['sensor.haftenkamp_windrichtung']?.state||getVerifiedWeather().wind_bearing||225)}deg);transform-origin:center bottom;position:absolute;bottom:50%">
                 <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--blue);position:absolute;top:-8px;left:-3px"></div>
               </div>
             </div>
           </div>
           <div style="flex:1">
             <div style="font-size:28px;font-weight:950;color:var(--blue)">${wind} km/h</div>
-            <div style="font-size:16px;font-weight:700;margin-top:4px">Südwest (SW)</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:4px">Böen bis 35 km/h möglich</div>
+            <div style="font-size:16px;font-weight:700;margin-top:4px">${(()=>{
+              const b=parseFloat(haStates['sensor.haftenkamp_windrichtung']?.state||getVerifiedWeather().wind_bearing||0);
+              const dirs=['Nord','Nordost','Ost','Südost','Süd','Südwest','West','Nordwest'];
+              const shorts=['N','NO','O','SO','S','SW','W','NW'];
+              const i=Math.round(b/45)%8;
+              return dirs[i]+' ('+shorts[i]+')';
+            })()}</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">${(()=>{
+              const g=parseFloat(haStates['sensor.haftenkamp_windboen']?.state||0);
+              return g>0?'Böen bis '+Math.round(g)+' km/h':'Aktuelle Windböen';
+            })()}</div>
           </div>
         </div>
       </div>
       <div class="panel">
-        <div class="sec">🌧️ Niederschlagsprognose (mm)</div>
+        <div class="sec">🌧️ Niederschlagsprognose (mm)
+          ${(()=>{
+            const nr = getNextRainInfo();
+            if (!nr) return '';
+            const col = nr.isImminent ? '#2ea8ff' : nr.diffMin < 0 ? '#67d33f' : 'rgba(255,255,255,.5)';
+            const icon = nr.diffMin < 0 ? '🌧️' : nr.isImminent ? '⚠️' : '🕐';
+            return '<span style="float:right;font-size:12px;font-weight:700;color:'+col+'">'+icon+' Nächster Regen: '+nr.label+'</span>';
+          })()}
+        </div>
         ${(() => {
-          const fc = haStates['weather.home']?.attributes?.forecast || [];
-          const rain = fc.slice(0,8).map((h,i) => ({
-            t: h.datetime ? new Date(h.datetime).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : `+${i}h`,
-            mm: h.precipitation || 0,
-            prob: h.precipitation_probability || 0,
-          }));
-          if (!rain.length) return '<div class="muted" style="font-size:13px;padding:8px 0">Keine Niederschlagsdaten verfügbar</div>';
-          const maxMm = Math.max(...rain.map(r=>r.mm), 1);
-          return `<div style="display:flex;align-items:flex-end;gap:4px;height:80px;margin-bottom:6px">
-            ${rain.map(r=>`<div style="flex:1;display:flex;flex-direction:column;align-items:center;height:100%">
-              <div style="flex:1;width:100%;display:flex;align-items:flex-end">
-                <div style="width:100%;border-radius:3px 3px 0 0;min-height:2px;background:${r.prob>70?'#2ea8ff':r.prob>30?'#7ec8ff':'rgba(46,168,255,.3)'};height:${Math.max(4,Math.round(r.mm/maxMm*100))}%;position:relative">
-                  ${r.mm>0?`<span style="position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:800;color:#2ea8ff;white-space:nowrap">${r.mm.toFixed(1)}</span>`:''}
-                </div>
-              </div>
-              <div style="font-size:8px;color:rgba(255,255,255,.4);margin-top:4px;text-align:center">${r.t}</div>
-            </div>`).join('')}
-          </div>
-          <div style="display:flex;gap:12px;font-size:11px;color:rgba(255,255,255,.5);margin-top:4px">
-            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#2ea8ff;margin-right:4px"></span>>70% Wahrscheinlichkeit</span>
-            <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:rgba(46,168,255,.3);margin-right:4px"></span>Gering</span>
-          </div>`;
+          // DWD-Stundendaten aus haftenkamp_niederschlag.attributes.data
+          const hkSensor   = haStates['sensor.haftenkamp_niederschlag'];
+          const currentRain = parseFloat(hkSensor?.state || 0);
+          const dwdData     = hkSensor?.attributes?.data || [];
+          const now         = new Date();
+
+          // Nächste 24h aus DWD-Prognose
+          let fcRain = [];
+          let srcLabel = '📡 weather.home';
+          if (dwdData.length > 0) {
+            fcRain = dwdData
+              .filter(d => new Date(d.datetime) >= now)
+              .slice(0, 24)
+              .map(d => ({
+                t: new Date(d.datetime).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}),
+                mm: parseFloat(d.value || 0),
+                prob: parseFloat(d.value || 0) > 0 ? 100 : 0,
+                isNow: false,
+              }));
+            srcLabel = '📡 DWD Haftenkamp · stündlich';
+          } else {
+            const fc = haStates['weather.home']?.attributes?.forecast || [];
+            fcRain = fc.slice(0,7).map((h,i) => ({
+              t: h.datetime ? new Date(h.datetime).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) : '+'+((i+1))+'h',
+              mm: parseFloat(h.precipitation || 0),
+              prob: parseFloat(h.precipitation_probability || 0),
+              isNow: false,
+            }));
+          }
+
+          const rain = [{t:'Jetzt', mm:currentRain, prob:currentRain>0?100:0, isNow:true}, ...fcRain];
+
+          if (fcRain.length === 0)
+            return '<div style="padding:10px 0">' +
+              '<div style="font-size:24px;font-weight:900;color:#2ea8ff">' + currentRain.toFixed(1) + ' mm/h</div>' +
+              '<div style="font-size:12px;color:rgba(255,255,255,.5);margin-top:4px">' + srcLabel + '</div>' +
+              '</div>';
+
+          // 2-Stunden-Blöcke: 12 Balken statt 24 → breiter auf Mobil
+          const grouped = [];
+          // Jetzt-Block
+          grouped.push({t:'Jetzt', mm:currentRain, isNow:true});
+          // Jeweils 2 Stunden zusammenfassen
+          for (let i = 0; i < fcRain.length - 1; i += 2) {
+            const a = fcRain[i], b = fcRain[i+1] || fcRain[i];
+            grouped.push({
+              t: a.t,
+              mm: parseFloat(((a.mm + b.mm) / 2).toFixed(2)),
+              isNow: false,
+            });
+            if (grouped.length >= 13) break;
+          }
+
+          const totalRain = grouped.reduce((s,r) => s+r.mm, 0);
+          const maxMm = Math.max(...grouped.map(r => r.mm), 0.5);
+          const allDry = totalRain < 0.05;
+
+          const srcBadge = '<div style="font-size:10px;color:rgba(255,255,255,.35);margin-top:6px">' + srcLabel + '</div>';
+
+          // Kein Regen → Info anzeigen statt leere Balken
+          const noRainMsg = allDry
+            ? '<div style="text-align:center;padding:14px 0;font-size:13px;color:rgba(255,255,255,.4)">☀️ Kein Regen in den nächsten 24h</div>'
+            : '';
+
+          const bars = '<div style="display:flex;align-items:flex-end;gap:3px;height:80px;margin-bottom:4px">' +
+            grouped.map(function(r) {
+              const h = allDry ? 100 : Math.max(r.mm>0?10:4, Math.round(r.mm/maxMm*100));
+              const bg = r.isNow
+                ? (r.mm>0 ? '#67d33f' : 'rgba(103,211,63,.35)')
+                : (r.mm>0.3 ? '#2ea8ff' : r.mm>0 ? '#7ec8ff' : 'rgba(100,180,255,.25)');
+              const shadow = r.isNow ? 'box-shadow:0 0 6px rgba(103,211,63,.5);' : '';
+              const label = r.mm > 0
+                ? '<span style="position:absolute;top:-15px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:900;color:' + (r.isNow?'#67d33f':'#2ea8ff') + ';white-space:nowrap">' + r.mm.toFixed(1) + '</span>'
+                : '';
+              // Zeitlabel: nur jede 3. Säule
+              const showTime = r.isNow || grouped.indexOf(r) % 3 === 0;
+              return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;height:100%">' +
+                '<div style="flex:1;width:100%;display:flex;align-items:flex-end">' +
+                '<div style="width:100%;border-radius:3px 3px 0 0;height:' + h + '%;background:' + bg + ';' + shadow + 'position:relative;min-height:4px">' + label + '</div>' +
+                '</div>' +
+                '<div style="font-size:8px;color:rgba(255,255,255,' + (showTime?'.45':'.1') + ');margin-top:3px;white-space:nowrap">' + (showTime?r.t:'') + '</div>' +
+                '</div>';
+            }).join('') +
+          '</div>';
+
+          return bars + noRainMsg + srcBadge;
         })()}
       </div>
       <div class="panel">
@@ -1190,9 +2204,47 @@ function addChartTouch(svgId, pts, color) {
     }
     const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
         drawChart('weekChart', WEEK, '#2ea8ff', _todayIdx);
+        addChartTouch('weekChart', WEEK, '#2ea8ff');
     addChartTouch('weekChart', WEEK, '#2ea8ff');
-    drawChart('specChart', fishData[selFish]?.curve || DAY, '#67d33f');
-    addChartTouch('specChart', fishData[selFish]?.curve || DAY, '#67d33f');
+    // Fischart-spezifischer Score: Biologie dominiert über Wetter
+const fishCurve = (() => {
+  const d = fishData[selFish];
+  if (!d) return DAY;
+  const curve = d.curve; // 0-100: biologische Aktivitätskurve pro Stunde
+  const now = new Date().getHours();
+
+  return DAY.map((v, h) => {
+    const bioActivity = curve[h] / 100;      // 0-1: Wie aktiv ist der Fisch biologisch?
+    const weatherScore = v / 100;             // 0-1: Wie gut ist das Wetter?
+
+        // Biologie direkt (0-100%) + Wettermodifikation
+    const bioScore = curve[h]; // Direkte biologische Aktivität
+
+    // Temperatur-Faktor
+    const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+    const tempRange = d.temp || '12–20°C';
+    const tMatch = tempRange.match(/(\d+)[^0-9]+(\d+)/);
+    let tempFactor = 1.0;
+    if (tMatch) {
+      const lo = parseFloat(tMatch[1]), hi = parseFloat(tMatch[2]);
+      if (waterT < lo - 5) tempFactor = 0.35;
+      else if (waterT < lo - 2) tempFactor = 0.60;
+      else if (waterT < lo) tempFactor = 0.80;
+      else if (waterT > hi + 5) tempFactor = 0.40;
+      else if (waterT > hi + 2) tempFactor = 0.65;
+      else if (waterT > hi) tempFactor = 0.85;
+    }
+
+    // Wetter modifiziert um max ±15 Punkte
+    const weatherBonus = (weatherScore - 0.5) * 30;
+
+    // Finale Berechnung: Biologie dominiert vollständig
+    const final = bioScore * tempFactor + weatherBonus;
+    return Math.round(Math.min(95, Math.max(3, final)));
+  });
+})();
+drawChart('specChart', fishCurve, '#67d33f');
+    addChartTouch('specChart', fishCurve, '#67d33f');
     // Luftdruck-Chart mit Y-Achse und gestrichelter Prognose
     const basePressure = parseFloat(pressure) || 1015;
     const pastData = [basePressure-4, basePressure-3, basePressure-5, basePressure-3, basePressure-2, basePressure-1, basePressure];
@@ -1224,12 +2276,67 @@ function selectFcTab(btn, tab) {
         if (tab === 'overview' || tab === '7days') {
           const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
         drawChart('weekChart', WEEK, '#2ea8ff', _todayIdx);
+        addChartTouch('weekChart', WEEK, '#2ea8ff');
           addChartTouch('weekChart', WEEK, '#2ea8ff');
         } else if (tab === '24h') {
           drawChart('dayChart24', DAY, '#ff9d18');
           addChartTouch('dayChart24', DAY, '#ff9d18');
         } else if (tab === '14days') {
-          const d14=[76,82,68,85,91,72,78,65,80,88,75,70,82,77];
+          // 14-Tage Prognose aus echten HA-Wetterdaten
+const d14 = (() => {
+  const fcDays = haStates['weather.home']?.attributes?.forecast || [];
+  if (fcDays.length < 7) return WEEK.concat(WEEK); // Fallback
+
+  // Für jeden Vorhersage-Tag einen Angelwetter-Score berechnen
+  return fcDays.slice(0,14).map((fc, i) => {
+    // Basiswert aus 7-Tage-Sensor wenn verfügbar
+    let base = WEEK[i] || 65;
+
+    // Wetterfaktoren aus Tagesvorhersage
+    const temp = parseFloat(fc.temperature || fc.temperature_low || 12);
+    const rain = parseFloat(fc.precipitation || 0);
+    const rainProb = parseFloat(fc.precipitation_probability || 0);
+    const wind = parseFloat(fc.wind_speed || 10);
+    const condition = (fc.condition || '').toLowerCase();
+
+    let mod = 0;
+
+    // Temperatur
+    if (temp < 3) mod -= 10;
+    else if (temp < 8) mod -= 5;
+    else if (temp >= 12 && temp <= 20) mod += 5;
+    else if (temp > 28) mod -= 8;
+
+    // Niederschlag
+    if (rain > 8) mod -= 12;
+    else if (rain > 3) mod -= 6;
+    else if (rain > 0.5 && rain <= 3) mod += 3; // leichter Regen gut
+    if (rainProb > 85) mod -= 8;
+    else if (rainProb > 60) mod -= 3;
+
+    // Wind
+    if (wind > 35) mod -= 12;
+    else if (wind > 25) mod -= 6;
+    else if (wind > 15) mod -= 2;
+    else if (wind < 10) mod += 3; // Windstill gut
+
+    // Wetterlage
+    if (condition.includes('sunny') || condition.includes('clear')) mod += 3;
+    if (condition.includes('storm') || condition.includes('thunder')) mod -= 15;
+    if (condition.includes('fog')) mod -= 4;
+    if (condition.includes('cloudy') && !condition.includes('partly')) mod += 2;
+
+    // Nur für erste 7 Tage: WEEK-Werte nutzen wenn vorhanden
+    if (i < WEEK.length && WEEK[i]) {
+      // Mix: 70% Sensor, 30% Wetterberechnung
+      base = Math.round(WEEK[i] * 0.7 + (65 + mod) * 0.3);
+    } else {
+      base = Math.round(65 + mod);
+    }
+
+    return Math.min(95, Math.max(15, base));
+  });
+})();
           drawChart('chart14', d14, '#a78bfa');
           addChartTouch('chart14', d14, '#a78bfa');
         }
@@ -1246,23 +2353,11 @@ function selectFcTab(btn, tab) {
 function buildForecastTab(tab) {
   const dailyForecast2 = haStates['sensor.fishing_tracker_daily_forecast']?.attributes?.days || null;
   const useReal2 = dailyForecast2 && dailyForecast2.length > 0;
-  // Woche immer Mo-So (aktuelle Woche)
-  const weekDays = useReal2
-    ? dailyForecast2.slice(0,7).map(d => ({d:d.weekday,date:d.date_str,v:d.avg_score,isToday:d.is_today}))
-    : (() => {
-        const days = ['Mo','Di','Mi','Do','Fr','Sa','So'];
-        const vals = [72,65,58,71,68,74,62];
-        const today = new Date().getDay(); // 0=So, 1=Mo...
-        const mondayOffset = today === 0 ? 6 : today - 1;
-        return days.map((d,i) => ({
-          d, v: vals[i],
-          isToday: i === mondayOffset,
-          date: (() => { const dt=new Date(); dt.setDate(dt.getDate()-mondayOffset+i); return dt.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit'}); })()
-        }));
-      })();
+  // WEEK_DATA ist bereits korrekt aus HA-Sensor – dieselbe Quelle wie Chart!
+  const weekDays = WEEK_DATA;
   const sc2 = v => v>=80?'#67d33f':v>=60?'#ffd23f':'#ff9d18';
   const sol = haStates['sensor.solunar_beisszeiten']?.attributes || {};
-  const factors = [['🌦️','Wetter',87],['🌙','Mondphase',91],['📊','Luftdruck',78],['💨','Wind',68],['💧','Wassertemp.',84]];
+  const factors = calcFactors();
 
   if (tab === 'overview' || tab === '7days') {
     return `
@@ -1304,7 +2399,61 @@ function buildForecastTab(tab) {
         </div>
       </div>`;
   } else {
-    const d14=[76,82,68,85,91,72,78,65,80,88,75,70,82,77];
+    // 14-Tage Prognose aus echten HA-Wetterdaten
+const d14 = (() => {
+  const fcDays = haStates['weather.home']?.attributes?.forecast || [];
+  if (fcDays.length < 7) return WEEK.concat(WEEK); // Fallback
+
+  // Für jeden Vorhersage-Tag einen Angelwetter-Score berechnen
+  return fcDays.slice(0,14).map((fc, i) => {
+    // Basiswert aus 7-Tage-Sensor wenn verfügbar
+    let base = WEEK[i] || 65;
+
+    // Wetterfaktoren aus Tagesvorhersage
+    const temp = parseFloat(fc.temperature || fc.temperature_low || 12);
+    const rain = parseFloat(fc.precipitation || 0);
+    const rainProb = parseFloat(fc.precipitation_probability || 0);
+    const wind = parseFloat(fc.wind_speed || 10);
+    const condition = (fc.condition || '').toLowerCase();
+
+    let mod = 0;
+
+    // Temperatur
+    if (temp < 3) mod -= 10;
+    else if (temp < 8) mod -= 5;
+    else if (temp >= 12 && temp <= 20) mod += 5;
+    else if (temp > 28) mod -= 8;
+
+    // Niederschlag
+    if (rain > 8) mod -= 12;
+    else if (rain > 3) mod -= 6;
+    else if (rain > 0.5 && rain <= 3) mod += 3; // leichter Regen gut
+    if (rainProb > 85) mod -= 8;
+    else if (rainProb > 60) mod -= 3;
+
+    // Wind
+    if (wind > 35) mod -= 12;
+    else if (wind > 25) mod -= 6;
+    else if (wind > 15) mod -= 2;
+    else if (wind < 10) mod += 3; // Windstill gut
+
+    // Wetterlage
+    if (condition.includes('sunny') || condition.includes('clear')) mod += 3;
+    if (condition.includes('storm') || condition.includes('thunder')) mod -= 15;
+    if (condition.includes('fog')) mod -= 4;
+    if (condition.includes('cloudy') && !condition.includes('partly')) mod += 2;
+
+    // Nur für erste 7 Tage: WEEK-Werte nutzen wenn vorhanden
+    if (i < WEEK.length && WEEK[i]) {
+      // Mix: 70% Sensor, 30% Wetterberechnung
+      base = Math.round(WEEK[i] * 0.7 + (65 + mod) * 0.3);
+    } else {
+      base = Math.round(65 + mod);
+    }
+
+    return Math.min(95, Math.max(15, base));
+  });
+})();
     const dn=['Mo','Di','Mi','Do','Fr','Sa','So','Mo','Di','Mi','Do','Fr','Sa','So'];
     return `
       <div class="panel blue" style="margin-top:10px">
@@ -1321,10 +2470,131 @@ function buildForecastTab(tab) {
 
 
 // ── Leaflet Spot-Karte ───────────────────────────────────────────────────────
-let _spotMap = null;
+let _spotMap    = null;
+let _logMap     = null;   // Fangbuch-Karte
+let spotFishFilter = null; // null = alle Fischarten
 let _spotMarkers = [];
 let _spotData = [];
 let _userMarker = null;
+
+// ── Karte: alle echten Fangpositionen (Spots-Tab) ────────────────────────────
+const FISH_COLORS = {
+  Zander:'#2ea8ff',Hecht:'#67d33f',Barsch:'#ff9d18',Karpfen:'#ffd23f',
+  Schleie:'#ff6b6b',Aal:'#a78bfa',Brasse:'#94a3b8',Rotauge:'#34d399',
+  Rotfeder:'#fb923c',Döbel:'#60a5fa',Rapfen:'#f472b6',Forelle:'#4ade80'
+};
+
+function initCatchMap(catches, spots, fishFilter) {
+  const mapEl = document.getElementById('spotMap');
+  if (!mapEl) return;
+  if (typeof L === 'undefined') {
+    setTimeout(() => initCatchMap(catches, spots, fishFilter), 600);
+    return;
+  }
+  if (_spotMap) { _spotMap.remove(); _spotMap = null; }
+
+  _spotMap = L.map('spotMap', {
+    center: [52.476, 9.800], zoom: 12,
+    zoomControl: true, attributionControl: true, tap: true,
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
+    maxZoom: 19,
+  }).addTo(_spotMap);
+
+  const bounds = [];
+
+  // Fang-Marker (farbig nach Fischart)
+  (catches || []).forEach(function(c) {
+    if (!c.lat || !c.lon) return;
+    const col = FISH_COLORS[c.fish_type] || '#2ea8ff';
+    const dt  = c.timestamp ? new Date(c.timestamp).toLocaleDateString('de-DE') : '';
+    L.circleMarker([c.lat, c.lon], {
+      radius: 7, color: col, fillColor: col,
+      fillOpacity: 0.85, weight: 2, opacity: 1,
+    }).addTo(_spotMap)
+    .bindPopup(
+      '<div style="min-width:140px">' +
+      '<div style="font-size:14px;font-weight:900;color:' + col + '">' + (c.fish_type || 'Fisch') + '</div>' +
+      (c.length_cm ? '<div style="font-size:12px">' + c.length_cm + ' cm' + (c.weight_kg ? ' · ' + c.weight_kg + ' kg' : '') + '</div>' : '') +
+      (c.spot  ? '<div style="font-size:11px;color:rgba(255,255,255,.6)">📍 ' + c.spot  + '</div>' : '') +
+      (c.bait  ? '<div style="font-size:11px;color:rgba(255,255,255,.6)">🎣 ' + c.bait  + '</div>' : '') +
+      (dt      ? '<div style="font-size:10px;color:rgba(255,255,255,.4);margin-top:3px">🕐 ' + dt + '</div>' : '') +
+      '</div>'
+    );
+    bounds.push([c.lat, c.lon]);
+  });
+
+  // Hotspot-Kreise (nur wenn kein Fischart-Filter aktiv)
+  if (!fishFilter) {
+    (spots || []).forEach(function(s) {
+      if (!s.lat || !s.lon || s.catches < 2) return;
+      const intensity = Math.min(1, s.catches / 6);
+      const hcol = intensity > 0.6 ? '#ff4444' : intensity > 0.3 ? '#ff9d18' : '#ffd23f';
+      L.circle([s.lat, s.lon], {
+        radius: 80 + s.catches * 30,
+        color: hcol, fillColor: hcol,
+        fillOpacity: 0.12, weight: 1, opacity: 0.4,
+      }).addTo(_spotMap);
+    });
+  }
+
+  // GPS-Button
+  const gpsBtn = L.control({ position: 'topleft' });
+  gpsBtn.onAdd = function() {
+    const div = L.DomUtil.create('div', 'leaflet-bar');
+    div.innerHTML = '<a href="#" style="font-size:18px;display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:rgba(10,24,38,.9);color:#2ea8ff;border:1px solid rgba(46,168,255,.3)">📍</a>';
+    div.onclick = function(e) { e.preventDefault(); locateUser(); };
+    return div;
+  };
+  gpsBtn.addTo(_spotMap);
+
+  // Karte auf Fänge zentrieren
+  if (bounds.length === 1) {
+    _spotMap.setView(bounds[0], 14);
+  } else if (bounds.length > 1) {
+    try { _spotMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 }); }
+    catch(e) { _spotMap.setView(bounds[0], 12); }
+  }
+}
+
+// ── Karte: Fangbuch-Mini-Map ─────────────────────────────────────────────────
+function initLogMap(catches) {
+  const mapEl = document.getElementById('logMap');
+  if (!mapEl) return;
+  if (typeof L === 'undefined') { setTimeout(() => initLogMap(catches), 600); return; }
+  if (_logMap) { _logMap.remove(); _logMap = null; }
+
+  _logMap = L.map('logMap', {
+    center: [52.476, 9.800], zoom: 12,
+    zoomControl: false, attributionControl: false, tap: true,
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+  }).addTo(_logMap);
+
+  const bounds = [];
+  (catches || []).forEach(function(c) {
+    if (!c.latitude || !c.longitude) return;
+    const col = FISH_COLORS[c.fish_type] || '#2ea8ff';
+    L.circleMarker([c.latitude, c.longitude], {
+      radius: 7, color: col, fillColor: col, fillOpacity: 0.9, weight: 2,
+    }).addTo(_logMap)
+    .bindPopup(
+      '<b style="color:' + col + '">' + (c.fish_type || 'Fisch') + '</b>' +
+      (c.length_cm ? '<br>' + c.length_cm + ' cm' : '') +
+      (c.spot ? '<br>📍 ' + c.spot : '')
+    );
+    bounds.push([c.latitude, c.longitude]);
+  });
+
+  if (bounds.length === 1) {
+    _logMap.setView(bounds[0], 14);
+  } else if (bounds.length > 1) {
+    try { _logMap.fitBounds(bounds, { padding: [20, 20], maxZoom: 15 }); }
+    catch(e) { _logMap.setView(bounds[0], 13); }
+  }
+}
 
 function initSpotMap(spots) {
   _spotData = spots;
@@ -1356,6 +2626,35 @@ function initSpotMap(spots) {
     maxZoom: 19,
     minZoom: 4,
   }).addTo(_spotMap);
+
+  // ── Heatmap aus echten Fangdaten ─────────────────────────────────────────
+  const mapData = window.parent?.document
+    ?.querySelector('home-assistant')?.hass?.states
+    ?.['sensor.fishing_tracker_map_data']?.attributes || {};
+  const heatCatches = (mapData.catches || []).filter(c => c.caught >= 1 && c.lat && c.lon);
+
+  // Spot-Cluster aus echten Daten
+  const realSpots = mapData.spots || [];
+  realSpots.forEach(spot => {
+    if (!spot.lat || !spot.lon) return;
+    const radius = 8 + spot.catches * 4;
+    const intensity = Math.min(1, spot.catches / 5);
+    const col = intensity > 0.6 ? '#ff4444' : intensity > 0.3 ? '#ff9d18' : '#ffd23f';
+
+    L.circleMarker([spot.lat, spot.lon], {
+      radius: Math.min(28, radius),
+      color: col, fillColor: col,
+      fillOpacity: 0.25, weight: 2, opacity: 0.7,
+    }).addTo(_spotMap)
+    .bindPopup(
+      '<div style="min-width:160px">' +
+      '<div style="font-size:15px;font-weight:900">🎯 ' + spot.spot + '</div>' +
+      '<div style="font-size:22px;font-weight:950;color:' + col + '">' + spot.catches + ' Fänge</div>' +
+      '<div style="font-size:12px;color:rgba(255,255,255,.7)">' + spot.success_rate + '% Erfolgsquote</div>' +
+      (spot.top_fish ? '<div style="font-size:12px;margin-top:4px">🐟 ' + spot.top_fish + '</div>' : '') +
+      (spot.top_bait ? '<div style="font-size:12px">🎣 ' + spot.top_bait + '</div>' : '') +
+      '</div>');
+  });
 
   // GPS-Button
   const gpsBtn = L.control({ position: 'topleft' });
@@ -1476,6 +2775,19 @@ function showSpotDetail(i) {
 
 
 // ── Custom Fisch-Dropdown ────────────────────────────────────────────────────
+
+function openSpeciesSheet() {
+  openFishSheet('selFish', function(f) { selFish = f; renderView(); }, selFish);
+}
+function openWizardSheet() {
+  openFishSheet('_wizFish', function(f) {
+    wizState.fish = f;
+    wizState.turb = null; wizState.light = null; wizState.depth = null;
+    wizState.stelle = null; wizState.jahreszeit = null; wizState.wetter = null;
+    renderView();
+  }, wizState.fish);
+}
+
 function openFishSheet(targetVar, onSelect, currentVal) {
   const getCurrent = () => currentVal || window[targetVar] || '';
   const GROUPS = [
@@ -1524,7 +2836,99 @@ function openFishSheet(targetVar, onSelect, currentVal) {
   document.body.appendChild(overlay);
 }
 
+
+// ── Einflussfaktoren aus echten HA-Daten berechnen ──────────────────────────
+function calcFactors() {
+  const _wxf = getVerifiedWeather();
+  const temp = _wxf.temperature || 12;
+  const pressure = _wxf.pressure || 1015;
+  const pressureTrend = parseFloat(haStates['sensor.fishing_tracker_pressure_trend']?.state || 0);
+  const windSpeed = _wxf.wind_speed || 10;
+  const rain = _wxf.precipitation || 0;
+  const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+  const moonPhase = haStates['sensor.moon']?.state || haStates['sensor.mondphase']?.state || '';
+  const humidity = parseFloat(haStates['weather.home']?.attributes?.humidity || 70);
+
+  // Wetter-Score: Temperatur + Regen + Bewölkung
+  let wetterScore = 70;
+  if (temp >= 10 && temp <= 20) wetterScore += 15;
+  else if (temp >= 5 && temp < 10) wetterScore += 5;
+  else if (temp < 5) wetterScore -= 15;
+  else if (temp > 25) wetterScore -= 10;
+  if (rain === 0) wetterScore += 5;
+  else if (rain < 2) wetterScore += 3;
+  else if (rain > 5) wetterScore -= 15;
+  wetterScore = Math.min(99, Math.max(5, wetterScore));
+
+  // Mondphasen-Score
+  let mondScore = 50;
+  const moonLow = moonPhase.toLowerCase();
+  if (moonLow.includes('voll') || moonLow.includes('full')) mondScore = 95;
+  else if (moonLow.includes('neu') || moonLow.includes('new')) mondScore = 88;
+  else if (moonLow.includes('zunehm') || moonLow.includes('waxing')) mondScore = 75;
+  else if (moonLow.includes('abnehm') || moonLow.includes('waning')) mondScore = 65;
+  else {
+    // Aus HA moon sensor (0-1 oder 0-100)
+    const moonVal = parseFloat(haStates['sensor.moon']?.attributes?.moon_phase ||
+                               haStates['sensor.mondphase']?.attributes?.illuminance || 0);
+    if (moonVal > 0 && moonVal <= 1) mondScore = Math.round(50 + moonVal * 45);
+    else if (moonVal > 1) mondScore = Math.min(99, Math.round(50 + moonVal * 0.45));
+    else mondScore = 72; // Fallback
+  }
+
+  // Luftdruck-Score
+  let druckScore = 70;
+  if (pressure >= 1010 && pressure <= 1025) druckScore = 85;
+  else if (pressure >= 1000 && pressure < 1010) druckScore = 65;
+  else if (pressure < 1000) druckScore = 45;
+  else if (pressure > 1025) druckScore = 75;
+  if (pressureTrend > 2) druckScore += 8;   // steigend = gut
+  else if (pressureTrend < -2) druckScore -= 10; // fallend = schlecht
+  druckScore = Math.min(99, Math.max(5, druckScore));
+
+  // Wind-Score
+  let windScore = 80;
+  if (windSpeed < 5) windScore = 88;
+  else if (windSpeed < 15) windScore = 80;
+  else if (windSpeed < 25) windScore = 60;
+  else if (windSpeed < 35) windScore = 40;
+  else windScore = 20;
+
+  // Wassertemp-Score
+  let wasserScore = 60;
+  if (waterT >= 12 && waterT <= 18) wasserScore = 92;
+  else if (waterT >= 8 && waterT < 12) wasserScore = 72;
+  else if (waterT >= 18 && waterT <= 22) wasserScore = 80;
+  else if (waterT < 8) wasserScore = 45;
+  else if (waterT > 22) wasserScore = 55;
+
+  return [
+    ['🌦️', 'Wetter',      Math.round(wetterScore)],
+    ['🌙', 'Mondphase',   Math.round(mondScore)],
+    ['📊', 'Luftdruck',   Math.round(druckScore)],
+    ['💨', 'Wind',        Math.round(windScore)],
+    ['💧', 'Wassertemp.', Math.round(wasserScore)],
+  ];
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
+// ── Event-Delegation (iOS-sicher) ────────────────────────────────────────────
+document.addEventListener('click', function(e) {
+  // Forecast Tabs
+  const fcTab = e.target.closest('[data-fctab]');
+  if (fcTab) {
+    e.preventDefault();
+    e.stopPropagation();
+    currentFcTab = fcTab.dataset.fctab;
+    currentView = 'forecast';
+    buildNav();
+    renderView();
+    return;
+  }
+
+  // Dropdown: direkt via onclick Funktionen
+});
+
 async function init() {
   try {
     await connectHA();

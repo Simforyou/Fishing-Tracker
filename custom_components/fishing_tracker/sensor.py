@@ -56,6 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         # Neue Sensoren v2.9
         WaterLevelSensor(hass, entry),
         BaitAdvisorSensor(hass, entry),
+        AngelwetterIndexSensor(hass, entry, store),
     ], True)
 
 
@@ -70,6 +71,8 @@ class FishingBaseSensor(SensorEntity):
         self._attr_should_poll = True
         self._state: Any = None
         self._attrs: dict[str, Any] = {}
+        # Entity-ID explizit setzen → Panel liest immer sensor.fishing_tracker_{key}
+        self.entity_id = f"sensor.fishing_tracker_{key.replace('-', '_')}"  
 
     @property
     def native_value(self):
@@ -301,33 +304,63 @@ class MapDataSensor(FishingBaseSensor):
 
             if lat is not None and lon is not None:
                 catch = {
-                    "lat": lat,
-                    "lon": lon,
-                    "timestamp": item.get("timestamp"),
-                    "fish_type": item.get("fish_type"),
-                    "spot": item.get("spot"),
-                    "bait": item.get("bait"),
-                    "length_cm": item.get("length_cm"),
-                    "caught": item.get("caught", 0),
-                    "chance": item.get("chance"),
+                    "lat":              lat,
+                    "lon":              lon,
+                    "timestamp":        item.get("timestamp"),
+                    "fish_type":        item.get("fish_type"),
+                    "spot":             item.get("spot"),
+                    "bait":             item.get("bait"),
+                    "length_cm":        item.get("length_cm"),
+                    "weight_kg":        item.get("weight_kg"),
+                    "water_temp":       item.get("water_temp"),
+                    "angelwetter_index":item.get("angelwetter_index"),
+                    "photo_url":        item.get("photo_url"),
+                    "caught":           item.get("caught", 0),
+                    "chance":           item.get("chance"),
                 }
                 catches.append(catch)
 
                 if int(item.get("caught", 0)) >= 1:
-                    heatmap.append([lat, lon, 0.8])
+                    # Gewicht proportional zu Fischlänge (größerer Fisch = stärkerer Hotspot)
+                    length = float(item.get("length_cm") or 40)
+                    weight = min(1.0, max(0.3, length / 80))
+                    heatmap.append([lat, lon, weight])
 
             spot = item.get("spot") or "Unbekannt"
-            group = spot_groups.setdefault(spot, {"spot": spot, "total": 0, "catches": 0})
+            group = spot_groups.setdefault(spot, {
+                "spot": spot, "total": 0, "catches": 0,
+                "fish_types": {}, "best_bait": {},
+                "lats": [], "lons": [],
+            })
             group["total"] += 1
+            if item.get("latitude") and item.get("longitude"):
+                group["lats"].append(float(item["latitude"]))
+                group["lons"].append(float(item["longitude"]))
             if int(item.get("caught", 0)) >= 1:
                 group["catches"] += 1
+                ft = item.get("fish_type") or "Unbekannt"
+                group["fish_types"][ft] = group["fish_types"].get(ft, 0) + 1
+                bait = item.get("bait") or "Unbekannt"
+                group["best_bait"][bait] = group["best_bait"].get(bait, 0) + 1
 
         spots = []
         for group in spot_groups.values():
-            total = group["total"]
+            total    = group["total"]
             catches_count = group["catches"]
             group["success_rate"] = round(catches_count / total * 100, 1) if total else 0
+            # GPS-Mittelpunkt des Spots
+            if group["lats"]:
+                group["lat"] = round(sum(group["lats"]) / len(group["lats"]), 6)
+                group["lon"] = round(sum(group["lons"]) / len(group["lons"]), 6)
+            # Top-Fischart und Top-Köder
+            if group["fish_types"]:
+                group["top_fish"] = max(group["fish_types"], key=group["fish_types"].get)
+            if group["best_bait"]:
+                group["top_bait"] = max(group["best_bait"], key=group["best_bait"].get)
+            # Aufräumen (große Listen nicht in HA-Attrs)
+            del group["lats"], group["lons"], group["fish_types"], group["best_bait"]
             spots.append(group)
+        spots.sort(key=lambda x: x["catches"], reverse=True)
 
         self._state = len(self.store.entries)
         self._attrs = {
@@ -338,6 +371,157 @@ class MapDataSensor(FishingBaseSensor):
         }
 
 
+class AngelwetterIndexSensor(FishingBaseSensor):
+    """Allgemeiner Tagesindex – NICHT fischart- oder uhrzeitspezifisch.
+    Spiegelt exakt die calcAngelwetterIndex()-Logik aus dem Frontend wider.
+    Gewichtung nach IGB Berlin / Guidesly / LAVB Brandenburg:
+      35% Wassertemperatur · 30% Wetter · 20% Saison · 10% Mond · 5% Luftdrucktrend
+    """
+    _attr_icon = "mdi:weather-sunny-alert"
+    _attr_native_unit_of_measurement = "%"
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, store) -> None:
+        super().__init__(entry, store, "angelwetter_index", "Angelwetter Index")
+        self.hass = hass
+
+    def _get(self, entity_id: str, default=None):
+        s = self.hass.states.get(entity_id)
+        if not s or s.state in ("unknown", "unavailable", "None"):
+            return default
+        try:
+            return float(s.state)
+        except (ValueError, TypeError):
+            return default
+
+    async def async_update(self) -> None:
+        from datetime import datetime
+        now = datetime.now()
+        month = now.month
+
+        # ── 35% Wassertemperatur ─────────────────────────────────────────────
+        water_t = (
+            self._get("sensor.wassertemperatur_gewaesser")
+            or self._get("sensor.haftenkamp_temperatur")
+        )
+        if water_t is not None:
+            wt = water_t
+            if 15 <= wt <= 19:   water_score = 100
+            elif 13 <= wt <= 21: water_score = 85
+            elif 11 <= wt <= 23: water_score = 70
+            elif 8 <= wt <= 26:  water_score = 50
+            elif 5 <= wt <= 28:  water_score = 30
+            else:                water_score = 12
+        else:
+            water_score = 55  # kein Sensor → neutral
+
+        # ── 30% Wetter ───────────────────────────────────────────────────────
+        # Lokale Station hat Priorität
+        cloud = (self._get("sensor.haftenkamp_bewolkungsgrad")
+                 or self._get("weather.home", None) and None)  # via attributes unten
+        wind  = (self._get("sensor.haftenkamp_windgeschwindigkeit")
+                 or None)
+        rain  = (self._get("sensor.haftenkamp_niederschlag") or 0)
+        bear  = self._get("sensor.haftenkamp_windrichtung")
+
+        # Fallback: weather.home attributes
+        wa = (self.hass.states.get("weather.home") or type("x", (), {"attributes": {}})()).attributes
+        if cloud is None: cloud = float(wa.get("cloud_coverage", 50) or 50)
+        if wind  is None: wind  = float(wa.get("wind_speed", 10) or 10)
+        if bear  is None: bear  = float(wa.get("wind_bearing", 0) or 0)
+
+        weather_score = 40
+        # Bewölkung
+        if 50 <= cloud <= 80:       weather_score += 22
+        elif 35 <= cloud < 50:      weather_score += 16
+        elif 80 < cloud <= 95:      weather_score += 12
+        elif 20 < cloud < 35:       weather_score += 5
+        elif cloud > 95:            weather_score += 4
+        else:                       weather_score -= 10  # Knallsonne
+        # Wind
+        if 8 <= wind <= 15:         weather_score += 18
+        elif 15 < wind <= 22:       weather_score += 12
+        elif 4 <= wind < 8:         weather_score += 8
+        elif wind > 35:             weather_score -= 20
+        elif wind < 3:              weather_score -= 5
+        # Windrichtung SW/W günstig
+        if 180 <= bear <= 270:      weather_score += 10
+        elif 270 < bear <= 315:     weather_score += 6
+        elif 0 <= bear <= 60:       weather_score -= 6
+        # Niederschlag
+        if 0.3 <= rain <= 1.5:      weather_score += 12
+        elif 1.5 < rain <= 3:       weather_score += 6
+        elif 0 < rain < 0.3:        weather_score += 4
+        elif rain > 8:              weather_score -= 20
+        elif 3 < rain <= 8:         weather_score -= 5
+        # Sonneneinstrahlung
+        solar = self._get("sensor.haftenkamp_sonneneinstrahlung")
+        if solar is not None:
+            if solar < 50:          weather_score += 8
+            elif solar < 200:       weather_score += 4
+            elif solar < 500:       pass
+            elif solar < 800:       weather_score -= 6
+            else:                   weather_score -= 12
+        weather_score = max(0, min(100, weather_score))
+
+        # ── 20% Saison ───────────────────────────────────────────────────────
+        if month in (5, 6):     season_score = 100
+        elif month in (9, 10):  season_score = 95
+        elif month == 4:        season_score = 88
+        elif month in (7, 8):   season_score = 70
+        elif month in (3, 11):  season_score = 65
+        elif month == 2:        season_score = 45
+        else:                   season_score = 30
+
+        # ── 10% Mondphase ─────────────────────────────────────────────────────
+        moon_s = self.hass.states.get("sensor.moon")
+        moon_state = (moon_s.state if moon_s else "").lower()
+        if any(x in moon_state for x in ("voll", "full")):       moon_score = 100
+        elif any(x in moon_state for x in ("neu", "new")):       moon_score = 95
+        elif any(x in moon_state for x in ("gibbous", "dreiv")): moon_score = 75
+        elif any(x in moon_state for x in ("quarter", "viert")): moon_score = 60
+        else:                                                      moon_score = 50
+
+        # ── 5% Luftdrucktrend ─────────────────────────────────────────────────
+        trend = self._get("sensor.fishing_tracker_pressure_trend", 0) or 0
+        if -2 <= trend < -1:       pressure_score = 100
+        elif -3 <= trend < -2:     pressure_score = 90
+        elif -1 <= trend < -0.3:   pressure_score = 75
+        elif -0.3 <= trend <= 0.5: pressure_score = 55
+        elif 0.5 < trend <= 1.5:   pressure_score = 40
+        elif 1.5 < trend <= 3:     pressure_score = 25
+        else:                       pressure_score = 12
+
+        # ── Gesamtscore ───────────────────────────────────────────────────────
+        total = (
+            water_score   * 0.35 +
+            weather_score * 0.30 +
+            season_score  * 0.20 +
+            moon_score    * 0.10 +
+            pressure_score * 0.05
+        )
+        score = int(max(5, min(99, round(total))))
+
+        if score >= 75:   level = "Sehr gut"
+        elif score >= 55: level = "Gut"
+        elif score >= 35: level = "Mittel"
+        else:             level = "Schwach"
+
+        self._state = score
+        self._attrs = {
+            "level":          level,
+            "water_score":    round(water_score, 1),
+            "weather_score":  round(weather_score, 1),
+            "season_score":   season_score,
+            "moon_score":     moon_score,
+            "pressure_score": pressure_score,
+            "water_temp":     water_t,
+            "cloud":          round(cloud, 1),
+            "wind":           round(wind, 1),
+            "rain":           rain,
+            "month":          month,
+        }
+
+
 class HistorySensor(FishingBaseSensor):
     _attr_icon = "mdi:format-list-bulleted"
 
@@ -345,17 +529,71 @@ class HistorySensor(FishingBaseSensor):
         super().__init__(entry, store, "history", "Fanghistorie")
 
     async def async_update(self) -> None:
-        entries = list(self.store.entries)
+        try:
+          entries = list(self.store.entries)
+        except Exception:
+          entries = []
         latest = list(reversed(entries))[:20]
         s = stats(entries)
+
+        def _caught(e):
+            try: return int(e.get("caught") or 0) >= 1
+            except (ValueError, TypeError): return False
+
+        # Echte Fänge (caught=1)
+        real_catches = [e for e in entries if _caught(e)]
+
+        # Fänge nach Art
+        by_fish: dict[str, int] = {}
+        for e in real_catches:
+            ft = e.get("fish_type") or "Unbekannt"
+            by_fish[ft] = by_fish.get(ft, 0) + 1
+        fish_ranking = sorted(by_fish.items(), key=lambda x: x[1], reverse=True)
+
+        # Fänge pro Monat (laufendes Jahr)
+        monthly = [0] * 12
+        for e in real_catches:
+            try:
+                m = int(e.get("timestamp", "")[:7].split("-")[1]) - 1
+                monthly[m] += 1
+            except Exception:
+                pass
+
+        # Gesamtgewicht
+        total_weight = sum(
+            float(e.get("weight_kg") or 0) for e in real_catches if e.get("weight_kg")
+        )
+        avg_weight = total_weight / len(real_catches) if real_catches else 0
+
+        # Schlanke Einträge fürs Fangbuch (nur Display-Felder → HA 16KB Limit)
+        display_fields = ["timestamp","fish_type","caught","spot","bait",
+                          "length_cm","weight_kg","photo_url","latitude","longitude",
+                          "angelwetter_index","water_temp","notes"]
+        try:
+            catches_display = [
+                {k: e.get(k) for k in display_fields}
+                for e in reversed(list(entries))
+                if _caught(e)
+            ][:50]
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("catches_display Fehler: %s", exc)
+            catches_display = []
+
         self._state = f"{len(entries)} Einträge"
         self._attrs = {
-            "latest": latest,
-            "total": len(entries),
-            "success_rate": s.get("success_rate"),
+            "entries":       catches_display,   # nur Fänge, schlanke Felder
+            "latest":        latest,
+            "total":         len(entries),
+            "total_catches": len(real_catches),
+            "total_weight_kg": round(total_weight, 2),
+            "avg_weight_kg":   round(avg_weight, 2),
+            "fish_ranking":  [{"fish": f, "count": c} for f, c in fish_ranking],
+            "monthly":       monthly,
+            "success_rate":  s.get("success_rate"),
             "avg_length_cm": s.get("avg_length_cm"),
             "max_length_cm": s.get("max_length_cm"),
-            "daily_chart": s.get("daily_chart"),
+            "daily_chart":   s.get("daily_chart"),
         }
 
 
@@ -571,6 +809,9 @@ async def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[
     attrs = await _async_weather_context(hass, entry, attrs)
     s = stats(entries)
 
+    # Stündliche Wettervorhersage aus HA
+    hourly_forecast = attrs.get("forecast") or (weather.attributes.get("forecast") if weather else None) or []
+
     moon = _get_moon_state(hass, entry)
     points = bite_forecast_series(
         temperature=_float(attrs.get("temperature"), 12),
@@ -588,6 +829,7 @@ async def _forecast(hass: HomeAssistant, entry: ConfigEntry, entries: list[dict[
         apparent_temperature=_float(attrs.get("apparent_temperature"), None),
         uv_index=_float(attrs.get("uv_index"), None),
         wind_bearing=_float(attrs.get("wind_bearing"), None),
+        hourly_forecast=hourly_forecast,
     )
 
     values = [p["score"] for p in points]

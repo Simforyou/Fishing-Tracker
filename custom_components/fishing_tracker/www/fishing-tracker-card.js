@@ -401,15 +401,44 @@ class FishingTrackerCard extends HTMLElement {
   }
 
 viewOverview() {
-    const chance = this.val(this.firstState(['sensor.fishing_tracker_bite_chance','sensor.beisschance','sensor.angelwetter_index']),'87','%');
-    const bestTime = this.val(this.firstState(['sensor.fishing_tracker_best_time','sensor.beste_angelzeit']),'18:00–21:00');
-    const moon = this.val(this.firstState(['sensor.moon_phase','sensor.moon','sensor.mondphase']),'Zunehmend');
-    const waterTemp = this.val(this.firstState(['sensor.wassertemperatur_gewaesser','sensor.water_temp']),'13.2','°C');
-    const airTemp = this.attr(this.firstState(['weather.home']),'temperature','18.7','°C');
-    const pressure = this.attr(this.firstState(['weather.home']),'pressure','1015');
-    const wind = this.attr(this.firstState(['weather.home']),'wind_speed','12');
-    const solunarMaj = this.attr(this.firstState(['sensor.solunar_beisszeiten']),'major1','18:42');
-    const solunarMin = this.attr(this.firstState(['sensor.solunar_beisszeiten']),'minor1','12:28');
+    // Angelwetter Index: neuer allgemeiner Sensor hat Priorität
+    const awIdx = this.firstState(['sensor.fishing_tracker_angelwetter_index']);
+    const chance = awIdx ? (awIdx.state + '%') : this.val(this.firstState(['sensor.fishing_tracker_bite_chance']),'–','%');
+    const awLevel = awIdx?.attributes?.level || '';
+    const bestTime = this.val(this.firstState(['sensor.fishing_tracker_best_time','sensor.beste_angelzeit']),'–');
+    // Mond: verschiedene Entity-Namen probieren
+    const moonState = this.firstState(['sensor.moon','sensor.moon_phase','sensor.mondphase']);
+    const moon = moonState ? moonState.state : '–';
+    const waterTemp = this.val(this.firstState(['sensor.wassertemperatur_gewaesser','sensor.water_temp']),'–','°C');
+    // Wetter: Haftenkamp-Station hat Priorität über weather.home
+    const hkTemp  = this.firstState(['sensor.haftenkamp_temperatur']);
+    const hkWind  = this.firstState(['sensor.haftenkamp_windgeschwindigkeit']);
+    const hkPress = this.firstState(['sensor.haftenkamp_druck']);
+    const hkCloud = this.firstState(['sensor.haftenkamp_bewolkungsgrad']);
+    const hkRain  = this.firstState(['sensor.haftenkamp_niederschlag']);
+    const hkBear  = this.firstState(['sensor.haftenkamp_windrichtung']);
+    // Wetter: alle verfügbaren Quellen zusammenführen
+    const wa  = this.firstState(['weather.home'])?.attributes || {};
+    const _n  = v => (v !== undefined && v !== null && v !== '' && v !== 'unknown' && v !== 'unavailable');
+    const _hs = id => { const s = this.firstState([id]); return _n(s?.state) ? s.state : null; };
+    const _wa = key => _n(wa[key]) ? wa[key] : null;
+
+    const airTempRaw  = _hs('sensor.haftenkamp_temperatur')   ?? _wa('temperature');
+    const windRaw     = _hs('sensor.haftenkamp_windgeschwindigkeit') ?? _wa('wind_speed');
+    const pressRaw    = _hs('sensor.haftenkamp_druck')        ?? _wa('pressure');
+    const cloudRaw    = _hs('sensor.haftenkamp_bewolkungsgrad') ?? _wa('cloud_coverage');
+    const rainRaw     = _hs('sensor.haftenkamp_niederschlag');
+    const bearRaw     = _hs('sensor.haftenkamp_windrichtung') ?? _wa('wind_bearing') ?? 0;
+
+    const airTemp  = airTempRaw  != null ? airTempRaw  + '°C'   : '–';
+    const wind     = windRaw     != null ? windRaw     + ' km/h' : '–';
+    const pressure = pressRaw    != null ? pressRaw    + ' hPa'  : '–';
+    const cloud    = cloudRaw    != null ? Math.round(cloudRaw) + '%' : '–';
+    const rain     = rainRaw     != null ? rainRaw     + ' mm'   : '–';
+    const dirs     = ['N','NO','O','SO','S','SW','W','NW'];
+    const windDir  = dirs[Math.round(parseFloat(bearRaw) / 45) % 8] || '–';
+    const solunarMaj = this.attr(this.firstState(['sensor.solunar_beisszeiten']),'major1','–');
+    const solunarMin = this.attr(this.firstState(['sensor.solunar_beisszeiten']),'minor1','–');
     const ranking = this.firstState(['sensor.fishing_tracker_species_ranking','sensor.fischarten_ranking']);
     const ranks = ranking?.attributes?.ranking || [{fish_type:'Zander',score:91},{fish_type:'Barsch',score:84},{fish_type:'Hecht',score:76},{fish_type:'Karpfen',score:68}];
     const top4 = ranks.slice(0,4);
@@ -439,12 +468,12 @@ viewOverview() {
         <div class="kpi-card">
           <div class="kpi-label">Aktuelles Wetter</div>
           <div class="kpi-mid" style="color:#2ea8ff">${airTemp}</div>
-          <div class="kpi-sub">Wind ${wind} km/h · Luftdruck ${pressure} hPa · Bewölkt</div>
+          <div class="kpi-sub">Wind ${wind} · ${pressure} · ${cloud} Wolken</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">Mondphase</div>
-          <div class="kpi-mid">🌔 ${moon}</div>
-          <div class="kpi-sub">${parseInt(intScore)}% Selektion</div>
+          <div class="kpi-mid">${moon !== '–' ? '🌙 '+moon : '🌙 –'}</div>
+          <div class="kpi-sub">Index: ${intScore}%</div>
         </div>
       </div>
 
@@ -616,24 +645,95 @@ viewOverview() {
   }
 
   viewWeather() {
+    // Haftenkamp-Station primär, weather.home als Fallback
+    const hk = {
+      temp:    this.firstState(['sensor.haftenkamp_temperatur']),
+      wind:    this.firstState(['sensor.haftenkamp_windgeschwindigkeit']),
+      gusts:   this.firstState(['sensor.haftenkamp_windboen']),
+      bearing: this.firstState(['sensor.haftenkamp_windrichtung']),
+      press:   this.firstState(['sensor.haftenkamp_druck']),
+      rain:    this.firstState(['sensor.haftenkamp_niederschlag']),
+      cloud:   this.firstState(['sensor.haftenkamp_bewolkungsgrad']),
+      humid:   this.firstState(['sensor.haftenkamp_relative_luftfeuchtigkeit']),
+      solar:   this.firstState(['sensor.haftenkamp_sonneneinstrahlung']),
+    };
     const ws = this.firstState(['weather.home']);
-    const a = ws?.attributes||{};
-    const airTemp = a.temperature||'18.7';
-    const windSpeed = a.wind_speed||'12';
-    const pressure = a.pressure||'1015';
-    const humidity = a.humidity||'68';
-    const waterTemp = this.val(this.firstState(['sensor.wassertemperatur_gewaesser']),'13.2');
-    const o2 = this.attr(this.firstState(['sensor.wassertemperatur_gewaesser']),'oxygen_mg_l','9.8');
-    const pegel = this.val(this.firstState(['sensor.pegelstand']),'Normal');
+    const a = ws?.attributes || {};
+    const _nv = v => (v !== undefined && v !== null && v !== '' && v !== 'unknown' && v !== 'unavailable');
+    const _hkv = key => _nv(hk[key]?.state) ? hk[key].state : null;
+    const _av  = key => _nv(a[key]) ? a[key] : null;
+
+    const airTemp    = (_hkv('temp')    ?? _av('temperature'))  ?? '–';
+    const windSpeed  = (_hkv('wind')    ?? _av('wind_speed'))   ?? '–';
+    const windGusts  = _hkv('gusts')   ?? '–';
+    const pressure   = (_hkv('press')  ?? _av('pressure'))     ?? '–';
+    const humidity   = (_hkv('humid')  ?? _av('humidity'))     ?? '–';
+    const cloudNum   = (_hkv('cloud')  ?? _av('cloud_coverage'));
+    const cloud      = cloudNum != null ? Math.round(cloudNum) + '%' : '–';
+    const rain       = _hkv('rain')  != null ? _hkv('rain') + ' mm' : '–';
+    const solar      = _hkv('solar') != null ? Math.round(_hkv('solar')) + ' W/m²' : '–';
+    const bearDeg    = parseFloat(_hkv('bearing') ?? _av('wind_bearing') ?? 0);
+    const dirs       = ['Nord','Nordost','Ost','Südost','Süd','Südwest','West','Nordwest'];
+    const windDir    = dirs[Math.round(bearDeg / 45) % 8] || '–';
+    const waterTemp   = this.val(this.firstState(['sensor.wassertemperatur_gewaesser']), '–');
+
+    // Nächster Regen aus Radar-Sensor
+    const nextRainState = this.firstState(['sensor.neuenhaus_radar_nachster_niederschlag']);
+    let nextRainLabel = '–';
+    if (nextRainState && nextRainState.state && !['unknown','unavailable'].includes(nextRainState.state)) {
+      const raw = nextRainState.state;
+      const months = {Januar:0,Februar:1,März:2,April:3,Mai:4,Juni:5,
+        Juli:6,August:7,September:8,Oktober:9,November:10,Dezember:11};
+      const m = raw.match(/(\d+)\.\s+(\w+)\s+(\d{4})\s+um\s+(\d+):(\d+)/);
+      let target = null;
+      if (m && months[m[2]] !== undefined)
+        target = new Date(parseInt(m[3]), months[m[2]], parseInt(m[1]), parseInt(m[4]), parseInt(m[5]));
+      if (!target || isNaN(target)) target = new Date(raw);
+      if (target && !isNaN(target)) {
+        const diff = Math.round((target - new Date()) / 60000);
+        if (diff < 0)        nextRainLabel = '🌧️ Regen aktiv';
+        else if (diff < 60)  nextRainLabel = '⚠️ in ' + diff + ' Min';
+        else if (diff < 1440) {
+          const h = Math.floor(diff/60), min = diff%60;
+          nextRainLabel = '🕐 in ' + h + 'h' + (min > 0 ? ' ' + min + 'min' : '');
+        } else nextRainLabel = '🕐 in ' + Math.floor(diff/1440) + ' Tag' + (Math.floor(diff/1440)>1?'en':'');
+      } else nextRainLabel = raw;
+    }
+    const o2         = this.attr(this.firstState(['sensor.wassertemperatur_gewaesser']),'oxygen_mg_l','–');
+    const pegel      = this.val(this.firstState(['sensor.pegelstand']),'–');
     const scoreColor = v => v>=80?'#67d33f':v>=60?'#ffd23f':'#ff9d18';
-    const impacts = [
-      {label:'Temperatur',val:84},{label:'Luftdruck',val:78},{label:'Wind',val:65},{label:'Niederschlag',val:92},
+    // Wettereinfluss aus echtem Sensor
+    const awSensor = this.firstState(['sensor.fishing_tracker_angelwetter_index']);
+    const awScore  = awSensor ? parseInt(awSensor.state) : null;
+    const awAttrs  = awSensor?.attributes || {};
+    const impacts  = awAttrs.water_score != null ? [
+      {label:'Wassertemp.',  val: Math.round(awAttrs.water_score   / 0.35)},
+      {label:'Wetter',       val: Math.round(awAttrs.weather_score / 0.30)},
+      {label:'Saison',       val: awAttrs.season_score   || 70},
+      {label:'Mondphase',    val: awAttrs.moon_score     || 50},
+    ] : [
+      {label:'Wassertemp.',val:70},{label:'Wetter',val:75},{label:'Saison',val:80},{label:'Mondphase',val:50},
     ];
-    const forecast = [
-      {d:'Fr 23.05',icon:'⛅',hi:18,lo:11},{d:'Sa 24.05',icon:'🌤️',hi:20,lo:13},
-      {d:'So 25.05',icon:'🌧️',hi:17,lo:11},{d:'Mo 26.05',icon:'⛅',hi:19,lo:12},
-      {d:'Di 27.05',icon:'☀️',hi:21,lo:14},{d:'Mi 28.05',icon:'🌤️',hi:18,lo:11},{d:'Do 29.05',icon:'⛅',hi:16,lo:10},
-    ];
+    // Echter Forecast aus weather.home
+    const fcRaw = (a.forecast || []).slice(0,7);
+    const condIcon = c => {
+      if (!c) return '⛅';
+      c = c.toLowerCase();
+      if (c.includes('sunny') || c.includes('clear')) return '☀️';
+      if (c.includes('rain') || c.includes('regen')) return '🌧️';
+      if (c.includes('storm') || c.includes('thunder')) return '⛈️';
+      if (c.includes('snow') || c.includes('schnee')) return '❄️';
+      if (c.includes('fog') || c.includes('nebel')) return '🌫️';
+      if (c.includes('partly') || c.includes('teil')) return '⛅';
+      if (c.includes('cloud') || c.includes('bewölkt')) return '☁️';
+      return '⛅';
+    };
+    const forecast = fcRaw.length > 0 ? fcRaw.map(f => {
+      const d = new Date(f.datetime);
+      const dn = ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()];
+      const dd = String(d.getDate()).padStart(2,'0') + '.' + String(d.getMonth()+1).padStart(2,'0');
+      return {d: dn + ' ' + dd, icon: condIcon(f.condition), hi: Math.round(f.temperature||0), lo: Math.round(f.templow||f.temperature-6||0)};
+    }) : [];
     return `
     <div class="wt-grid">
       <!-- Tabs -->
@@ -647,11 +747,11 @@ viewOverview() {
           <div class="wt-cond muted">Teilweise bewölkt</div>
         </div>
         <div class="wt-details">
-          ${[['Wind','💨',windSpeed+' km/h'],['Luftdruck','📊',pressure+' hPa'],['Luftfeuchtigkeit','💧',humidity+'%'],['Sichtweite','👁️','10 km'],['Wassertemp.','🌊',waterTemp+'°C'],['O₂-Gehalt','💨',o2+' mg/l'],['Pegelstand','📏',pegel],['UV-Index','☀️','3 – Mittel']].map(([l,i,v])=>`<div class="wt-detail-row"><span class="muted">${i} ${l}</span><b>${v}</b></div>`).join('')}
+          ${[['Wind','💨',windSpeed+' km/h '+windDir],['Böen','💨',windGusts+' km/h'],['Luftdruck','📊',pressure+' hPa'],['Bewölkung','☁️',cloud],['Luftfeuchtigkeit','💧',humidity+'%'],['Niederschlag','🌧️',rain],['Sonneneinstrahlung','☀️',solar],['Wassertemp.','🌊',waterTemp+'°C'],['O₂-Gehalt','🫧',o2+' mg/l'],['Pegelstand','📏',pegel],['Nächster Regen','🌧️',nextRainLabel]].map(([l,i,v])=>`<div class="wt-detail-row"><span class="muted">${i} ${l}</span><b>${v}</b></div>`).join('')}
         </div>
         <div class="wt-impact">
           <div class="ov-section-title">WETTEREINFLUSS</div>
-          <div class="wt-big-val">87%<span class="muted" style="font-size:14px"> sehr gut+</span></div>
+          <div class="wt-big-val">${awScore !== null ? awScore+'%' : '–'}<span class="muted" style="font-size:14px"> ${awAttrs.level || ''}</span></div>
           ${impacts.map(f=>`<div class="wi-row"><span class="wi-label">${f.label}</span><div class="wi-bar-wrap"><div class="wi-bar" style="width:${f.val}%;background:${scoreColor(f.val)}"></div></div><span class="wi-val" style="color:${scoreColor(f.val)}">${f.val}%</span></div>`).join('')}
         </div>
       </div>
@@ -660,52 +760,89 @@ viewOverview() {
       <div class="wt-forecast">
         <div class="ov-section-title">WETTERVORSCHAU – 7 TAGE</div>
         <div class="wt-fc-row">
-          ${forecast.map(f=>`<div class="wt-fc-day"><div class="wt-fc-d">${f.d}</div><div class="wt-fc-icon">${f.icon}</div><div class="wt-fc-hi">${f.hi}°C</div><div class="wt-fc-lo muted">${f.lo}°C</div></div>`).join('')}
+          ${forecast.length > 0 ? forecast.map(f=>`<div class="wt-fc-day"><div class="wt-fc-d">${f.d}</div><div class="wt-fc-icon">${f.icon}</div><div class="wt-fc-hi">${f.hi}°C</div><div class="wt-fc-lo muted">${f.lo}°C</div></div>`).join('') : '<div class="muted" style="padding:20px">Keine Forecast-Daten in weather.home verfügbar</div>'}
         </div>
       </div>
     </div>`;
   }
 
   viewLogbook() {
-    const entries = [
-      {fish:'Zander',size:'68 cm',weight:'3.2 kg',spot:'Geheimer Bucht',bait:'Gummifisch',date:'22.05.2026',time:'07:15',note:'Perfekter Morgen!'},
-      {fish:'Barsch',size:'34 cm',weight:'0.6 kg',spot:'Alte Kiesgrube',bait:'Spinner',date:'18.05.2026',time:'18:30',note:''},
-      {fish:'Hecht',size:'71 cm',weight:'4.1 kg',spot:'Geheimer Bucht',bait:'Wobbler',date:'15.05.2026',time:'06:45',note:'Biss kurz nach Sonnenaufgang'},
-      {fish:'Karpfen',size:'54 cm',weight:'2.7 kg',spot:'Alte Kiesgrube',bait:'Boilie',date:'10.05.2026',time:'05:20',note:''},
-      {fish:'Zander',size:'62 cm',weight:'2.4 kg',spot:'Geheimer Bucht',bait:'Gummifisch',date:'02.05.2026',time:'19:50',note:''},
-    ];
-    const icons = {Zander:'🟡',Barsch:'🔴',Hecht:'🟢',Karpfen:'🟤',Aal:'⚫',Schleie:'🟠'};
+    const hist  = this.firstState(['sensor.fishing_tracker_history']);
+    const attrs = hist?.attributes || {};
+    // Echte Fänge aus HA-Sensor
+    const raw = (attrs.entries || attrs.latest || [])
+      .filter(e => parseInt(e.caught||0) >= 1)
+      .sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    const fishIcon = f => ({Zander:'🟡',Hecht:'🟢',Barsch:'🔴',Karpfen:'🟤',
+      Schleie:'🟠',Aal:'⚫',Brasse:'⚪',Rotauge:'🔵',Forelle:'🟣',
+      Rotfeder:'🟠',Döbel:'🟡',Rapfen:'⚡'}[f] || '🐟');
+    const fmtDate = ts => {
+      if (!ts) return '–';
+      const d = new Date(ts);
+      return d.toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'})
+        + ' ' + d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+    };
+
+    if (raw.length === 0) return `
+    <div class="lb-grid">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;color:rgba(255,255,255,.3);text-align:center">
+        <div style="font-size:48px;margin-bottom:12px">🎣</div>
+        <div style="font-size:16px;font-weight:800">Noch keine Fänge gespeichert</div>
+        <div style="font-size:13px;margin-top:8px">Erfasse deinen ersten Fang im Fishing Tracker Panel</div>
+      </div>
+    </div>`;
+
+    // Ersten Eintrag als Detail-Standard
+    const first = raw[0];
+
     return `
     <div class="lb-grid">
-      <!-- Filter Row -->
-      <div class="lb-filters">
-        <select class="lb-select"><option>Alle Fische</option><option>Zander</option><option>Hecht</option><option>Barsch</option></select>
-        <select class="lb-select"><option>Alle Spots</option><option>Geheimer Bucht</option><option>Alte Kiesgrube</option></select>
-        <select class="lb-select"><option>Alle Zeiten</option><option>Diese Woche</option><option>Diesen Monat</option></select>
-        <button class="lb-add-btn">+ Neuen Fang eintragen</button>
-      </div>
-
-      <!-- List + Placeholder Detail -->
       <div class="lb-layout">
-        <div class="lb-list">
-          ${entries.map((e,i)=>`<div class="lb-entry ${i===0?'lb-entry-active':''}" onclick="this.parentNode.querySelectorAll('.lb-entry').forEach(x=>x.classList.remove('lb-entry-active'));this.classList.add('lb-entry-active')">
-            <div class="lb-entry-icon">${icons[e.fish]||'🐟'}</div>
+        <!-- Liste -->
+        <div class="lb-list" id="lb-list-${this._cardId||''}">
+          ${raw.map((e,i) => `
+          <div class="lb-entry ${i===0?'lb-entry-active':''}"
+            onclick="(function(el,e){
+              el.closest('.lb-list').querySelectorAll('.lb-entry').forEach(x=>x.classList.remove('lb-entry-active'));
+              el.classList.add('lb-entry-active');
+              var det=el.closest('.lb-layout').querySelector('.lb-detail');
+              if(!det)return;
+              det.innerHTML=
+                '<div class=\'ov-section-title\'>FANGDETAILS</div>'+
+                (e.photo_url?'<img src=\''+e.photo_url+'\' onclick=\'window.open(this.src)\' style=\'width:100%;max-height:200px;object-fit:cover;border-radius:12px;margin-bottom:12px;cursor:zoom-in\'>':'')+
+                '<div style=\'font-size:22px;font-weight:900;margin-bottom:4px\'>'+e.fish_type+'</div>'+
+                '<div style=\'font-size:28px;font-weight:950;color:#67d33f\'>'+(e.length_cm?e.length_cm+' cm':'–')+(e.weight_kg?' · '+e.weight_kg+' kg':'')+
+                '</div><div style=\'font-size:12px;color:rgba(255,255,255,.5);margin:8px 0\'>'+fmtDate(e.timestamp)+'</div>'+
+                '<div class=\'lb-detail-row\'><span class=\'muted\'>📍 Spot</span><b>'+(e.spot||'–')+'</b></div>'+
+                '<div class=\'lb-detail-row\'><span class=\'muted\'>🎣 Köder</span><b>'+(e.bait||'–')+'</b></div>'+
+                (e.water_temp?'<div class=\'lb-detail-row\'><span class=\'muted\'>💧 Wassertemp.</span><b>'+e.water_temp+'°C</b></div>':'')+
+                (e.angelwetter_index?'<div class=\'lb-detail-row\'><span class=\'muted\'>🎣 Angelwetter</span><b>'+e.angelwetter_index+'%</b></div>':'')+
+                (e.notes?'<div style=\'margin-top:10px;font-size:12px;color:rgba(255,255,255,.5)\'>📝 '+e.notes+'</div>':'');
+            })(this, ${JSON.stringify(e).replace(/'/g,"\\'")})" >
+            ${e.photo_url
+              ? `<img src="${e.photo_url}" style="width:44px;height:44px;border-radius:8px;object-fit:cover;flex-shrink:0">`
+              : `<div class="lb-entry-icon">${fishIcon(e.fish_type)}</div>`}
             <div class="lb-entry-info">
-              <div class="lb-entry-fish">${e.fish}</div>
-              <div class="lb-entry-size">${e.size} · ${e.weight}</div>
-              <div class="lb-entry-spot muted">${e.spot}, ${e.date}</div>
+              <div class="lb-entry-fish">${e.fish_type||'Unbekannt'}</div>
+              <div class="lb-entry-size">${e.length_cm?e.length_cm+' cm':'–'}${e.weight_kg?' · '+e.weight_kg+' kg':''}</div>
+              <div class="lb-entry-spot muted">${e.spot||'–'} · ${fmtDate(e.timestamp).split(' ')[0]||''}</div>
             </div>
-            <div class="lb-entry-bait muted">${e.bait}</div>
+            <div class="lb-entry-bait muted" style="font-size:11px">${e.bait||'–'}</div>
           </div>`).join('')}
         </div>
-        <!-- Detail placeholder -->
+        <!-- Detail-Panel -->
         <div class="lb-detail">
           <div class="ov-section-title">FANGDETAILS</div>
-          <div class="lb-detail-placeholder">
-            <div style="font-size:48px;margin-bottom:12px">🐟</div>
-            <div style="font-size:16px;font-weight:800;color:rgba(255,255,255,.6)">Fangdetails mit Fotos</div>
-            <div class="muted" style="font-size:13px;margin-top:6px">Kommt in einem nächsten Update –<br>Foto-Upload wird noch eingebaut.</div>
-          </div>
+          ${first.photo_url ? `<img src="${first.photo_url}" onclick="window.open(this.src)" style="width:100%;max-height:200px;object-fit:cover;border-radius:12px;margin-bottom:12px;cursor:zoom-in">` : ''}
+          <div style="font-size:22px;font-weight:900;margin-bottom:4px">${first.fish_type||'–'}</div>
+          <div style="font-size:28px;font-weight:950;color:#67d33f">${first.length_cm?first.length_cm+' cm':'–'}${first.weight_kg?' · '+first.weight_kg+' kg':''}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.5);margin:8px 0">${fmtDate(first.timestamp)}</div>
+          <div class="lb-detail-row"><span class="muted">📍 Spot</span><b>${first.spot||'–'}</b></div>
+          <div class="lb-detail-row"><span class="muted">🎣 Köder</span><b>${first.bait||'–'}</b></div>
+          ${first.water_temp?`<div class="lb-detail-row"><span class="muted">💧 Wassertemp.</span><b>${first.water_temp}°C</b></div>`:''}
+          ${first.angelwetter_index?`<div class="lb-detail-row"><span class="muted">🎣 Angelwetter</span><b>${first.angelwetter_index}%</b></div>`:''}
+          ${first.notes?`<div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,.5)">📝 ${first.notes}</div>`:''}
         </div>
       </div>
     </div>`;

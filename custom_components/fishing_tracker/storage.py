@@ -50,6 +50,14 @@ class FishingStore:
         self.entries.append(entry)
         await self.async_save()
 
+    async def async_remove_entry(self, timestamp: str) -> bool:
+        before = len(self.entries)
+        self.data["entries"] = [e for e in self.entries if e.get("timestamp") != timestamp]
+        if len(self.entries) < before:
+            await self.async_save()
+            return True
+        return False
+
     async def async_export_json_files(self) -> None:
         payload = {"version": 1, "entries": _fix_payload(self.entries), "settings": _fix_payload(self.settings)}
         config_path = Path(self.hass.config.path())
