@@ -81,7 +81,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub">v2.14.6 · Premium Intelligence</div>
+      <div class="ft-sub">v2.14.7 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -327,7 +327,7 @@ const sc = v => parseInt(v) >= 80 ? '#67d33f' : parseInt(v) >= 60 ? '#ffd23f' : 
 
 // ── Einheitliche Datenbasis: DAY + WEEK aus HA-Sensoren ─────────────────────
 // DAY: 24 Stundenwerte – Backend-Sensor + stündliche Wettermodulation
-const _dayForecastAttr = haStates['sensor.fishing_tracker_bite_forecast_day']?.attributes;
+const _dayForecastAttr = findFTSensor('daily_forecast')?.attributes;
 const _hourlyFc = haStates['weather.home']?.attributes?.forecast || [];
 
 // Stündliche Wettermodifikatoren berechnen
@@ -377,7 +377,7 @@ const DAY = (() => {
 
 // WEEK: 7 Tageswerte aus sensor.fishing_tracker_daily_forecast
 // DIESELBE Datenquelle wie die Anzeige unten → keine Inkonsistenz!
-const _weekForecastAttr = haStates['sensor.fishing_tracker_daily_forecast']?.attributes?.days;
+const _weekForecastAttr = findFTSensor('daily_fc_sensor')?.attributes?.days;
 const WEEK_DATA = (() => {
   if (_weekForecastAttr?.length >= 7) {
     return _weekForecastAttr.slice(0,7).map(d => ({
@@ -724,6 +724,59 @@ function weatherConfidenceBadge(wx) {
   return `<span style="color:${col};font-size:10px">${icon} ${wx.sourceCount} Quellen · Δ${wx.deviation}°C</span>`;
 }
 
+
+// ── Sensor-Finder: findet FT-Sensoren unabhängig vom Entity-ID ───────────────
+// Sucht in haStates nach fishing_tracker Sensoren anhand von Attribut-Schlüsseln
+const _ftSensors = {};  // Cache
+
+function findFTSensor(type) {
+  if (_ftSensors[type]) return _ftSensors[type];
+
+  // Bekannte IDs zuerst probieren
+  const knownIds = {
+    history:          ['sensor.fishing_tracker_history', 'sensor.fishing_tracker_fanghistorie', 'sensor.fishing_tracker_history_sensor'],
+    bite_chance:      ['sensor.fishing_tracker_bite_chance', 'sensor.fishing_tracker_beisschance', 'sensor.beisschance'],
+    map_data:         ['sensor.fishing_tracker_map_data'],
+    species_ranking:  ['sensor.fishing_tracker_species_ranking', 'sensor.fischarten_ranking'],
+    best_time:        ['sensor.fishing_tracker_best_time', 'sensor.fishing_tracker_best_time_today', 'sensor.beste_angelzeit'],
+    angelwetter:      ['sensor.fishing_tracker_angelwetter_index'],
+    spot_analysis:    ['sensor.fishing_tracker_spot_analysis'],
+    pressure_trend:   ['sensor.fishing_tracker_pressure_trend'],
+    daily_forecast:   ['sensor.fishing_tracker_bite_forecast_day'],
+    week_forecast:    ['sensor.fishing_tracker_bite_forecast_week'],
+    daily_fc_sensor:  ['sensor.fishing_tracker_daily_forecast'],
+  };
+
+  // Erkennungsattribute je Sensor-Typ
+  const detectAttrs = {
+    history:         ['total_catches', 'fish_ranking', 'monthly', 'entries', 'latest'],
+    bite_chance:     [],
+    map_data:        ['catches', 'heatmap', 'spots'],
+    species_ranking: ['ranking'],
+    best_time:       [],
+    angelwetter:     ['water_score', 'weather_score', 'season_score'],
+    spot_analysis:   ['nearest_spot'],
+  };
+
+  // 1. Bekannte IDs probieren
+  for (const id of (knownIds[type] || [])) {
+    if (haStates[id]) { _ftSensors[type] = haStates[id]; return haStates[id]; }
+  }
+
+  // 2. Alle fishing_tracker Entitäten durchsuchen
+  const attrs = detectAttrs[type] || [];
+  for (const [eid, state] of Object.entries(haStates)) {
+    if (!eid.startsWith('sensor.')) continue;
+    if (!eid.includes('fishing') && !eid.includes('fang') && !eid.includes('angel')) continue;
+    if (attrs.length > 0 && attrs.some(a => state.attributes?.[a] !== undefined)) {
+      _ftSensors[type] = state;
+      console.log('FT Sensor gefunden:', type, '→', eid);
+      return state;
+    }
+  }
+  return null;
+}
+
 // ── Allgemeiner Angelwetter-Tagesindex (NICHT fischart- oder uhrzeit-spezifisch) ──
 // Basiert auf wissenschaftlicher Gewichtung (IGB Berlin, Guidesly, LAVB Brandenburg):
 //   35% Wassertemperatur, 30% Wetter, 20% Saison, 10% Mondphase, 5% Luftdrucktrend
@@ -736,7 +789,7 @@ function calcAngelwetterIndex() {
   const rain     = wx.precipitation;
   const solar    = wx.solar_radiation;  // W/m² – nur von lokaler Station
   const moonPh   = String(haStates['sensor.moon']?.state || '').toLowerCase();
-  const trend    = parseFloat(haStates['sensor.fishing_tracker_pressure_trend']?.state || 0);
+  const trend    = parseFloat(findFTSensor('pressure_trend')?.state || 0);
   const month    = new Date().getMonth() + 1;
 
   // ── 35% Wassertemperatur (volle 0-100 Skala) ─────────────────────────────
@@ -1083,7 +1136,7 @@ function catchFormView() {
   const person = haStates['person.christian_rduch']?.attributes;
   // Spot: gespeicherter Wert hat Vorrang, dann GPS-Sensor
   if (!catchFormData.spot) {
-    catchFormData.spot = haStates['sensor.fishing_tracker_spot_analysis']?.attributes?.nearest_spot || '';
+    catchFormData.spot = findFTSensor('spot_analysis')?.attributes?.nearest_spot || '';
   }
   const now    = new Date().toLocaleString('de-DE',{day:'2-digit',month:'2-digit',
                    year:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -1179,7 +1232,7 @@ function renderView() {
   const bestTime = getState('sensor.fishing_tracker_best_time', getState('sensor.beste_angelzeit','18:00–21:00'));
   const waterT   = getState('sensor.wassertemperatur_gewaesser', getState('sensor.water_temp','13.2'));
   const sol      = haStates['sensor.solunar_beisszeiten']?.attributes || {};
-  const ranking  = haStates['sensor.fishing_tracker_species_ranking']?.attributes?.ranking ||
+  const ranking  = findFTSensor('species_ranking')?.attributes?.ranking ||
                    [{fish_type:'Zander',score:91},{fish_type:'Barsch',score:84},{fish_type:'Hecht',score:76},{fish_type:'Karpfen',score:68}];
   const weather  = haStates['weather.home']?.attributes || {};
   const _wx      = getVerifiedWeather();
@@ -1192,7 +1245,7 @@ const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
   .sort((a,b) => b.v-a.v)
   .slice(0,6);
   // Echte 7-Tage Daten aus HA-Sensor
-  const dailyForecast = haStates['sensor.fishing_tracker_daily_forecast']?.attributes?.days || null;
+  const dailyForecast = findFTSensor('daily_fc_sensor')?.attributes?.days || null;
   const useReal = dailyForecast && dailyForecast.length > 0;
   const weekDays = useReal
     ? dailyForecast.slice(0,7).map(d => ({d: d.weekday, date: d.date_str, v: d.avg_score, peak: d.peak_score, isToday: d.is_today}))
@@ -1550,7 +1603,7 @@ const d14 = (() => {
     },
 
     spots: () => {
-      const md = haStates['sensor.fishing_tracker_map_data']?.attributes || {};
+      const md = findFTSensor('map_data')?.attributes || {};
       const allCatches = (md.catches || []).filter(c => c.caught >= 1 && c.lat && c.lon);
       const realSpots  = (md.spots  || []).filter(s => s.catches > 0 && s.lat && s.lon);
       const fishTypes  = [...new Set(allCatches.map(c => c.fish_type).filter(Boolean))].sort();
@@ -1604,7 +1657,7 @@ const d14 = (() => {
     logbook: () => {
       if (catchFormActive) return catchFormView();
       // Echte Einträge aus HA-Sensor
-      const _histSensor = haStates['sensor.fishing_tracker_history'];
+      const _histSensor = findFTSensor('history');
       const _attrs      = _histSensor?.attributes || {};
       const _sensorExists = !!_histSensor;
       const _entriesRaw   = _attrs.entries || [];
@@ -1687,8 +1740,8 @@ const d14 = (() => {
     },
 
     stats: () => {
-      const h   = haStates['sensor.fishing_tracker_history']?.attributes || {};
-      const md  = haStates['sensor.fishing_tracker_map_data']?.attributes || {};
+      const h   = findFTSensor('history')?.attributes || {};
+      const md  = findFTSensor('map_data')?.attributes || {};
       const total   = h.total_catches || 0;
       const totalW  = h.total_weight_kg || 0;
       const avgLen  = h.avg_length_cm || 0;
@@ -2351,7 +2404,7 @@ const d14 = (() => {
 }
 
 function buildForecastTab(tab) {
-  const dailyForecast2 = haStates['sensor.fishing_tracker_daily_forecast']?.attributes?.days || null;
+  const dailyForecast2 = findFTSensor('daily_fc_sensor')?.attributes?.days || null;
   const useReal2 = dailyForecast2 && dailyForecast2.length > 0;
   // WEEK_DATA ist bereits korrekt aus HA-Sensor – dieselbe Quelle wie Chart!
   const weekDays = WEEK_DATA;
@@ -2842,7 +2895,7 @@ function calcFactors() {
   const _wxf = getVerifiedWeather();
   const temp = _wxf.temperature || 12;
   const pressure = _wxf.pressure || 1015;
-  const pressureTrend = parseFloat(haStates['sensor.fishing_tracker_pressure_trend']?.state || 0);
+  const pressureTrend = parseFloat(findFTSensor('pressure_trend')?.state || 0);
   const windSpeed = _wxf.wind_speed || 10;
   const rain = _wxf.precipitation || 0;
   const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
