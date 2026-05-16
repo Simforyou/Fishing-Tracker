@@ -81,7 +81,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub">v2.14.7 · Premium Intelligence</div>
+      <div class="ft-sub">v2.14.8 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -98,6 +98,54 @@
 </div>
 
 <script>
+// ── Sensor-Finder: findet FT-Sensoren unabhängig vom Entity-ID ───────────────
+let _ftSensorsCache = {};   // wird bei jedem haStates-Update geleert
+
+function findFTSensor(type) {
+  if (_ftSensorsCache[type] !== undefined) return _ftSensorsCache[type] || null;
+
+  const knownIds = {
+    history:         ['sensor.fishing_tracker_history','sensor.fishing_tracker_fanghistorie','sensor.fanghistorie'],
+    bite_chance:     ['sensor.fishing_tracker_bite_chance','sensor.fishing_tracker_beisschance','sensor.beisschance'],
+    map_data:        ['sensor.fishing_tracker_map_data'],
+    species_ranking: ['sensor.fishing_tracker_species_ranking','sensor.fischarten_ranking'],
+    best_time:       ['sensor.fishing_tracker_best_time','sensor.fishing_tracker_best_time_today','sensor.beste_angelzeit'],
+    angelwetter:     ['sensor.fishing_tracker_angelwetter_index'],
+    spot_analysis:   ['sensor.fishing_tracker_spot_analysis'],
+    pressure_trend:  ['sensor.fishing_tracker_pressure_trend'],
+    daily_forecast:  ['sensor.fishing_tracker_bite_forecast_day'],
+    week_forecast:   ['sensor.fishing_tracker_bite_forecast_week'],
+    daily_fc_sensor: ['sensor.fishing_tracker_daily_forecast'],
+  };
+
+  const detectAttrs = {
+    history:         ['total_catches','fish_ranking','monthly'],
+    map_data:        ['catches','heatmap','spots'],
+    species_ranking: ['ranking'],
+    angelwetter:     ['water_score','weather_score'],
+    spot_analysis:   ['nearest_spot'],
+  };
+
+  // Bekannte IDs probieren
+  for (const id of (knownIds[type] || [])) {
+    if (haStates[id]) { _ftSensorsCache[type] = haStates[id]; return haStates[id]; }
+  }
+  // Fallback: Attribute durchsuchen
+  const attrs = detectAttrs[type] || [];
+  if (attrs.length > 0) {
+    for (const [eid, state] of Object.entries(haStates || {})) {
+      if (!eid.startsWith('sensor.')) continue;
+      if (attrs.some(a => state.attributes?.[a] !== undefined)) {
+        _ftSensorsCache[type] = state;
+        return state;
+      }
+    }
+  }
+  _ftSensorsCache[type] = false;  // nicht null → verhindert endlose Suche
+  return null;
+}
+
+
 // ── Clock ──────────────────────────────────────────────────────────────────────
 setInterval(() => {
   const t = new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
@@ -117,6 +165,7 @@ async function connectHA() {
       const haEl = window.parent.document.querySelector('home-assistant');
       if (haEl && haEl.hass) {
         haStates = haEl.hass.states || {};
+        _ftSensorsCache = {};  // Cache leeren bei Update
         return true;
       }
     }
@@ -724,58 +773,6 @@ function weatherConfidenceBadge(wx) {
   return `<span style="color:${col};font-size:10px">${icon} ${wx.sourceCount} Quellen · Δ${wx.deviation}°C</span>`;
 }
 
-
-// ── Sensor-Finder: findet FT-Sensoren unabhängig vom Entity-ID ───────────────
-// Sucht in haStates nach fishing_tracker Sensoren anhand von Attribut-Schlüsseln
-const _ftSensors = {};  // Cache
-
-function findFTSensor(type) {
-  if (_ftSensors[type]) return _ftSensors[type];
-
-  // Bekannte IDs zuerst probieren
-  const knownIds = {
-    history:          ['sensor.fishing_tracker_history', 'sensor.fishing_tracker_fanghistorie', 'sensor.fishing_tracker_history_sensor'],
-    bite_chance:      ['sensor.fishing_tracker_bite_chance', 'sensor.fishing_tracker_beisschance', 'sensor.beisschance'],
-    map_data:         ['sensor.fishing_tracker_map_data'],
-    species_ranking:  ['sensor.fishing_tracker_species_ranking', 'sensor.fischarten_ranking'],
-    best_time:        ['sensor.fishing_tracker_best_time', 'sensor.fishing_tracker_best_time_today', 'sensor.beste_angelzeit'],
-    angelwetter:      ['sensor.fishing_tracker_angelwetter_index'],
-    spot_analysis:    ['sensor.fishing_tracker_spot_analysis'],
-    pressure_trend:   ['sensor.fishing_tracker_pressure_trend'],
-    daily_forecast:   ['sensor.fishing_tracker_bite_forecast_day'],
-    week_forecast:    ['sensor.fishing_tracker_bite_forecast_week'],
-    daily_fc_sensor:  ['sensor.fishing_tracker_daily_forecast'],
-  };
-
-  // Erkennungsattribute je Sensor-Typ
-  const detectAttrs = {
-    history:         ['total_catches', 'fish_ranking', 'monthly', 'entries', 'latest'],
-    bite_chance:     [],
-    map_data:        ['catches', 'heatmap', 'spots'],
-    species_ranking: ['ranking'],
-    best_time:       [],
-    angelwetter:     ['water_score', 'weather_score', 'season_score'],
-    spot_analysis:   ['nearest_spot'],
-  };
-
-  // 1. Bekannte IDs probieren
-  for (const id of (knownIds[type] || [])) {
-    if (haStates[id]) { _ftSensors[type] = haStates[id]; return haStates[id]; }
-  }
-
-  // 2. Alle fishing_tracker Entitäten durchsuchen
-  const attrs = detectAttrs[type] || [];
-  for (const [eid, state] of Object.entries(haStates)) {
-    if (!eid.startsWith('sensor.')) continue;
-    if (!eid.includes('fishing') && !eid.includes('fang') && !eid.includes('angel')) continue;
-    if (attrs.length > 0 && attrs.some(a => state.attributes?.[a] !== undefined)) {
-      _ftSensors[type] = state;
-      console.log('FT Sensor gefunden:', type, '→', eid);
-      return state;
-    }
-  }
-  return null;
-}
 
 // ── Allgemeiner Angelwetter-Tagesindex (NICHT fischart- oder uhrzeit-spezifisch) ──
 // Basiert auf wissenschaftlicher Gewichtung (IGB Berlin, Guidesly, LAVB Brandenburg):
