@@ -81,7 +81,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub">v2.14.8 · Premium Intelligence</div>
+      <div class="ft-sub">v2.15.1 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1056,8 +1056,9 @@ async function saveCatch() {
   const wx      = getVerifiedWeather();
   const waterT  = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 0) || null;
   const person  = haStates['person.christian_rduch']?.attributes;
-  const lat     = person?.latitude  ?? null;
-  const lon     = person?.longitude ?? null;
+  // GPS-Priorität: Gerät → EXIF aus Foto → null
+  const lat = person?.latitude  ?? catchFormData._exifLat ?? null;
+  const lon = person?.longitude ?? catchFormData._exifLon ?? null;
   const awIdx   = calcAngelwetterIndex();
 
   const payload = {
@@ -1069,6 +1070,7 @@ async function saveCatch() {
     angelwetter_index: awIdx,
     ...(weight ? {weight_kg: weight} : {}),
     ...(lat    ? {latitude: lat, longitude: lon} : {}),
+    ...(catchFormData.datetime ? {catch_datetime: catchFormData.datetime} : {}),
     ...(catchPhotoData ? {photo_data: catchPhotoData} : {}),
     ...(waterT ? {water_temp: waterT} : {}),
   };
@@ -1093,32 +1095,156 @@ async function saveCatch() {
   }
 }
 
+
+// ── EXIF-Extraktion aus Foto (GPS + Datum) ────────────────────────────────────
+function extractExifData(file, callback) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const buf = e.target.result;
+      const view = new DataView(buf);
+      let offset = 2;  // Skip SOI marker
+      let exif = null;
+
+      // EXIF-Segment finden (APP1 = 0xFFE1)
+      while (offset < buf.byteLength - 2) {
+        const marker = view.getUint16(offset);
+        const len    = view.getUint16(offset + 2);
+        if (marker === 0xFFE1) {
+          // Prüfe auf "Exif" Header
+          const exifHeader = String.fromCharCode(
+            view.getUint8(offset+4), view.getUint8(offset+5),
+            view.getUint8(offset+6), view.getUint8(offset+7)
+          );
+          if (exifHeader === 'Exif') {
+            exif = { buf, start: offset + 10 };
+          }
+          break;
+        }
+        offset += 2 + len;
+      }
+      if (!exif) { callback(null); return; }
+
+      // Byte-Order ermitteln
+      const tiffStart = exif.start;
+      const bo = view.getUint16(tiffStart);  // 0x4949 = LE, 0x4D4D = BE
+      const le = bo === 0x4949;
+      const u16 = (o) => view.getUint16(tiffStart + o, le);
+      const u32 = (o) => view.getUint32(tiffStart + o, le);
+      const rational = (o) => u32(o) / u32(o + 4);
+
+      // IFD0 durchsuchen → GPS-IFD-Pointer + DateTime finden
+      const ifd0Offset = u32(4);
+      const ifd0Count  = u16(ifd0Offset);
+      let gpsIfdOffset = null;
+      let dateTimeStr  = null;
+
+      for (let i = 0; i < ifd0Count; i++) {
+        const entry = ifd0Offset + 2 + i * 12;
+        const tag   = u16(entry);
+        const type  = u16(entry + 2);
+        const count = u32(entry + 4);
+        const valOff = entry + 8;
+
+        if (tag === 0x8825) {  // GPS IFD pointer
+          gpsIfdOffset = u32(valOff);
+        }
+        if (tag === 0x9003 || tag === 0x0132) {  // DateTimeOriginal / DateTime
+          const strOff = u32(valOff);
+          let s = '';
+          for (let j = 0; j < count - 1; j++)
+            s += String.fromCharCode(view.getUint8(tiffStart + strOff + j));
+          dateTimeStr = s;  // Format: "2026:05:16 11:30:00"
+        }
+      }
+
+      // GPS-IFD parsen
+      let lat = null, lon = null;
+      if (gpsIfdOffset) {
+        const gpsCount = u16(gpsIfdOffset);
+        let latArr = null, latRef = 'N', lonArr = null, lonRef = 'E';
+        for (let i = 0; i < gpsCount; i++) {
+          const entry  = gpsIfdOffset + 2 + i * 12;
+          const tag    = u16(entry);
+          const valOff = entry + 8;
+          if (tag === 0x0001) latRef = String.fromCharCode(view.getUint8(tiffStart + u32(valOff)));
+          if (tag === 0x0003) lonRef = String.fromCharCode(view.getUint8(tiffStart + u32(valOff)));
+          if (tag === 0x0002) {  // Latitude (3 rationals)
+            const o = u32(valOff);
+            latArr = [rational(o), rational(o+8), rational(o+16)];
+          }
+          if (tag === 0x0004) {  // Longitude
+            const o = u32(valOff);
+            lonArr = [rational(o), rational(o+8), rational(o+16)];
+          }
+        }
+        if (latArr && lonArr) {
+          lat = (latArr[0] + latArr[1]/60 + latArr[2]/3600) * (latRef==='S'?-1:1);
+          lon = (lonArr[0] + lonArr[1]/60 + lonArr[2]/3600) * (lonRef==='W'?-1:1);
+        }
+      }
+
+      // DateTime aus EXIF → ISO Format
+      let isoDate = null;
+      if (dateTimeStr) {
+        // "2026:05:16 11:30:00" → "2026-05-16T11:30"
+        isoDate = dateTimeStr.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3').replace(' ','T').slice(0,16);
+      }
+
+      callback({ lat, lon, date: isoDate });
+    } catch(ex) {
+      console.warn('EXIF-Fehler:', ex);
+      callback(null);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 function onPhotoSelected(input) {
   const file = input.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    // Bild auf max 1200px verkleinern + JPEG 82% komprimieren
-    const img = new Image();
-    img.onload = () => {
-      const MAX = 1200;
-      let w = img.width, h = img.height;
-      if (w > MAX || h > MAX) {
-        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
-        else       { w = Math.round(w * MAX / h); h = MAX; }
+
+  // EXIF zuerst auslesen (GPS + Datum)
+  extractExifData(file, function(exif) {
+    if (exif) {
+      // GPS aus Foto übernehmen
+      if (exif.lat && exif.lon) {
+        catchFormData._exifLat = exif.lat;
+        catchFormData._exifLon = exif.lon;
+        console.log('📍 GPS aus EXIF:', exif.lat.toFixed(5), exif.lon.toFixed(5));
       }
-      const canvas = document.createElement('canvas');
-      canvas.width = w; canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      catchPhotoData = canvas.toDataURL('image/jpeg', 0.82);
-      const kb = Math.round(catchPhotoData.length * 0.75 / 1024);
-      const lbl = document.getElementById('cf_photo_label');
-      if (lbl) lbl.textContent = '✅ ' + file.name + ' (' + kb + ' KB)';
-      renderView();  // Preview aktualisieren
+      // Datum aus Foto übernehmen (für nachträgliche Einträge)
+      if (exif.date && !catchFormData._dateManuallySet) {
+        catchFormData.datetime = exif.date;
+        cfSave('datetime', exif.date);
+      }
+    }
+
+    // Bild komprimieren (max 1200px, JPEG 82%)
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX = 1200;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+          else       { w = Math.round(w * MAX / h); h = MAX; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        catchPhotoData = canvas.toDataURL('image/jpeg', 0.82);
+        const kb = Math.round(catchPhotoData.length * 0.75 / 1024);
+        const exifInfo = exif?.lat ? ` · 📍GPS` : '';
+        const dateInfo = exif?.date ? ` · 📅 ${exif.date.replace('T',' ')}` : '';
+        console.log('📷 Foto:', file.name, kb+'KB', exifInfo, dateInfo);
+        renderView();
+      };
+      img.src = e.target.result;
     };
-    img.src = e.target.result;
-  };
-  reader.readAsDataURL(file);
+    reader.readAsDataURL(file);
+  });
 }
 
 
@@ -1176,6 +1302,14 @@ function catchFormView() {
     ${inp('length', '📏 Länge (cm) *', 'number', 'z.B. 68', 'min="1" max="200"')}
     ${inp('weight', '⚖️ Gewicht (kg)', 'number', 'Optional', 'min="0" max="50" step="0.1"')}
     ${inp('spot', '📍 Spot / Gewässer *', 'text', 'z.B. Geheimer Bucht')}
+    <div style="margin-bottom:14px">
+      <label style="display:block;font-size:11px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px">🕐 Datum &amp; Uhrzeit</label>
+      <input id="cf_datetime" type="datetime-local"
+        value="${(catchFormData.datetime||new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16))}"
+        oninput="cfSave('datetime',this.value);catchFormData._dateManuallySet=true"
+        style="width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:9px;padding:10px 12px;color:#fff;font-size:14px;font-family:inherit;box-sizing:border-box;color-scheme:dark">
+      <div style="font-size:10px;color:rgba(255,255,255,.3);margin-top:4px">Standard: jetzt · aus Foto-EXIF wenn vorhanden</div>
+    </div>
     ${sel('bait', '🎣 Köder *', ALL_BAITS)}
     ${inp('notes', '📝 Notizen', 'text', 'Optional')}
 
@@ -1183,18 +1317,21 @@ function catchFormView() {
     <div style="margin-bottom:18px">
       <label style="display:block;font-size:11px;color:rgba(255,255,255,.5);font-weight:700;
                     text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📷 Foto</label>
-      <label style="display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);
-                    border:1px dashed rgba(255,255,255,.15);border-radius:10px;padding:12px;cursor:pointer">
-        <span id="cf_photo_label" style="font-size:13px;color:rgba(255,255,255,.6)">
-          ${catchPhotoData ? '✅ Foto ausgewählt' : '📷 Foto aufnehmen oder auswählen'}
-        </span>
-        <input type="file" accept="image/*" capture="environment" style="display:none"
-          onchange="onPhotoSelected(this)">
-      </label>
       ${catchPhotoData
-        ? '<img src="' + catchPhotoData + '" id="cf_photo_preview" style="width:100%;border-radius:10px;margin-top:8px;max-height:220px;object-fit:cover;border:2px solid rgba(103,211,63,.4)">' +
-          '<button onclick="catchPhotoData=null;renderView()" style="width:100%;margin-top:6px;background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);color:#ff6b6b;border-radius:8px;padding:6px;font-size:12px;cursor:pointer">🗑️ Foto entfernen</button>'
-        : '<img id="cf_photo_preview" style="display:none">'}
+        ? '<img src="' + catchPhotoData + '" style="width:100%;border-radius:10px;margin-bottom:8px;max-height:220px;object-fit:cover;border:2px solid rgba(103,211,63,.4)">' +
+          '<button onclick="catchPhotoData=null;renderView()" style="width:100%;background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);color:#ff6b6b;border-radius:8px;padding:8px;font-size:13px;cursor:pointer">🗑️ Foto entfernen</button>'
+        : '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">' +
+          '<label style="display:flex;flex-direction:column;align-items:center;gap:6px;background:rgba(255,255,255,.06);border:1px dashed rgba(255,255,255,.15);border-radius:10px;padding:14px;cursor:pointer;text-align:center">' +
+          '<span style="font-size:28px">📷</span>' +
+          '<span style="font-size:12px;color:rgba(255,255,255,.6);font-weight:700">Kamera</span>' +
+          '<input type="file" accept="image/*" capture="environment" style="display:none" onchange="onPhotoSelected(this)">' +
+          '</label>' +
+          '<label style="display:flex;flex-direction:column;align-items:center;gap:6px;background:rgba(255,255,255,.06);border:1px dashed rgba(255,255,255,.15);border-radius:10px;padding:14px;cursor:pointer;text-align:center">' +
+          '<span style="font-size:28px">🖼️</span>' +
+          '<span style="font-size:12px;color:rgba(255,255,255,.6);font-weight:700">Galerie</span>' +
+          '<input type="file" accept="image/*" style="display:none" onchange="onPhotoSelected(this)">' +
+          '</label>' +
+          '</div>'}
     </div>
 
     <!-- Auto-Daten -->
@@ -1656,7 +1793,6 @@ const d14 = (() => {
       // Echte Einträge aus HA-Sensor
       const _histSensor = findFTSensor('history');
       const _attrs      = _histSensor?.attributes || {};
-      const _sensorExists = !!_histSensor;
       const _entriesRaw   = _attrs.entries || [];
       const _latestRaw    = _attrs.latest  || [];
 
@@ -1673,14 +1809,7 @@ const d14 = (() => {
       }).filter(_isCatch);
       const entries = [..._raw].sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-      // Debug-Banner (verschwindet wenn Fänge da sind)
-      const _debugInfo = !entries.length ? `<div style="background:rgba(255,160,0,.1);border:1px solid rgba(255,160,0,.3);border-radius:10px;padding:12px;margin-bottom:12px;font-size:11px;color:rgba(255,180,0,.8)">
-        🔍 Debug: Sensor ${_sensorExists?'✅ vorhanden':'❌ fehlt'} &nbsp;|&nbsp;
-        entries: ${_entriesRaw.length} &nbsp;|&nbsp;
-        latest: ${_latestRaw.length} &nbsp;|&nbsp;
-        alle Einträge (inkl. nicht-Fang): ${_latestRaw.length}<br>
-        ${_latestRaw.length>0?'Letzter Eintrag caught='+_latestRaw[0]?.caught+' fish='+_latestRaw[0]?.fish_type:'Keine Einträge in latest'}
-      </div>` : '';
+      const _debugInfo = '';
 
       const fmtDate = ts => {
         const d = new Date(ts);
