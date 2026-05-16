@@ -63,6 +63,7 @@ SERVICE_LOG_SCHEMA = vol.Schema({
     vol.Optional("photo_data"): cv.string,       # base64 JPEG
     vol.Optional("water_temp"): vol.Coerce(float),
     vol.Optional("angelwetter_index"): vol.Coerce(int),
+    vol.Optional("catch_datetime"): cv.string,  # ISO: "2026-05-16T11:30"
 })
 
 SERVICE_IMPORT_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker.csv"): cv.string})
@@ -198,7 +199,16 @@ async def async_log_entry(hass: HomeAssistant, entry: ConfigEntry, caught: int, 
     latitude = data.get("latitude", person_attrs.get("latitude"))
     longitude = data.get("longitude", person_attrs.get("longitude"))
 
-    now = datetime.now().astimezone()
+    # Datum: aus Formular (nachträgliche Einträge) oder jetzt
+    _dt_str = data.get("catch_datetime")
+    if _dt_str:
+        try:
+            from datetime import datetime as _dt
+            now = _dt.fromisoformat(_dt_str).astimezone()
+        except Exception:
+            now = datetime.now().astimezone()
+    else:
+        now = datetime.now().astimezone()
 
     pressure = _float(weather_attrs.get("pressure"), 1015)
     temperature = _float(weather_attrs.get("temperature"), 12)

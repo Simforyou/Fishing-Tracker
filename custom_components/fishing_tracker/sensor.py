@@ -71,6 +71,8 @@ class FishingBaseSensor(SensorEntity):
         self._attr_should_poll = True
         self._state: Any = None
         self._attrs: dict[str, Any] = {}
+        # Entity-ID explizit setzen → Panel liest immer sensor.fishing_tracker_{key}
+        self.entity_id = f"sensor.fishing_tracker_{key.replace('-', '_')}"  
 
     @property
     def native_value(self):
