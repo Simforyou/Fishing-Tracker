@@ -157,16 +157,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         img_type   = call.data.get("image_type", "image/jpeg")
 
         prompt = (
-            "Analysiere diese Tiefenkarte aus der Fish Deeper App.\n\n"
-            "Aufgabe 1 - Tiefenpunkte: Extrahiere alle sichtbaren Tiefenzahlen mit Position (x%, y% von oben-links).\n"
-            "Aufgabe 2 - Tiefenzonen: Beschreibe den Umriss jeder Tiefenzone als Polygon [x%,y%] im Uhrzeigersinn.\n\n"
-            "Antworte NUR mit validem JSON:\n"
-            '{"depths":[{"value":1.6,"x_pct":45,"y_pct":30,"label":"1.6"}],'
-            '"zones":[{"depth_m":2.0,"label":"2","outline":[[40,20],[60,20],[62,45],[38,45]]}],'
-            '"max_depth":2.0,"min_depth":0.6,'
-            '"waterway_shape":"Beschreibung",'
-            '"landmarks":[{"type":"Bruecke","x_pct":30,"y_pct":5,"description":"Details"}],'
-            '"depth_unit":"m"}'
+            "Du analysierst einen Fish Deeper Echolot-Screenshot einer Gewässertiefenkarte.\n\n"
+
+            "Die Karte zeigt Tiefenzonen durch FARBEN:\n"
+            "- Sehr hell (fast weiß/hellblau) = flach (< 0.5m)\n"
+            "- Hellblau = 0.5-1m\n"
+            "- Mittelblau = 1-2m\n"
+            "- Dunkelblau = 2-4m\n"
+            "- Sehr dunkelblau/violett = > 4m\n"
+            "Konturlinien trennen die Zonen. Tiefenzahlen beschriften jede Zone.\n\n"
+
+            "AUFGABE 1 – Tiefenzonen nach Farbe:\n"
+            "Erkenne JEDE farblich unterschiedliche Fläche als eigene Tiefenzone.\n"
+            "Zeichne den VOLLSTÄNDIGEN Umriss jeder Zone als Polygon.\n"
+            "Nutze 20-40 Punkte pro Zone für genaue Kurven.\n"
+            "Koordinaten: [x%, y%] von oben-links (0,0) bis unten-rechts (100,100).\n"
+            "Decke die gesamte Wasserfläche lückenlos mit Polygonen ab.\n\n"
+
+            "AUFGABE 2 – Tiefenpunkte:\n"
+            "Extrahiere alle sichtbaren Tiefenzahlen mit ihrer Position.\n\n"
+
+            "Antworte NUR mit validem JSON (kein Markdown):\n"
+            '{"zones":['
+            '{"depth_m":0.6,"label":"0.6","color":"hellblau",'
+            '"outline":[[20,5],[80,5],[82,15],[78,30],[75,45],[78,60],[80,75],[82,90],[20,90],[18,75],[15,60],[18,45],[15,30],[18,15]]},'
+            '{"depth_m":1.3,"label":"1.3","color":"mittelblau",'
+            '"outline":[[35,20],[65,20],[67,40],[65,60],[35,60],[33,40]]}'
+            '],'
+            '"depths":[{"value":1.6,"x_pct":45,"y_pct":30,"label":"1.6"}],'
+            '"max_depth":2.0,"min_depth":0.6,"depth_unit":"m",'
+            '"coverage":"Beschreibung der Gewässerform"}'
         )
 
         payload = {
@@ -436,6 +456,56 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=vol.Schema({
                 vol.Required("scan_name"): cv.string,
                 vol.Required("api_key"):   cv.string,
+            }))
+
+    async def handle_store_image_chunk(call: ServiceCall) -> None:
+        """Speichert Bild-Chunk in hass.data (umgeht HA-Größenlimit)."""
+        scan_name = call.data.get("scan_name", "")
+        chunk     = call.data.get("chunk", "")
+        chunk_idx = call.data.get("chunk_idx", 0)
+        total     = call.data.get("total_chunks", 1)
+        bounds    = call.data.get("image_bounds", "")
+        img_type  = call.data.get("image_type", "image/jpeg")
+
+        entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+        if "img_chunks" not in entry_data:
+            entry_data["img_chunks"] = {}
+        if scan_name not in entry_data["img_chunks"]:
+            entry_data["img_chunks"][scan_name] = {"chunks": {}, "total": total, "bounds": bounds, "type": img_type}
+
+        entry_data["img_chunks"][scan_name]["chunks"][chunk_idx] = chunk
+
+        # Alle Chunks da? → zusammenbauen und in Store speichern
+        sc = entry_data["img_chunks"][scan_name]
+        if len(sc["chunks"]) >= sc["total"]:
+            full_b64 = "".join(sc["chunks"][i] for i in range(sc["total"]))
+            img_url  = f"data:{sc['type']};base64,{full_b64}"
+            # Bestehenden Scan updaten oder neu anlegen
+            existing = next((s for s in store.deeper_scans if s.get("scan_name") == scan_name), None)
+            if existing:
+                existing["image_data_url"] = img_url
+                existing["image_bounds"]   = sc["bounds"]
+                await store.async_save()
+            else:
+                await store.async_save_deeper_scan({
+                    "scan_name": scan_name, "timestamp": datetime.now().isoformat(),
+                    "depth_count": 0, "min_depth": 0, "max_depth": 0,
+                    "depth_points": [], "zones": [],
+                    "image_data_url": img_url, "image_bounds": sc["bounds"],
+                })
+            del entry_data["img_chunks"][scan_name]
+            entry_data["deeper_scans"] = store.deeper_scans
+            async_dispatcher_send(hass, SIGNAL_UPDATED)
+
+    if not hass.services.has_service(DOMAIN, "store_image_chunk"):
+        hass.services.async_register(DOMAIN, "store_image_chunk", handle_store_image_chunk,
+            schema=vol.Schema({
+                vol.Required("scan_name"):    cv.string,
+                vol.Required("chunk"):        cv.string,
+                vol.Required("chunk_idx"):    vol.Coerce(int),
+                vol.Optional("total_chunks",  default=1): vol.Coerce(int),
+                vol.Optional("image_bounds",  default=""): cv.string,
+                vol.Optional("image_type",    default="image/jpeg"): cv.string,
             }))
     if not hass.services.has_service(DOMAIN, SERVICE_LOG_CATCH):
         hass.services.async_register(DOMAIN, SERVICE_LOG_CATCH, handle_log_catch, schema=SERVICE_LOG_SCHEMA)

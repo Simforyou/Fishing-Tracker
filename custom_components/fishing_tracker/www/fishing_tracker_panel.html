@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.21.1 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.21.3 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -2067,7 +2067,7 @@ async function loadHistoricalWeatherForForm() {
 
 function updateCatchBaits(fishName) {
   const RAUBFISCH_ARTEN = ['Zander','Hecht','Barsch','Aal','Forelle','Wels','Rapfen','Döbel'];
-  const FRIEDFISCH_ARTEN = ['Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Güster','Grundel','Ukelei','Schleie'];
+  const FRIEDFISCH_ARTEN = ['Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Güster','Grundel','Ukelei'];
   const RAUBFISCH_BAITS = ['Gummifisch','Wobbler','Spinner','Blinker','Jigspinner','Jerkbait','Swimbait','Plopper','Oberflächenköder','Twister','Deadbait','Kleinfisch'];
   const FRIEDFISCH_BAITS = ['Mais','Boilie','Wurm','Made','Pellets','Teig','Brot','Hanf','Naturköder','Tauwurm','Pinkies','Hanfsamen'];
   const ALL_BAITS = [...new Set([...RAUBFISCH_BAITS, ...FRIEDFISCH_BAITS])];
@@ -2489,7 +2489,7 @@ function onPhotoSelected(input) {
 
 function catchFormView() {
   const ALL_FISH = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse',
-                    'Rotauge','Rotfeder','Döbel','Rapfen','Forelle','Wels','Güster','Grundel'];
+                    'Rotauge','Rotfeder','Döbel','Rapfen','Forelle','Wels','Güster','Grundel','Ukelei'];
   const RAUBFISCH_BAITS = ['Gummifisch','Wobbler','Spinner','Blinker','Jigspinner',
                           'Jerkbait','Swimbait','Plopper','Oberflächenköder',
                           'Twister','Deadbait','Kleinfisch'];
@@ -2498,7 +2498,7 @@ function catchFormView() {
   const ALL_BAITS = [...new Set([...RAUBFISCH_BAITS, ...FRIEDFISCH_BAITS])];
   // Köder je nach Fischart vorfiltern (hardcoded – fishData nicht im scope)
   const RAUBFISCH_ARTEN = ['Zander','Hecht','Barsch','Aal','Forelle','Wels','Rapfen','Döbel'];
-  const FRIEDFISCH_ARTEN = ['Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Güster','Grundel','Ukelei','Schleie'];
+  const FRIEDFISCH_ARTEN = ['Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Güster','Grundel','Ukelei'];
   function getBaitsForFish(fishName) {
     if (RAUBFISCH_ARTEN.includes(fishName)) return RAUBFISCH_BAITS;
     if (FRIEDFISCH_ARTEN.includes(fishName)) return FRIEDFISCH_BAITS;
@@ -3412,7 +3412,7 @@ const d14 = (() => {
         <select onchange="wizState.fish=this.value;wizState.turb=null;wizState.light=null;wizState.depth=null;wizState.stelle=null;wizState.jahreszeit=null;wizState.wetter=null;renderView()" style="width:100%;background:rgba(15,30,50,.98);border:1.5px solid rgba(46,168,255,.4);border-radius:13px;color:#fff;padding:13px 16px;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:14px;-webkit-appearance:none;appearance:none;background-image:url('data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'8\'><path d=\'M0 0l6 8 6-8z\' fill=\'rgba(255,255,255,0.5)\'/></svg>');background-repeat:no-repeat;background-position:right 14px center">
           <option value="" style="background:var(--bg-panel)">– Fischart wählen –</option>
           <optgroup label="🎣 Raubfische">${['Zander','Hecht','Barsch','Aal','Forelle'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:var(--bg-panel)">${{'Zander':'🟡','Hecht':'🟢','Barsch':'🔴','Aal':'⚫','Forelle':'🟠'}[f]} ${f}</option>`).join('')}</optgroup>
-          <optgroup label="🌿 Friedfische">${['Karpfen','Schleie','Brasse','Rotauge','Rotfeder'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:var(--bg-panel)">${{'Karpfen':'🟤','Schleie':'🟠','Brasse':'🥈','Rotauge':'🔵','Rotfeder':'🟣'}[f]} ${f}</option>`).join('')}</optgroup>
+          <optgroup label="🌿 Friedfische">${['Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Güster','Grundel','Ukelei'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:var(--bg-panel)">${{'Karpfen':'🟤','Schleie':'🟠','Brasse':'🥈','Rotauge':'🔵','Rotfeder':'🟣','Güster':'🥈','Grundel':'🟤','Ukelei':'🩵'}[f]||'🐟'} ${f}</option>`).join('')}</optgroup>
           <optgroup label="⚡ Sonderfälle">${['Döbel','Rapfen'].map(f=>`<option value="${f}" ${w.fish===f?'selected':''} style="background:var(--bg-panel)">${{'Döbel':'🟫','Rapfen':'🔶'}[f]} ${f}</option>`).join('')}</optgroup>
         </select>
 
@@ -3643,7 +3643,7 @@ const d14 = (() => {
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.21.1'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.21.3'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">🌊 Deeper Tiefenkarte</div>
