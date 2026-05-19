@@ -170,7 +170,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "AUFGABE 1 – Tiefenzonen nach Farbe:\n"
             "Erkenne JEDE farblich unterschiedliche Fläche als eigene Tiefenzone.\n"
             "Zeichne den VOLLSTÄNDIGEN Umriss jeder Zone als Polygon.\n"
-            "Nutze 20-40 Punkte pro Zone für genaue Kurven.\n"
+            "Nutze 10-15 Punkte pro Zone (mehr nur bei sehr komplexen Formen).\n"
             "Koordinaten: [x%, y%] von oben-links (0,0) bis unten-rechts (100,100).\n"
             "Decke die gesamte Wasserfläche lückenlos mit Polygonen ab.\n\n"
 
@@ -191,7 +191,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         payload = {
             "model": "claude-sonnet-4-5",
-            "max_tokens": 2000,
+            "max_tokens": 4096,
             "messages": [{
                 "role": "user",
                 "content": [
@@ -235,7 +235,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         if c.get("type") == "text"
                     )
                     clean = raw.replace("```json", "").replace("```", "").strip()
-                    parsed = _json.loads(clean)
+                    try:
+                        parsed = _json.loads(clean)
+                    except Exception:
+                        # JSON abgeschnitten → Reparaturversuch
+                        try:
+                            d = clean.count('{') - clean.count('}')
+                            a = clean.count('[') - clean.count(']')
+                            fixed = clean + ']' * max(0, a) + '}' * max(0, d)
+                            parsed = _json.loads(fixed)
+                        except Exception:
+                            parsed = {"depths": [], "zones": [], "max_depth": 0, "min_depth": 0}
                     result = {"success": True, "data": parsed, "error": None}
                 else:
                     result["error"] = f"API Fehler {resp.status}: {body.get('error', {}).get('message', '')}"
