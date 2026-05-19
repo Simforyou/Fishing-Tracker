@@ -159,13 +159,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         prompt = (
             "Du analysierst einen Fish Deeper Echolot-Screenshot einer Gewässertiefenkarte.\n\n"
 
-            "Die Karte zeigt Tiefenzonen durch FARBEN:\n"
-            "- Sehr hell (fast weiß/hellblau) = flach (< 0.5m)\n"
-            "- Hellblau = 0.5-1m\n"
-            "- Mittelblau = 1-2m\n"
-            "- Dunkelblau = 2-4m\n"
-            "- Sehr dunkelblau/violett = > 4m\n"
-            "Konturlinien trennen die Zonen. Tiefenzahlen beschriften jede Zone.\n\n"
+            "Die Karte zeigt Tiefenzonen durch Farben.\n"
+            "Die Deeper App nutzt typisch diese Farbskala (von flach → tief):\n"
+            "Weiß/sehr hell → Hellblau → Mittelblau → Blau-lila → Lila/Violett → Pink/Rosa → Rot/Dunkelrot\n"
+            "Die tiefsten Stellen sind oft PINK oder ROT, nicht dunkelblau!\n"
+            "Konturlinien trennen die Zonen. Sichtbare Tiefenzahlen beschriften jede Zone.\n\n"
+            "WICHTIG: Lies ZUERST alle sichtbaren Tiefenzahlen (z.B. 0.6, 1.3, 1.6, 2).\n"
+            "Identifiziere dann welche Farbe zu welcher Zahl gehört.\n"
+            "Nutze die Zahlen – nicht die Farbbeschreibungen – als Grundlage.\n\n"
 
             "AUFGABE 1 – Tiefenzonen nach Farbe:\n"
             "Erkenne JEDE farblich unterschiedliche Fläche als eigene Tiefenzone.\n"
