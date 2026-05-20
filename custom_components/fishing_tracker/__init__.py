@@ -164,7 +164,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "Weiß/sehr hell → Hellblau → Mittelblau → Blau-lila → Lila/Violett → Pink/Rosa → Rot/Dunkelrot\n"
             "Die tiefsten Stellen sind oft PINK oder ROT, nicht dunkelblau!\n"
             "Konturlinien trennen die Zonen. Sichtbare Tiefenzahlen beschriften jede Zone.\n\n"
-            "WICHTIG: Lies ZUERST alle sichtbaren Tiefenzahlen (z.B. 0.6, 1.3, 1.6, 2).\n"
+            "WICHTIG: Extrahiere NUR Tiefenzahlen die INNERHALB der Wasserfläche stehen.\n""Ignoriere: Zahlen in der App-UI (Buttons, Legende, Skala), Zahlen am Bildrand,\n""Koordinatenangaben, Maßstabsbalken und Zahlen außerhalb des blauen Gewässerbereichs.\n"
             "Identifiziere dann welche Farbe zu welcher Zahl gehört.\n"
             "Nutze die Zahlen – nicht die Farbbeschreibungen – als Grundlage.\n\n"
 
@@ -324,6 +324,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 max_d = max((d["depth_m"] for d in depth_pts), default=0)
                 scan_name = call.data.get("scan_name", "Scan")
                 ts = datetime.now().isoformat()
+                # Outlier-Filter: Punkte die >2σ vom Cluster-Zentrum entfernt sind entfernen
+                if len(depth_pts) >= 4:
+                    import math as _m
+                    lats = [p["lat"] for p in depth_pts]
+                    lons = [p["lon"] for p in depth_pts]
+                    avg_lat = sum(lats) / len(lats)
+                    avg_lon = sum(lons) / len(lons)
+                    # Standardabweichung
+                    std_lat = _m.sqrt(sum((x - avg_lat)**2 for x in lats) / len(lats))
+                    std_lon = _m.sqrt(sum((x - avg_lon)**2 for x in lons) / len(lons))
+                    # Mindest-Schwellwert um echte Cluster nicht zu aggressiv zu filtern
+                    thr_lat = max(std_lat * 2.5, 0.0005)
+                    thr_lon = max(std_lon * 2.5, 0.0005)
+                    depth_pts = [p for p in depth_pts
+                                 if abs(p["lat"] - avg_lat) <= thr_lat
+                                 and abs(p["lon"] - avg_lon) <= thr_lon]
+                    min_d = min((p["depth_m"] for p in depth_pts), default=0)
+                    max_d = max((p["depth_m"] for p in depth_pts), default=0)
+
                 result["depth_points"] = depth_pts
                 result["min_depth"] = min_d
                 result["max_depth"] = max_d
@@ -732,5 +751,27 @@ async def async_register_lovelace_resource(hass: HomeAssistant) -> None:
             items2.append({"id": "fishing-barometer-card", "type": "module", "url": baro_url})
             data2["items"] = items2
             await storage2.async_save(data2)
+    except Exception:
+        pass
+
+    # Quick-Entry Card registrieren
+    quick_url = f"/local/fishing-quick-card.js?v={FRONTEND_VERSION.replace('.', '')}"
+    try:
+        storage3 = hass.helpers.storage.Store(1, "lovelace_resources")
+        data3 = await storage3.async_load() or {"items": []}
+        items3 = data3.get("items", [])
+        existing3 = next(
+            (i for i in items3 if i.get("url", "").startswith("/local/fishing-quick-card.js")),
+            None,
+        )
+        if existing3:
+            if existing3.get("url") != quick_url:
+                existing3["url"] = quick_url
+                data3["items"] = items3
+                await storage3.async_save(data3)
+        else:
+            items3.append({"id": "fishing-quick-card", "type": "module", "url": quick_url})
+            data3["items"] = items3
+            await storage3.async_save(data3)
     except Exception:
         pass

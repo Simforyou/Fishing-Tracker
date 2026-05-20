@@ -389,6 +389,17 @@ class MapDataSensor(FishingBaseSensor):
         except Exception:
             pass
 
+        # ── Persönliche Lernmuster aus Fang-/Schneider-Historie ──────────────
+        personal = {}
+        try:
+            from . import personal_learning as _pl
+            patterns = _pl.compute_personal_patterns(self.store.entries)
+            personal = _pl.summarize_for_sensor(patterns)
+            # Vollständige Patterns für Frontend-Scoring (kompakt)
+            self._full_patterns = patterns
+        except Exception:
+            self._full_patterns = {}
+
         self._attrs = {
             "catches": catches[-300:],
             "heatmap": heatmap[-300:],
@@ -396,6 +407,8 @@ class MapDataSensor(FishingBaseSensor):
             "total_entries": len(self.store.entries),
             "deeper_last_result": deeper,
             "deeper_scans": deeper_scans,
+            "personal_patterns": personal,
+            "personal_full": self._full_patterns,
         }
 
 

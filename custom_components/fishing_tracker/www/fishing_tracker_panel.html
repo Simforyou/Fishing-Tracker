@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.21.5 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.26.3 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -321,10 +321,12 @@ function drawChart(id, pts, color = '#ff9d18', todayIdx = null) {
     <line x1="${padL}" y1="${h-padB}" x2="${w-padR}" y2="${h-padB}" stroke="rgba(255,255,255,.15)"/>
     ${labs.map((l,i)=>`<text x="${padL+i*(w-padL-padR)/(labs.length-1)}" y="${h-5}" fill="rgba(255,255,255,.4)" font-size="10" text-anchor="middle" font-family="system-ui">${l}</text>`).join('')}
     <path d="${area}" fill="url(#g${id})"/>
+    ${todayIdx !== null && todayIdx > 0 ?
+      `<rect x="${padL}" y="${padT}" width="${pp[Math.min(todayIdx,pts.length-1)][0]-padL}" height="${h-padT-padB}" fill="rgba(0,0,0,.25)"/>` : ''}
     <path d="${smoothPath}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="${nx}" y1="${padT+18}" x2="${nx}" y2="${h-padB}" stroke="rgba(255,215,0,.6)" stroke-width="2" stroke-dasharray="5 3"/>
-    <rect x="${nx-18}" y="${padT+2}" width="36" height="16" rx="4" fill="rgba(255,215,0,.15)" stroke="rgba(255,215,0,.5)" stroke-width="1"/>
-    <text x="${nx}" y="${padT+13}" fill="#ffd23f" font-size="10" font-weight="800" text-anchor="middle" font-family="system-ui">Jetzt</text>`;
+    <line x1="${nx}" y1="${padT+18}" x2="${nx}" y2="${h-padB}" stroke="rgba(255,215,0,.8)" stroke-width="2" stroke-dasharray="5 3"/>
+    <rect x="${nx-18}" y="${padT+2}" width="36" height="16" rx="4" fill="rgba(255,215,0,.2)" stroke="rgba(255,215,0,.7)" stroke-width="1"/>
+    <text x="${nx}" y="${padT+13}" fill="#ffd23f" font-size="10" font-weight="800" text-anchor="middle" font-family="system-ui">Heute</text>`;
 }
 
 // ── CSS ───────────────────────────────────────────────────────────────────────
@@ -957,18 +959,49 @@ function calcSpeciesScore(fishName) {
     windBonus = windSpeed < 8 ? 8 : windSpeed < 15 ? 3 : windSpeed > 25 ? -8 : 0;
   }
 
-  // ── 7. Licht/Solar (Tages- vs. Nachtfisch) ───────────────────────────────
+  // ── 7. Licht/Solar (artspezifisch aus sensor.haftenkamp_sonneneinstrahlung) ──
   let lightBonus = 0;
-  if (d.curve[12] < 20 && d.curve[18] > 60) {
-    // Nachtfisch: dunkel = gut
-    if (solar < 50 || hour < 6 || hour > 20)   lightBonus = 10;
-    else if (solar > 600)                        lightBonus = -8;
-  } else if (d.curve[10] > 50 && d.curve[22] < 20) {
-    // Tagfisch: moderate Helligkeit ideal
-    if (solar > 100 && solar < 400)             lightBonus = 8;
-    else if (solar > 700)                        lightBonus = -5;
-    else if (hour < 6 || hour > 21)             lightBonus = -10;
+  const isDawn   = hour >= 5 && hour <= 8;
+  const isDusk   = hour >= 17 && hour <= 21;
+  const isNight  = hour < 5 || hour > 21;
+  const isNoon   = hour >= 11 && hour <= 14;
+
+  // Dämmerung ist für fast alle Arten optimal (Faustregel Nr. 1 beim Angeln)
+  if (isDawn || isDusk) lightBonus += 12;
+
+  // Artspezifische Sonneneinstrahlung
+  if (['Zander','Aal'].includes(fishName)) {
+    // Lichtscheue Arten: Zander hat gelbe Hornhaut, filtert Blaulicht
+    if (solar < 30)          lightBonus += 15;   // Nacht/Dämmerung: optimal
+    else if (solar < 150)    lightBonus += 8;
+    else if (solar < 400)    lightBonus += 2;
+    else if (solar > 600)    lightBonus -= 10;   // Helles Tageslicht: schlecht
+    else if (solar > 900)    lightBonus -= 18;   // Intensive Sonne: sehr schlecht
+  } else if (['Wels','Grundel'].includes(fishName)) {
+    // Nacht-/Dämmerungsaktiv
+    if (isNight || solar < 50)  lightBonus += 12;
+    else if (isDawn || isDusk)  lightBonus += 8;
+    else if (solar > 700)       lightBonus -= 8;
+  } else if (['Hecht','Barsch','Rapfen'].includes(fishName)) {
+    // Predatoren: Jagdvorteil bei niedrigem Licht, aber auch tagsüber aktiv
+    if (isDawn || isDusk)       lightBonus += 8;
+    else if (solar > 200 && solar < 500) lightBonus += 3;  // Mittleres Licht OK
+    else if (solar > 800)       lightBonus -= 6;
+    else if (isNight)           lightBonus -= 3;
+  } else if (['Karpfen','Schleie'].includes(fishName)) {
+    // Tagaktiv mit Sonne, aber nicht bei zu intensiver Strahlung
+    if (solar > 100 && solar < 500) lightBonus += 6;
+    else if (solar > 700)       lightBonus -= 4;
+    else if (isNight)           lightBonus -= 8;
+  } else if (['Ukelei','Döbel','Rotauge','Rotfeder'].includes(fishName)) {
+    // Oberflächenfische: bei bewölktem Licht aktiv, intensive Sonne → tiefer
+    if (solar > 50 && solar < 300)  lightBonus += 5;
+    else if (solar > 600 && isNoon) lightBonus -= 8; // Flucht vor Mittagssonne
+    else if (isNight)               lightBonus -= 5;
   }
+
+  // UV-Index Proxy: sehr hohe Strahlung → alle Fische reagieren
+  if (solar > 850 && isNoon) lightBonus -= 5; // allgemeiner Hochsommer-Malus
 
   // ── 8. Wetter-Bonus (allgemein aus Angelwetter-Index) ────────────────────
   const awIdx    = parseInt(calcAngelwetterIndex()) || 60;
@@ -1191,6 +1224,24 @@ function calcAngelwetterIndex() {
     }
   } catch(e) { depthScore = 0; }
 
+  // Fluss-Abfluss live
+  let riverLiveScore = 0;
+  if (_riverData) riverLiveScore = riverScore(fishName, _riverData);
+
+  // Persönlicher Lern-Bonus aus Fangbuch
+  let personalScore = 0;
+  try {
+    const pat = findFTSensor('map_data')?.attributes?.personal_full?.[fishName];
+    if (pat && pat.total_attempts >= 3) {
+      const sens = collectAllSensors();
+      personalScore = calcPersonalBonus(pat, {
+        hour, pressure: sens.pressure, pressureTrend: sens.pressureTrend,
+        solar: sens.solar, temperature: sens.waterTemp, waterTemp: sens.waterTemp,
+        cloudCover: sens.cloudCover, windSpeed: sens.windSpeed
+      }, new Date());
+    }
+  } catch(e) {}
+
   const base = Math.round(
     waterScore    * 0.33 +
     weatherScore  * 0.27 +
@@ -1199,7 +1250,7 @@ function calcAngelwetterIndex() {
     pressureScore * 0.05 +
     0.05 // Tiefendaten-Restgewicht
   );
-  return Math.min(97, Math.max(10, base + depthScore));
+  return Math.min(97, Math.max(10, base + depthScore + riverLiveScore + personalScore));
 }
 
 
@@ -1323,7 +1374,127 @@ function openFishSpotMap(fishName) {
       '</div></div>'
     : '';
 
+  // ── Persönliche Lern-Insights ────────────────────────────────────────────
+  const learnPat = findFTSensor('map_data')?.attributes?.personal_patterns?.[fishName];
+  let learnBox = '';
+  if (learnPat && learnPat.attempts >= 3) {
+    const bucketLabel = {
+      nacht:'Nachts', morgen:'Morgens', vormittag:'Vormittags', mittag:'Mittags',
+      nachmittag:'Nachmittags', abend:'Abends',
+      fallend:'fallendem Druck', steigend:'steigendem Druck', hoch_stabil:'Hochdruck',
+      tief_stabil:'Tiefdruck', normal:'normalem Druck',
+      dunkel:'Dunkelheit', daemmrig:'Dämmerung', mittel:'mittlerem Licht', hell:'hellem Licht', intensiv:'intensiver Sonne',
+      kalt:'Kälte', kuehl:'kühlem Wetter', mild:'mildem Wetter', warm:'Wärme', heiss:'Hitze',
+      sehr_kalt:'sehr kaltem Wasser', klar:'klarem Himmel', leicht_bewoelkt:'leichter Bewölkung',
+      bewoelkt:'Bewölkung', bedeckt:'bedecktem Himmel',
+      windstill:'Windstille', maessig:'mäßigem Wind', frisch:'frischem Wind', stark:'starkem Wind',
+      neumond:'Neumond', vollmond:'Vollmond', zunehmend:'zunehmendem Mond', abnehmend:'abnehmendem Mond',
+    };
+    const dimIcon = { hour:'🕐', pressure:'📊', solar:'☀️', temp:'🌡️', water:'💧', cloud:'☁️', wind:'💨', moon:'🌙' };
+    const conds = Object.entries(learnPat.best_conditions || {})
+      .map(([dim,info2]) => (dimIcon[dim]||'•') + ' ' + (bucketLabel[info2.bucket]||info2.bucket) + ' (' + Math.round(info2.rate*100) + '%)')
+      .slice(0,4);
+    const confPct = Math.round((learnPat.confidence||0) * 100);
+    learnBox =
+      '<div style="background:linear-gradient(145deg,rgba(167,139,250,.1),rgba(46,168,255,.06));border:1px solid rgba(167,139,250,.3);border-radius:12px;padding:12px;margin-bottom:12px">' +
+      '<div style="font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🧠 Aus deinen Fängen gelernt</div>' +
+      '<div style="font-size:12px;color:var(--txt-main);margin-bottom:8px">' +
+        learnPat.catches + ' Fänge / ' + learnPat.attempts + ' Versuche · ' + Math.round(learnPat.rate*100) + '% Erfolgsrate</div>' +
+      (conds.length ? '<div style="font-size:11px;color:var(--txt-muted);margin-bottom:4px">Deine besten Bedingungen:</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px">' +
+        conds.map(cc => '<span style="background:rgba(167,139,250,.15);color:#c4b5fd;padding:3px 8px;border-radius:8px;font-size:11px;font-weight:600">' + cc + '</span>').join('') +
+        '</div>' : '') +
+      (learnPat.best_baits && learnPat.best_baits.length ?
+        '<div style="font-size:11px;color:var(--txt-muted);margin-bottom:6px">🪱 Top-Köder: ' +
+        learnPat.best_baits.map(b => b[0] + ' (' + b[1] + 'x)').join(', ') + '</div>' : '') +
+
+      // Spot-spezifische Erfolgsraten
+      (learnPat.spot_rates && Object.keys(learnPat.spot_rates).length ?
+        '<div style="font-size:11px;color:var(--txt-muted);margin-bottom:4px">📍 Deine Spots für ' + fishName + ':</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px">' +
+        Object.entries(learnPat.spot_rates).sort((a,b)=>b[1].rate-a[1].rate).map(([sp,r]) => {
+          const rcol = r.rate >= 0.6 ? '#3fb950' : r.rate >= 0.3 ? '#ffd23f' : '#ff6b6b';
+          return '<span style="background:rgba(255,255,255,.06);border:1px solid ' + rcol + '44;color:' + rcol + ';padding:3px 8px;border-radius:8px;font-size:11px;font-weight:600">' + sp + ' ' + Math.round(r.rate*100) + '%</span>';
+        }).join('') + '</div>' : '') +
+
+      // Köder-Empfehlung für aktuelle Wassertemperatur
+      (() => {
+        const wt = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+        const wtBucket = wt<6?'sehr_kalt':wt<12?'kalt':wt<18?'mild':wt<23?'warm':'heiss';
+        const rec = learnPat.bait_by_temp?.[wtBucket];
+        return rec ? '<div style="font-size:11px;color:#3fb950;margin-bottom:6px">🎯 Bei ' + wt.toFixed(0) + '°C empfohlen: <b>' + rec.bait + '</b> (' + rec.count + 'x erfolgreich)</div>' : '';
+      })() +
+
+      // Größen-Insights
+      (learnPat.size_insights && learnPat.size_insights.avg_length ?
+        '<div style="font-size:11px;color:var(--txt-muted);margin-bottom:4px">📏 Ø ' + learnPat.size_insights.avg_length + 'cm · max ' + learnPat.size_insights.max_length + 'cm</div>' : '') +
+
+      '<div style="font-size:10px;color:var(--txt-muted);margin-top:6px;opacity:.7">Lern-Sicherheit: ' + confPct + '% ' +
+        (confPct < 50 ? '— mehr Fänge erhöhen die Genauigkeit' : '') + '</div>' +
+      '</div>';
+  }
+
+  // ── Bestes Beißfenster heute ──────────────────────────────────────────────
+  let windowBox = '';
+  try {
+    const win = bestWindowToday(fishName);
+    const fmt = (h) => String(h).padStart(2,'0') + ':00';
+    const peakTime = fmt(win.peak.hour);
+    windowBox =
+      '<div style="background:linear-gradient(145deg,rgba(255,210,63,.1),rgba(255,157,24,.06));border:1px solid rgba(255,210,63,.3);border-radius:12px;padding:12px;margin-bottom:12px">' +
+      '<div style="font-size:11px;font-weight:700;color:#ffd23f;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">⏰ Bestes Beißfenster heute</div>' +
+      '<div style="font-size:20px;font-weight:900;color:var(--txt-main)">' + fmt(win.windowStart) + ' – ' + fmt(win.windowEnd + 1) + '</div>' +
+      '<div style="font-size:12px;color:var(--txt-muted);margin-top:2px">🎯 Peak um ' + peakTime + ' · ' + win.peak.score + '% Beißchance</div>' +
+      '</div>';
+  } catch(e) {}
+
+  // ── Fang-Wahrscheinlichkeit ───────────────────────────────────────────────
+  let probBox = '';
+  try {
+    const cp = catchProbabilityToday(fishName);
+    if (cp) {
+      const pcol = cp.prob >= 60 ? '#3fb950' : cp.prob >= 35 ? '#ffd23f' : '#ff9d18';
+      probBox =
+        '<div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:12px;text-align:center">' +
+        '<div style="font-size:11px;font-weight:700;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">🎲 Fang-Wahrscheinlichkeit heute</div>' +
+        '<div style="font-size:28px;font-weight:950;color:' + pcol + '">' + cp.prob + '%</div>' +
+        '<div style="font-size:10px;color:var(--txt-muted);opacity:.7">aus ' + cp.attempts + ' Versuchen · Sicherheit ' + Math.round(cp.confidence*100) + '%</div>' +
+        '</div>';
+    }
+  } catch(e) {}
+
+  // ── Trip-Planer: bester Tag der nächsten 7 Tage ───────────────────────────
+  let tripBox = '';
+  try {
+    const trip = planBestTrip(fishName);
+    const dayNames = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+    const fmt = (h) => String(h).padStart(2,'0') + ':00';
+    const best = trip[0];
+    const bestLabel = best.dayOffset === 0 ? 'Heute' : best.dayOffset === 1 ? 'Morgen' : dayNames[best.date.getDay()];
+    tripBox =
+      '<div style="background:linear-gradient(145deg,rgba(63,185,80,.1),rgba(46,168,255,.06));border:1px solid rgba(63,185,80,.3);border-radius:12px;padding:12px;margin-bottom:12px">' +
+      '<div style="font-size:11px;font-weight:700;color:#3fb950;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📅 Bester Tag diese Woche</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<span style="font-size:18px;font-weight:900;color:var(--txt-main)">' + bestLabel + ' ' + fmt(best.bestHour) + '</span>' +
+      '<span style="font-size:18px;font-weight:900;color:#3fb950">' + best.score + '%</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:3px">' +
+      trip.slice().sort((a,b)=>a.dayOffset-b.dayOffset).map(d => {
+        const lbl = d.dayOffset === 0 ? 'Heute' : dayNames[d.date.getDay()];
+        const dcol = d.score >= 75 ? '#3fb950' : d.score >= 55 ? '#ffd23f' : '#ff9d18';
+        const isBest = d.dayOffset === best.dayOffset;
+        return '<div style="flex:1;text-align:center;padding:5px 2px;border-radius:6px;background:' + (isBest?'rgba(63,185,80,.15)':'transparent') + '">' +
+          '<div style="font-size:9px;color:var(--txt-muted)">' + lbl + '</div>' +
+          '<div style="font-size:12px;font-weight:800;color:' + dcol + '">' + d.score + '</div></div>';
+      }).join('') +
+      '</div></div>';
+  } catch(e) {}
+
   info.innerHTML =
+    windowBox +
+    tripBox +
+    probBox +
+    learnBox +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">' +
       '<div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center">' +
         '<div style="font-size:11px;color:var(--txt-muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Jetzt</div>' +
@@ -1538,6 +1709,9 @@ function openFishSpotMap(fishName) {
           if (dm >= 0.5) return '#ffd23f';
           return '#ff9d18';
         };
+        // LayerGroup für Toggle-Button
+        const depthPtLayer = L.layerGroup().addTo(_fishSpotMap);
+
         dPts.filter(function(pt) { return pt && pt.lat && pt.lon && pt.depth_m != null; })
           .forEach(function(pt) {
             const ideal = isIdealDepth(pt.depth_m);
@@ -1546,15 +1720,37 @@ function openFishSpotMap(fishName) {
               radius: ideal ? 9 : 6,
               color: ideal ? '#fff' : dc,
               fillColor: dc, fillOpacity: ideal ? 0.9 : 0.5, weight: ideal ? 2 : 1,
-            }).addTo(_fishSpotMap)
+            }).addTo(depthPtLayer)
             .bindPopup('<b style="color:' + dc + '">' + pt.depth_m + 'm</b>' +
               (ideal ? '<br><span style="color:#67d33f;font-size:11px">✅ Ideal für ' + fishName + '</span>' : ''));
           });
+
+        // Toggle-Button oben rechts
+        const ptToggle = L.control({ position: 'topright' });
+        ptToggle.onAdd = function() {
+          const btn = L.DomUtil.create('button');
+          btn.innerHTML = '🌊 Punkte';
+          btn.title = 'Tiefenpunkte ein/ausblenden';
+          btn.style.cssText = 'background:rgba(13,17,23,.92);border:1px solid rgba(46,168,255,.5);' +
+            'color:#2ea8ff;padding:6px 11px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;' +
+            'font-family:-apple-system,sans-serif;white-space:nowrap;display:block';
+          let vis = true;
+          L.DomEvent.on(btn, 'click', function(e) {
+            L.DomEvent.stopPropagation(e);
+            vis = !vis;
+            if (vis) { depthPtLayer.addTo(_fishSpotMap); btn.style.color='#2ea8ff'; btn.style.borderColor='rgba(46,168,255,.5)'; }
+            else { _fishSpotMap.removeLayer(depthPtLayer); btn.style.color='rgba(255,255,255,.25)'; btn.style.borderColor='rgba(255,255,255,.15)'; }
+          });
+          return btn;
+        };
+        ptToggle.addTo(_fishSpotMap);
+
+        // Legende
         const leg = L.control({ position: 'bottomleft' });
         leg.onAdd = function() {
           const el = L.DomUtil.create('div');
           el.style.cssText = 'background:rgba(13,17,23,.9);border:1px solid #30363d;border-radius:10px;padding:8px 10px;font-size:11px;color:#e6edf3;line-height:1.8';
-          el.innerHTML = '<b style="color:#2ea8ff">🌊 Tiefenkarte (' + dPts.length + ')</b><br>' +
+          el.innerHTML = '<b style="color:#2ea8ff">🌊 ' + dPts.length + ' Messpunkte</b><br>' +
             '<span style="color:#0066cc">●</span> &gt;4m ' +
             '<span style="color:#2ea8ff">●</span> 2–4m<br>' +
             '<span style="color:#67d33f">●</span> 1–2m ' +
@@ -2642,6 +2838,16 @@ function catchFormView() {
 
 // ── Views ─────────────────────────────────────────────────────────────────────
 function renderView() {
+  // Fluss-Abfluss laden (non-blocking, gecacht 3h) → triggert re-render bei Erfolg
+  try {
+    const ctr = getBestCenter();
+    if (ctr && !_riverData) {
+      fetchRiverDischarge(ctr[0], ctr[1]).then(rd => {
+        if (rd) { try { renderView(); } catch(e){} }
+      });
+    }
+  } catch(e) {}
+
   // Try to get live HA data
   const chance   = calcAngelwetterIndex();
   const bestTime = getState('sensor.fishing_tracker_best_time', getState('sensor.beste_angelzeit','18:00–21:00'));
@@ -3643,7 +3849,24 @@ const d14 = (() => {
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.21.5'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.26.3'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+      </div>
+      <div class="panel" style="margin-top:10px">
+        <div class="sec">📍 Orts-Prognose</div>
+        <div style="font-size:12px;color:var(--txt-muted);margin-bottom:10px">Wähle einen beliebigen Ort und sieh Wetter + Beißchance aus mehreren Wetterquellen (Open-Meteo: ICON, GFS, ECMWF).</div>
+        <button onclick="openLocationForecast()" style="width:100%;background:linear-gradient(145deg,#0a3d2e,#0d5540);border:1px solid rgba(63,185,80,.4);color:#3fb950;padding:13px;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit">🗺️ Ort auf Karte wählen</button>
+        ${(() => {
+          const saved = localStorage.getItem('ft_forecast_location');
+          if (!saved) return '';
+          try {
+            const loc = JSON.parse(saved);
+            return '<div style="margin-top:10px;background:var(--kpi-bg);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:12px">' +
+              '<div style="color:var(--txt-main);font-weight:700">📍 ' + (loc.name||'Gespeicherter Ort') + '</div>' +
+              '<div style="color:var(--txt-muted);font-family:monospace;font-size:11px;margin-top:2px">' + loc.lat.toFixed(4) + ', ' + loc.lon.toFixed(4) + '</div>' +
+              '<button onclick="showLocationForecast(' + loc.lat + ',' + loc.lon + ',\'' + (loc.name||'').replace(/'/g,"") + '\')" style="width:100%;margin-top:8px;background:rgba(63,185,80,.15);border:1px solid rgba(63,185,80,.3);color:#3fb950;padding:8px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer">📊 Prognose anzeigen</button>' +
+              '</div>';
+          } catch(e) { return ''; }
+        })()}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">🌊 Deeper Tiefenkarte</div>
@@ -3963,7 +4186,7 @@ const d14 = (() => {
     return Math.min(95, Math.max(15, base));
   });
 })();
-          drawChart('chart14', d14, '#a78bfa');
+          drawChart('chart14', d14, '#a78bfa', TODAY_IDX_14);
           addChartTouch('chart14', d14, '#a78bfa');
         }
       } catch(e) { console.error('Chart Fehler:', e); }
@@ -4026,67 +4249,790 @@ function buildForecastTab(tab) {
       </div>`;
   } else {
     // 14-Tage Prognose aus echten HA-Wetterdaten
-const d14 = (() => {
-  const fcDays = haStates['weather.home']?.attributes?.forecast || [];
-  if (fcDays.length < 7) return WEEK.concat(WEEK); // Fallback
+// 14-Tage: 4 Vergangenheit + Heute + 10 Zukunft
+const TODAY_IDX_14 = 4; // Heute ist immer an Position 4
+const dayNames = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+const shortDate = (d) => dayNames[d.getDay()];
 
-  // Für jeden Vorhersage-Tag einen Angelwetter-Score berechnen
-  return fcDays.slice(0,14).map((fc, i) => {
-    // Basiswert aus 7-Tage-Sensor wenn verfügbar
-    let base = WEEK[i] || 65;
+// Tages-Scores berechnen: Wetterdaten für -4 bis +10 Tage
+const fcDays14 = haStates['weather.home']?.attributes?.forecast || [];
 
-    // Wetterfaktoren aus Tagesvorhersage
-    const temp = parseFloat(fc.temperature || fc.temperature_low || 12);
-    const rain = parseFloat(fc.precipitation || 0);
-    const rainProb = parseFloat(fc.precipitation_probability || 0);
-    const wind = parseFloat(fc.wind_speed || 10);
-    const condition = (fc.condition || '').toLowerCase();
+// ═══════════════════════════════════════════════════════════════════════════
+// ASTRONOMIE-ENGINE – exakte Sonnen- & Mondpositionen (SunCalc-Algorithmus)
+// Basis für echte Solunar-Theorie: Mond-Transit + Auf/Untergang
+// ═══════════════════════════════════════════════════════════════════════════
+const _AST = (() => {
+  const rad = Math.PI/180, dayMs = 86400000, J1970 = 2440588, J2000 = 2451545;
+  const e = rad * 23.4397; // Schiefe der Ekliptik
 
-    let mod = 0;
+  const toJulian = d => d.valueOf()/dayMs - 0.5 + J1970;
+  const fromJulian = j => new Date((j + 0.5 - J1970) * dayMs);
+  const toDays = d => toJulian(d) - J2000;
 
-    // Temperatur
-    if (temp < 3) mod -= 10;
-    else if (temp < 8) mod -= 5;
-    else if (temp >= 12 && temp <= 20) mod += 5;
-    else if (temp > 28) mod -= 8;
+  const rightAscension = (l,b) => Math.atan2(Math.sin(l)*Math.cos(e) - Math.tan(b)*Math.sin(e), Math.cos(l));
+  const declination = (l,b) => Math.asin(Math.sin(b)*Math.cos(e) + Math.cos(b)*Math.sin(e)*Math.sin(l));
+  const azimuth = (H,phi,dec) => Math.atan2(Math.sin(H), Math.cos(H)*Math.sin(phi) - Math.tan(dec)*Math.cos(phi));
+  const altitude = (H,phi,dec) => Math.asin(Math.sin(phi)*Math.sin(dec) + Math.cos(phi)*Math.cos(dec)*Math.cos(H));
+  const siderealTime = (d,lw) => rad * (280.16 + 360.9856235*d) - lw;
 
-    // Niederschlag
-    if (rain > 8) mod -= 12;
-    else if (rain > 3) mod -= 6;
-    else if (rain > 0.5 && rain <= 3) mod += 3; // leichter Regen gut
-    if (rainProb > 85) mod -= 8;
-    else if (rainProb > 60) mod -= 3;
+  // Sonne
+  const solarMeanAnomaly = d => rad * (357.5291 + 0.98560028*d);
+  const eclipticLongitude = M => {
+    const C = rad * (1.9148*Math.sin(M) + 0.02*Math.sin(2*M) + 0.0003*Math.sin(3*M));
+    const P = rad * 102.9372;
+    return M + C + P + Math.PI;
+  };
+  const sunCoords = d => {
+    const M = solarMeanAnomaly(d), L = eclipticLongitude(M);
+    return { dec: declination(L,0), ra: rightAscension(L,0) };
+  };
 
-    // Wind
-    if (wind > 35) mod -= 12;
-    else if (wind > 25) mod -= 6;
-    else if (wind > 15) mod -= 2;
-    else if (wind < 10) mod += 3; // Windstill gut
+  // Mond
+  const moonCoords = d => {
+    const L = rad * (218.316 + 13.176396*d),
+          M = rad * (134.963 + 13.064993*d),
+          F = rad * (93.272 + 13.229350*d),
+          l = L + rad*6.289*Math.sin(M),
+          b = rad*5.128*Math.sin(F),
+          dt = 385001 - 20905*Math.cos(M);
+    return { ra: rightAscension(l,b), dec: declination(l,b), dist: dt };
+  };
 
-    // Wetterlage
-    if (condition.includes('sunny') || condition.includes('clear')) mod += 3;
-    if (condition.includes('storm') || condition.includes('thunder')) mod -= 15;
-    if (condition.includes('fog')) mod -= 4;
-    if (condition.includes('cloudy') && !condition.includes('partly')) mod += 2;
+  const getMoonPosition = (date, lat, lon) => {
+    const lw = rad*(-lon), phi = rad*lat, d = toDays(date), cc = moonCoords(d);
+    const H = siderealTime(d,lw) - cc.ra;
+    let h = altitude(H,phi,cc.dec);
+    return { azimuth: azimuth(H,phi,cc.dec), altitude: h, distance: cc.dist, H };
+  };
 
-    // Nur für erste 7 Tage: WEEK-Werte nutzen wenn vorhanden
-    if (i < WEEK.length && WEEK[i]) {
-      // Mix: 70% Sensor, 30% Wetterberechnung
-      base = Math.round(WEEK[i] * 0.7 + (65 + mod) * 0.3);
-    } else {
-      base = Math.round(65 + mod);
+  const getSunPosition = (date, lat, lon) => {
+    const lw = rad*(-lon), phi = rad*lat, d = toDays(date), cc = sunCoords(d);
+    const H = siderealTime(d,lw) - cc.ra;
+    return { azimuth: azimuth(H,phi,cc.dec), altitude: altitude(H,phi,cc.dec) };
+  };
+
+  // Mond Transit (Kulmination = höchster Stand) + Antitransit (tiefster) für einen Tag
+  // Major-Periods der Solunar-Theorie
+  const moonTransits = (date, lat, lon) => {
+    // Scanne den Tag in 10-Min-Schritten, finde Maxima/Minima der Höhe
+    const base = new Date(date); base.setHours(0,0,0,0);
+    let prevAlt = null, prevSlope = null;
+    const transits = [], antitransits = [];
+    for (let m = 0; m <= 1440; m += 10) {
+      const t = new Date(base.getTime() + m*60000);
+      const alt = getMoonPosition(t, lat, lon).altitude;
+      if (prevAlt !== null) {
+        const slope = alt - prevAlt;
+        if (prevSlope !== null) {
+          if (prevSlope > 0 && slope <= 0) transits.push(new Date(base.getTime() + (m-5)*60000));      // Maximum = Transit
+          if (prevSlope < 0 && slope >= 0) antitransits.push(new Date(base.getTime() + (m-5)*60000));  // Minimum = Antitransit
+        }
+        prevSlope = slope;
+      }
+      prevAlt = alt;
     }
+    return { transits, antitransits };
+  };
 
-    return Math.min(95, Math.max(15, base));
-  });
+  // Mondauf-/untergang (Minor-Periods)
+  const moonRiseSet = (date, lat, lon) => {
+    const base = new Date(date); base.setHours(0,0,0,0);
+    let prevAlt = null;
+    const rises = [], sets = [];
+    for (let m = 0; m <= 1440; m += 10) {
+      const t = new Date(base.getTime() + m*60000);
+      const alt = getMoonPosition(t, lat, lon).altitude;
+      if (prevAlt !== null) {
+        if (prevAlt < 0 && alt >= 0) rises.push(new Date(base.getTime() + (m-5)*60000));
+        if (prevAlt >= 0 && alt < 0) sets.push(new Date(base.getTime() + (m-5)*60000));
+      }
+      prevAlt = alt;
+    }
+    return { rises, sets };
+  };
+
+  // Sonnenauf-/untergang + Tageslänge
+  const sunRiseSet = (date, lat, lon) => {
+    const base = new Date(date); base.setHours(0,0,0,0);
+    let prevAlt = null, rise = null, set = null;
+    for (let m = 0; m <= 1440; m += 5) {
+      const t = new Date(base.getTime() + m*60000);
+      const alt = getSunPosition(t, lat, lon).altitude;
+      if (prevAlt !== null) {
+        if (prevAlt < 0 && alt >= 0) rise = new Date(base.getTime() + m*60000);
+        if (prevAlt >= 0 && alt < 0) set = new Date(base.getTime() + m*60000);
+      }
+      prevAlt = alt;
+    }
+    const dayLength = (rise && set) ? (set - rise)/3600000 : 12;
+    return { rise, set, dayLength };
+  };
+
+  return { getMoonPosition, getSunPosition, moonTransits, moonRiseSet, sunRiseSet };
 })();
-    const dn=['Mo','Di','Mi','Do','Fr','Sa','So','Mo','Di','Mi','Do','Fr','Sa','So'];
+
+// Solunar-Score für eine bestimmte Zeit aus echten Mond-Ereignissen
+function calcSolunarPeriods(date, lat, lon) {
+  const { transits, antitransits } = _AST.moonTransits(date, lat, lon);
+  const { rises, sets } = _AST.moonRiseSet(date, lat, lon);
+  return {
+    major: [...transits, ...antitransits],  // Mond oben/unten = stärkste Beißzeit
+    minor: [...rises, ...sets],             // Mondauf/untergang = mittlere Beißzeit
+  };
+}
+
+// Wie nah ist eine Stunde an einem Solunar-Fenster? → Bonus
+function solunarBonusAt(date, hour, lat, lon) {
+  const periods = calcSolunarPeriods(date, lat, lon);
+  const target = new Date(date); target.setHours(hour, 0, 0, 0);
+  const minsTo = (events) => events.length ? Math.min(...events.map(e => Math.abs((e - target)/60000))) : 9999;
+
+  const majorMins = minsTo(periods.major);
+  const minorMins = minsTo(periods.minor);
+
+  // Major-Fenster: ±90 Min wirksam, Peak ±30
+  if (majorMins <= 30) return 20;
+  if (majorMins <= 60) return 14;
+  if (majorMins <= 90) return 8;
+  // Minor-Fenster: ±60 Min
+  if (minorMins <= 30) return 12;
+  if (minorMins <= 60) return 6;
+  return 0;
+}
+
+// Photoperiode: Tageslänge + Änderungsrate (Tageslicht-Trend)
+function photoperiodFactor(date, lat, lon) {
+  const today = _AST.sunRiseSet(date, lat, lon);
+  const prev = new Date(date); prev.setDate(prev.getDate() - 5);
+  const before = _AST.sunRiseSet(prev, lat, lon);
+  const trend = today.dayLength - before.dayLength; // Std pro 5 Tage
+  return { dayLength: today.dayLength, trend, rise: today.rise, set: today.set };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UNIFIED SCORE ENGINE – wird von allen Charts und Prognosen genutzt
+// Kombiniert: Sensoren + Wettervorhersage + Fischverhalten + Deeper-Daten
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FLUSS-DATEN: Abfluss/Pegel-Trend (Open-Meteo Flood API · GloFAS)
+// ═══════════════════════════════════════════════════════════════════════════
+let _riverData = null;       // { discharge, trend, pct, status }
+let _riverFetchTime = 0;
+
+async function fetchRiverDischarge(lat, lon) {
+  // Cache: 3 Stunden
+  if (_riverData && Date.now() - _riverFetchTime < 3*60*60*1000) return _riverData;
+  try {
+    const url = `https://flood-api.open-meteo.com/v1/flood?latitude=${lat}&longitude=${lon}` +
+                `&daily=river_discharge&forecast_days=7&past_days=7`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const vals = (d.daily?.river_discharge || []).filter(v => v != null);
+    if (vals.length < 8) return null;
+
+    // Heute ist Index 7 (7 past_days)
+    const todayIdx = 7;
+    const today    = vals[todayIdx];
+    const days3ago = vals[Math.max(0, todayIdx - 3)];
+    const tomorrow = vals[Math.min(vals.length-1, todayIdx + 1)];
+
+    // Trend über letzte 3 Tage in %
+    const trendPct = days3ago > 0 ? ((today - days3ago) / days3ago) * 100 : 0;
+    // Mittel der letzten 14 Tage als Referenz für "normal"
+    const avg = vals.reduce((a,b)=>a+b,0) / vals.length;
+    const relToAvg = avg > 0 ? ((today - avg) / avg) * 100 : 0;
+
+    let status, statusLabel;
+    if (trendPct > 25)       { status = 'rising_fast';  statusLabel = 'Stark steigend'; }
+    else if (trendPct > 8)   { status = 'rising';       statusLabel = 'Steigend'; }
+    else if (trendPct < -25) { status = 'falling_fast'; statusLabel = 'Stark fallend'; }
+    else if (trendPct < -8)  { status = 'falling';      statusLabel = 'Fallend'; }
+    else                     { status = 'stable';       statusLabel = 'Stabil'; }
+
+    _riverData = {
+      discharge: today, trend: trendPct, relToAvg,
+      status, statusLabel, forecast: tomorrow,
+      isHigh: relToAvg > 40, isLow: relToAvg < -30,
+    };
+    _riverFetchTime = Date.now();
+    return _riverData;
+  } catch(e) { return null; }
+}
+
+// Kaltfront-Erkennung aus Wettervorhersage
+function detectColdFront(fcDays, dayIndex) {
+  // Vergleiche Tag mit Vortag: Temperatursturz + (impliziter) Druckabfall
+  if (!fcDays || dayIndex < 1) return null;
+  const today = fcDays[dayIndex], prev = fcDays[dayIndex - 1];
+  if (!today || !prev) return null;
+  const tToday = parseFloat(today.temperature ?? today.temperature_2m_max ?? 15);
+  const tPrev  = parseFloat(prev.temperature  ?? prev.temperature_2m_max  ?? 15);
+  const drop = tPrev - tToday;
+  if (drop >= 6) return { type: 'strong', drop };   // Starke Kaltfront
+  if (drop >= 3) return { type: 'mild', drop };      // Leichte Front
+  return null;
+}
+
+// River-Score: wie Abflusszustand die Fischart beeinflusst
+function riverScore(fishName, river) {
+  if (!river) return 0;
+  let s = 0;
+  const { status, isHigh, isLow } = river;
+
+  // Allgemein
+  if (status === 'rising' && !isHigh) s += 6;        // Leichter Anstieg = Futtereintrag, aktiv
+  else if (status === 'rising_fast' || isHigh) s -= 8; // Hochwasser = schwierig
+  else if (status === 'falling') s += 8;             // Fallend/klärend = sehr gut
+  else if (status === 'falling_fast') s += 3;
+  else if (status === 'stable' && isLow) s -= 3;     // Niedrig+klar = vorsichtige Fische
+
+  // Artspezifisch
+  if (['Aal','Wels','Barbe'].includes(fishName)) {
+    // Lieben höheres trübes Wasser
+    if (status === 'rising' || isHigh) s += 8;
+    if (isLow) s -= 5;
+  } else if (['Zander','Hecht'].includes(fishName)) {
+    // Räuber: leichter Anstieg triggert Fressphase
+    if (status === 'rising') s += 6;
+    if (status === 'rising_fast') s -= 5;
+  } else if (['Rotauge','Rotfeder','Ukelei','Brasse'].includes(fishName)) {
+    // Weißfische: stabile/klärende Bedingungen
+    if (status === 'falling' || status === 'stable') s += 5;
+    if (status === 'rising_fast' || isHigh) s -= 10;
+  } else if (['Döbel','Rapfen','Barbe'].includes(fishName)) {
+    // Strömungsliebend: kommen mit Anstieg gut klar
+    if (status === 'rising') s += 5;
+  }
+  return Math.max(-12, Math.min(12, s));
+}
+
+function collectAllSensors() {
+  const s = haStates;
+  return {
+    // Lokale Wetterstation
+    pressure:    parseFloat(s['sensor.haftenkamp_druck']?.state          || 1013),
+    solar:       parseFloat(s['sensor.haftenkamp_sonneneinstrahlung']?.state || 0),
+    windDir:     parseFloat(s['sensor.haftenkamp_windrichtung']?.state   || 180),
+    cloudCover:  parseFloat(s['sensor.haftenkamp_bewolkung']?.state
+                         || s['sensor.neuenhaus_bewolkung']?.state       || 50),
+    humidity:    parseFloat(s['sensor.haftenkamp_humidity']?.state
+                         || s['sensor.neuenhaus_humidity']?.state        || 70),
+    windSpeed:   parseFloat(s['sensor.haftenkamp_wind']?.state
+                         || s['sensor.neuenhaus_wind']?.state            || 10),
+    // Gewässer
+    waterTemp:   parseFloat(s['sensor.wassertemperatur_gewaesser']?.state || 13),
+    // Solunar
+    sol: {
+      major1: s['sensor.solunar_beisszeiten']?.attributes?.major1 || '--:--',
+      major2: s['sensor.solunar_beisszeiten']?.attributes?.major2 || '--:--',
+      minor1: s['sensor.solunar_beisszeiten']?.attributes?.minor1 || '--:--',
+      minor2: s['sensor.solunar_beisszeiten']?.attributes?.minor2 || '--:--',
+    },
+    // Sonne (elevation = Sonnenstand in Grad über Horizont)
+    sunElevation: parseFloat(s['sun.sun']?.attributes?.elevation        || -5),
+    sunAzimuth:   parseFloat(s['sun.sun']?.attributes?.azimuth          || 180),
+    // Drucktrend aus HA history (wenn verfügbar)
+    pressureTrend: (() => {
+      const hist = s['sensor.haftenkamp_druck']?.attributes;
+      if (!hist) return 0;
+      const p1h = parseFloat(hist.mean_1h || hist['1h'] || 0);
+      const p3h = parseFloat(hist.mean_3h || hist['3h'] || 0);
+      const cur  = parseFloat(s['sensor.haftenkamp_druck']?.state || 1013);
+      return p1h ? cur - p1h : p3h ? (cur - p3h) / 3 : 0;
+    })(),
+    // Deeper Tiefendaten
+    deeperDepths: (() => {
+      const scans = findFTSensor('map_data')?.attributes?.deeper_scans || [];
+      const pts = scans.flatMap(sc => Array.isArray(sc.depth_points) ? sc.depth_points : []);
+      if (!pts.length) return null;
+      return { min: Math.min(...pts.map(p=>p.depth_m)), max: Math.max(...pts.map(p=>p.depth_m)),
+               avg: pts.reduce((s,p)=>s+p.depth_m,0)/pts.length };
+    })(),
+  };
+}
+
+// Unified day score für beliebiges Datum + Stunde
+// liveData: von collectAllSensors() ODER null für Forecast-Modus
+// fcData: weather.home forecast-Objekt für Zukunftstage
+function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData) {
+  const d = _globalFishData[fishName];
+  if (!d) return 65;
+
+  const month   = date.getMonth() + 1;
+  const hour    = targetHour || date.getHours();
+  const SPAWN   = SPAWN_MONTHS;
+  const DEPTH   = DEPTH_PREF;
+  const WIND    = WIND_PREF;
+
+  // ── Wetterdaten: live oder Forecast ──────────────────────────────────────
+  let pressure = 1013, solar = 0, windDir = 180, cloudCover = 50;
+  let humidity = 70, windSpeed = 10, waterTemp = 13, pressureTrend = 0;
+  let sunElevation = -5, deeperDepths = null, sol = {};
+
+  if (liveData) {
+    ({ pressure, solar, windDir, cloudCover, humidity, windSpeed,
+       waterTemp, pressureTrend, sunElevation, deeperDepths, sol } = liveData);
+  } else if (fcData) {
+    pressure    = parseFloat(fcData.pressure          || 1013);
+    windDir     = parseFloat(fcData.wind_bearing      || 180);
+    cloudCover  = parseFloat(fcData.cloud_coverage    || fcData.cloud_cover || 50);
+    humidity    = parseFloat(fcData.humidity          || 70);
+    windSpeed   = parseFloat(fcData.wind_speed        || 10);
+    // Echte geschätzte Wassertemperatur bevorzugen, sonst Luft-Proxy
+    waterTemp   = fcData._waterTemp != null ? parseFloat(fcData._waterTemp)
+                  : parseFloat(fcData.temperature || 13) * 0.6 + 13 * 0.4;
+    // Solar schätzen aus Wetterlage
+    const cond  = (fcData.condition || '').toLowerCase();
+    solar = cond.includes('sunny')||cond.includes('clear') ? 700
+          : cond.includes('partly') ? 400
+          : cond.includes('cloud')  ? 150
+          : cond.includes('rain')   ? 60 : 300;
+    // Sonnenstand schätzen (Breitengrad ~52.5°N)
+    sunElevation = hour >= 5 && hour <= 21
+      ? Math.sin((hour - 13) / 8 * Math.PI) * 45 : -10;
+    // Tiefendaten auch im Forecast verfügbar
+    deeperDepths = (() => {
+      const scans = findFTSensor('map_data')?.attributes?.deeper_scans || [];
+      const pts = scans.flatMap(sc => Array.isArray(sc.depth_points) ? sc.depth_points : []);
+      if (!pts.length) return null;
+      return { min: Math.min(...pts.map(p=>p.depth_m)), max: Math.max(...pts.map(p=>p.depth_m)),
+               avg: pts.reduce((s,p)=>s+p.depth_m,0)/pts.length };
+    })();
+  }
+
+  // ── 1. Biologische Aktivitätskurve ───────────────────────────────────────
+  const curve    = d.curve || Array(24).fill(50);
+  const bioNow   = curve[hour] || 50;
+
+  // ── 2. Wassertemperatur (Gaußverteilung um Optimum) ──────────────────────
+  const tempOpt  = DEPTH[fishName] ? waterTemp : 15; // Näherung
+  const tempMap  = { Zander:14, Hecht:12, Barsch:16, Karpfen:22, Schleie:20,
+                     Aal:18, Brasse:17, Rotauge:18, Rotfeder:20, Döbel:16,
+                     Rapfen:14, Wels:22, Güster:16, Grundel:14, Ukelei:20, Forelle:12 };
+  const tOpt     = tempMap[fishName] || 15;
+  const tempFactor = Math.exp(-0.5 * Math.pow((waterTemp - tOpt) / 5, 2));
+
+  // ── 3. Laichzeit ──────────────────────────────────────────────────────────
+  let spawnMod = 1.0;
+  if (SPAWN[fishName]) {
+    const [sm, em] = SPAWN[fishName];
+    const inSpawn = month >= sm && month <= em;
+    const preSpawn = month === sm - 1 || (sm === 1 && month === 12);
+    if (inSpawn) spawnMod = 0.55;
+    if (preSpawn) spawnMod = 1.25;
+  }
+
+  // ── 4. Solunar (ECHTE astronomische Berechnung) ──────────────────────────
+  let solunarBonus = 0;
+  try {
+    const ctr = getBestCenter();
+    solunarBonus = solunarBonusAt(date, hour, ctr[0], ctr[1]);
+  } catch(e) {
+    // Fallback auf Sensor-Solunar
+    if (sol && sol.major1) {
+      const checkSol = (t, win) => {
+        if (!t || t === '--:--') return false;
+        const [sh, sm2] = t.split(':').map(Number);
+        return Math.abs(hour * 60 - (sh * 60 + sm2)) <= win;
+      };
+      if (checkSol(sol.major1, 60) || checkSol(sol.major2, 60)) solunarBonus = 18;
+      else if (checkSol(sol.minor1, 45) || checkSol(sol.minor2, 45)) solunarBonus = 10;
+    }
+  }
+
+  // ── 5. Luftdruck & Trend ──────────────────────────────────────────────────
+  let pressureBonus = 0;
+  if (pressureTrend >= -2 && pressureTrend < -0.5) pressureBonus = 12;
+  else if (pressureTrend >= -3 && pressureTrend < -2) pressureBonus = 8;
+  else if (pressureTrend > 1.5 && pressureTrend <= 3) pressureBonus = -8;
+  else if (pressureTrend > 3) pressureBonus = -15;
+  if (['Karpfen','Brasse','Schleie'].includes(fishName)) pressureBonus *= 1.3;
+  // Absoluter Druck: Hochdrucklage stabil gut
+  if (pressure > 1020 && Math.abs(pressureTrend) < 0.5) pressureBonus += 5;
+
+  // ── 6. Sonneneinstrahlung & Sonnenstand ──────────────────────────────────
+  let lightBonus = 0;
+  const isDawn   = sunElevation > -5  && sunElevation < 10;
+  const isDusk   = isDawn; // Schätzen – am Abend gleiches Muster
+  const isNight  = sunElevation < 0;
+  const highSun  = sunElevation > 40;
+
+  if (isDawn) lightBonus += 12; // Dämmerung: universell optimal
+
+  if (['Zander','Aal'].includes(fishName)) {
+    if (isNight || solar < 30)   lightBonus += 15;
+    else if (solar < 150)        lightBonus += 8;
+    else if (solar > 500)        lightBonus -= 10;
+    else if (solar > 800)        lightBonus -= 18;
+  } else if (['Wels','Grundel'].includes(fishName)) {
+    if (isNight || solar < 50)   lightBonus += 12;
+    else if (solar > 600)        lightBonus -= 8;
+  } else if (['Hecht','Barsch','Rapfen'].includes(fishName)) {
+    if (isDawn)                  lightBonus += 5;
+    else if (solar > 200 && solar < 500) lightBonus += 3;
+    else if (solar > 800)        lightBonus -= 6;
+  } else if (['Karpfen','Schleie','Brasse'].includes(fishName)) {
+    if (solar > 100 && solar < 500) lightBonus += 5;
+    else if (highSun && solar > 700) lightBonus -= 4;
+    else if (isNight)               lightBonus -= 8;
+  } else { // Weißfische (Rotauge, Ukelei etc.)
+    if (solar > 50 && solar < 300)  lightBonus += 5;
+    else if (highSun && solar > 600) lightBonus -= 6;
+  }
+
+  // ── 7. Windrichtung ───────────────────────────────────────────────────────
+  let windBonus = 0;
+  const windPref = WIND[fishName] || 'neutral';
+  if (windPref === 'windward') {
+    if (windDir >= 180 && windDir <= 270) windBonus = 8;
+    else if (windDir > 90 && windDir < 180) windBonus = 3;
+    else windBonus = -5;
+  } else if (windPref === 'lee') {
+    windBonus = windSpeed < 8 ? 8 : windSpeed < 15 ? 3 : windSpeed > 25 ? -8 : 0;
+  }
+
+  // ── 8. Mondphase ──────────────────────────────────────────────────────────
+  const moonBonus = moonFishScore(moonPhaseForDate(date));
+
+  // ── 9. Saison ─────────────────────────────────────────────────────────────
+  const seasonBonus = seasonalScore(date);
+
+  // ── 10. Angelwetter-Index (Luftfeuchtigkeit, Bewölkung, Regen-Proxy) ─────
+  let wxBonus = 0;
+  if (cloudCover > 70) wxBonus += 4;           // Bedeckt = gleichmäßigeres Licht
+  else if (cloudCover < 20) wxBonus -= 2;       // Strahlend klar = Fische tiefer
+  if (humidity > 80 && windSpeed < 10) wxBonus += 3; // Schwüles ruhiges Wetter
+  // Niederschlag-Proxy aus Humidity + Clouds
+  const rainProxy = humidity > 90 && cloudCover > 80;
+  if (rainProxy) wxBonus += 5; // Bald Regen = Fische aktiv
+
+  // ── 11. Deeper Tiefendaten ────────────────────────────────────────────────
+  let depthBonus = 0;
+  if (deeperDepths && DEPTH[fishName]) {
+    const [prefMin, prefMax] = DEPTH[fishName];
+    const overlap = Math.max(0, Math.min(deeperDepths.max, prefMax) - Math.max(deeperDepths.min, prefMin));
+    if (overlap > 0) depthBonus = Math.min(12, Math.round(overlap / (prefMax - prefMin) * 12));
+    else {
+      const gap = Math.min(Math.abs(deeperDepths.min - prefMax), Math.abs(deeperDepths.max - prefMin));
+      depthBonus = -Math.min(15, Math.round(gap * 3));
+    }
+  }
+
+  // ── 12. Fluss-Abfluss/Pegel-Trend ─────────────────────────────────────────
+  let riverBonus = 0;
+  if (_riverData) {
+    riverBonus = riverScore(fishName, _riverData);
+  }
+
+  // ── 13. Kaltfront-Erkennung ───────────────────────────────────────────────
+  let frontBonus = 0;
+  if (fcData && fcData._frontInfo) {
+    // Fische 24-48h nach Kaltfront inaktiv
+    if (fcData._frontInfo.type === 'strong') frontBonus = -12;
+    else if (fcData._frontInfo.type === 'mild') frontBonus = -5;
+  }
+
+  // ── 14. Sauerstoff-Modell (kritisch im Sommer) ───────────────────────────
+  let oxygenBonus = 0;
+  // Gelöster Sauerstoff sinkt mit steigender Wassertemp (Henry'sches Gesetz)
+  // O2-Sättigung bei 4°C ~13mg/l, bei 20°C ~9mg/l, bei 28°C ~7.8mg/l
+  const o2sat = 14.6 - 0.41*waterTemp + 0.008*waterTemp*waterTemp; // mg/l Näherung
+  // Niedriger Abfluss + hohe Temp = O2-Mangel (Strömung bringt Sauerstoff)
+  let o2effective = o2sat;
+  if (_riverData && _riverData.isLow) o2effective -= 1.5;
+  if (_riverData && (_riverData.status === 'rising' || _riverData.status === 'falling')) o2effective += 0.5;
+
+  if (o2effective < 6) {
+    // Kritischer O2-Mangel: fast alle Fische träge
+    oxygenBonus = -15;
+    if (['Hecht','Forelle','Rapfen','Döbel'].includes(fishName)) oxygenBonus = -22; // sauerstoffliebend
+  } else if (o2effective < 7.5) {
+    oxygenBonus = -7;
+    if (['Karpfen','Schleie','Aal','Wels'].includes(fishName)) oxygenBonus = -2; // tolerant
+  } else if (o2effective > 10) {
+    oxygenBonus = 4; // sauerstoffreich = aktiv
+  }
+
+  // ── 15. Photoperiode (Tageslicht-Trend) ──────────────────────────────────
+  let photoBonus = 0;
+  try {
+    const ctr2 = getBestCenter();
+    const photo = photoperiodFactor(date, ctr2[0], ctr2[1]);
+    // Herbst (abnehmende Tageslänge): triggert Fressphase bei Raubfisch
+    if (photo.trend < -0.15) { // Tage werden kürzer (Herbst)
+      if (['Hecht','Zander','Barsch','Wels'].includes(fishName)) photoBonus += 6; // Herbstfraß
+    }
+    // Frühjahr (zunehmende Tageslänge): Laichvorbereitung, hohe Aktivität
+    if (photo.trend > 0.15) {
+      if (['Rotauge','Brasse','Karpfen','Schleie','Rotfeder'].includes(fishName)) photoBonus += 5;
+    }
+  } catch(e) {}
+
+  // ── 16. Persönlicher Lern-Bonus aus Fangbuch ─────────────────────────────
+  let personalBonus = 0;
+  try {
+    const pat = findFTSensor('map_data')?.attributes?.personal_full?.[fishName];
+    if (pat && pat.total_attempts >= 3) {
+      personalBonus = calcPersonalBonus(pat, {
+        hour, pressure, pressureTrend, solar, temperature: waterTemp,
+        waterTemp, cloudCover, windSpeed
+      }, date);
+    }
+  } catch(e) {}
+
+  // ── Finale Berechnung ─────────────────────────────────────────────────────
+  const base  = bioNow * tempFactor * spawnMod;
+  const bonus = solunarBonus + pressureBonus + lightBonus + windBonus +
+                moonBonus + seasonBonus + wxBonus + depthBonus +
+                riverBonus + frontBonus + oxygenBonus + photoBonus + personalBonus;
+  return Math.min(97, Math.max(5, Math.round(base + bonus)));
+}
+
+// Persönlicher Bonus aus gelernten Mustern (Spiegel von personal_learning.py)
+function calcPersonalBonus(pat, cond, date) {
+  const baseRate = pat.base_rate || 0;
+  const confidence = pat.confidence || 0;
+  if (confidence <= 0) return 0;
+
+  const hourBucket = (h) => h<5?'nacht':h<9?'morgen':h<12?'vormittag':h<15?'mittag':h<18?'nachmittag':h<22?'abend':'nacht';
+  const pressBucket = (p,t) => t<-1.5?'fallend':t>1.5?'steigend':p>=1020?'hoch_stabil':p<=1005?'tief_stabil':'normal';
+  const solarBucket = (s) => s<30?'dunkel':s<150?'daemmrig':s<400?'mittel':s<700?'hell':'intensiv';
+  const tempBucket = (t) => t<5?'kalt':t<12?'kuehl':t<20?'mild':t<26?'warm':'heiss';
+  const waterBucket = (w) => w==null?'unbekannt':w<6?'sehr_kalt':w<12?'kalt':w<18?'mild':w<23?'warm':'heiss';
+  const cloudBucket = (c) => c<25?'klar':c<60?'leicht_bewoelkt':c<85?'bewoelkt':'bedeckt';
+  const windBucket = (w) => w<8?'windstill':w<18?'maessig':w<30?'frisch':'stark';
+  const moonBucket = (d) => { const p=moonPhaseForDate(d); return (p<3.7||p>25.8)?'neumond':(p>11&&p<18.5)?'vollmond':p<=11?'zunehmend':'abnehmend'; };
+
+  const dims = {
+    hour:     [hourBucket(cond.hour), 1.4],
+    pressure: [pressBucket(cond.pressure, cond.pressureTrend), 1.2],
+    solar:    [solarBucket(cond.solar), 1.1],
+    temp:     [tempBucket(cond.temperature), 0.8],
+    water:    [waterBucket(cond.waterTemp), 1.0],
+    cloud:    [cloudBucket(cond.cloudCover), 0.7],
+    wind:     [windBucket(cond.windSpeed), 0.6],
+    moon:     [moonBucket(date), 0.9],
+  };
+
+  let weightedDelta = 0, totalWeight = 0;
+  for (const [dim, [bucket, weight]] of Object.entries(dims)) {
+    const dd = pat.dimensions?.[dim];
+    if (!dd || !dd[bucket]) continue;
+    const slot = dd[bucket];
+    const tot = slot.c + slot.n;
+    if (tot < 1) continue;
+    const delta = slot.rate - baseRate;
+    const sampleWeight = Math.min(1, tot / 5);
+    const effWeight = weight * sampleWeight;
+    weightedDelta += delta * effWeight;
+    totalWeight += effWeight;
+  }
+  if (totalWeight === 0) return 0;
+  const avgDelta = weightedDelta / totalWeight;
+  let bonus = avgDelta * 60 * confidence;
+  return Math.max(-20, Math.min(20, bonus));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BESTES BEISSFENSTER HEUTE – stündliche Scores → Peak-Fenster finden
+// ═══════════════════════════════════════════════════════════════════════════
+function bestWindowToday(fishName) {
+  const now = new Date();
+  const sensors = collectAllSensors();
+  const hourly = [];
+  for (let h = 0; h < 24; h++) {
+    // Sensoren konstant halten, nur Stunde + Solunar variiert
+    const hourScore = calcUnifiedDayScore(fishName, now, h, sensors, null);
+    hourly.push({ hour: h, score: hourScore });
+  }
+  // Peak finden
+  const peak = hourly.reduce((a,b) => b.score > a.score ? b : a);
+  // Fenster: zusammenhängende Stunden über 85% des Peak-Scores
+  const threshold = peak.score * 0.88;
+  let windowStart = peak.hour, windowEnd = peak.hour;
+  while (windowStart > 0 && hourly[windowStart-1].score >= threshold) windowStart--;
+  while (windowEnd < 23 && hourly[windowEnd+1].score >= threshold) windowEnd++;
+  return { hourly, peak, windowStart, windowEnd };
+}
+
+// TRIP-PLANER – bester Tag + Uhrzeit der nächsten 7 Tage
+function planBestTrip(fishName) {
+  const now = new Date();
+  const fcDays = haStates['weather.home']?.attributes?.forecast || [];
+  const days = [];
+  for (let i = 0; i <= 6; i++) {
+    const day = new Date(now); day.setDate(day.getDate() + i);
+    const fc = i === 0 ? null : (fcDays[i] || null);
+    const liveData = i === 0 ? collectAllSensors() : null;
+    // Beste Stunde des Tages finden
+    let bestHour = 6, bestScore = 0;
+    for (const h of [5,6,7,8,9,18,19,20,21]) { // Dämmerungsstunden priorisiert
+      const s = calcUnifiedDayScore(fishName, day, h, liveData, fc);
+      if (s > bestScore) { bestScore = s; bestHour = h; }
+    }
+    days.push({ date: day, dayOffset: i, bestHour, score: bestScore });
+  }
+  days.sort((a,b) => b.score - a.score);
+  return days;
+}
+
+// FANG-WAHRSCHEINLICHKEIT HEUTE – aus persönlicher Historie
+function catchProbabilityToday(fishName) {
+  const pat = findFTSensor('map_data')?.attributes?.personal_full?.[fishName];
+  if (!pat || pat.total_attempts < 3) return null;
+  const sensors = collectAllSensors();
+  const now = new Date();
+  // Aktueller Score relativ zur persönlichen Basis-Erfolgsrate
+  const personalBonus = calcPersonalBonus(pat, {
+    hour: now.getHours(), pressure: sensors.pressure, pressureTrend: sensors.pressureTrend,
+    solar: sensors.solar, temperature: sensors.waterTemp, waterTemp: sensors.waterTemp,
+    cloudCover: sensors.cloudCover, windSpeed: sensors.windSpeed
+  }, now);
+  // Basisrate + Bedingungs-Anpassung
+  let prob = pat.base_rate * 100 + personalBonus;
+  return { prob: Math.min(95, Math.max(5, Math.round(prob))), confidence: pat.confidence, attempts: pat.total_attempts };
+}
+
+// Mondphase für ein Datum berechnen (0=Neumond, 1=Vollmond, cycle 29.5 Tage)
+const moonPhaseForDate = (date) => {
+  const ref = new Date('2000-01-06'); // bekannter Neumond
+  const diff = (date - ref) / (1000*60*60*24);
+  return ((diff % 29.53059) + 29.53059) % 29.53059;
+};
+const moonFishScore = (phase) => {
+  // Vollmond (14-15) und Neumond (0/29) = beste Angelzeiten
+  const nearFull = Math.abs(phase - 14.76);
+  const nearNew  = Math.min(phase, 29.53 - phase);
+  if (nearFull < 2 || nearNew < 2) return 10;   // Vollmond/Neumond: +10
+  if (nearFull < 4 || nearNew < 4) return 5;    // nahe dran: +5
+  if (nearFull > 10 && nearNew > 10) return -5; // Halbmond: -5
+  return 0;
+};
+
+// Saisonaler Faktor: Laichzeiten und Jahreszeiten
+const seasonalScore = (date) => {
+  const m = date.getMonth() + 1; // 1-12
+  let bonus = 0;
+  // Frühjahrsaktivität: Fische sehr aktiv nach Winter
+  if (m === 3 || m === 4) bonus += 8;
+  // Herbstfraß vor Winter
+  if (m === 9 || m === 10) bonus += 6;
+  // Hochsommer: mittags inaktiv, aber früh/abends gut
+  if (m === 7 || m === 8) bonus -= 3;
+  // Winter: deutlich weniger Aktivität
+  if (m === 12 || m === 1 || m === 2) bonus -= 10;
+  // Laichzeiten reduzieren Fangchancen
+  if (m === 5 || m === 6) bonus -= 4; // Karpfen/Hecht laicht
+  return bonus;
+};
+
+const scoreFromFc = (fc, fallback, date) => {
+  if (!fc) return fallback || 65;
+  const temp      = parseFloat(fc.temperature || fc.temperature_low || 12);
+  const rain      = parseFloat(fc.precipitation || 0);
+  const rainProb  = parseFloat(fc.precipitation_probability || 0);
+  const wind      = parseFloat(fc.wind_speed || 10);
+  const cond      = (fc.condition || '').toLowerCase();
+  const humidity  = parseFloat(fc.humidity || 70);
+  let mod = 0;
+
+  // ── Wetter ──────────────────────────────────────────────
+  if (temp < 3) mod -= 12; else if (temp < 8) mod -= 6;
+  else if (temp >= 10 && temp <= 18) mod += 8;
+  else if (temp >= 18 && temp <= 22) mod += 4;
+  else if (temp > 28) mod -= 8;
+
+  if (rain > 10) mod -= 15; else if (rain > 5) mod -= 8;
+  else if (rain > 1 && rain <= 4) mod += 5;  // leichter Regen sehr gut
+  if (rainProb > 80) mod -= 10; else if (rainProb > 60) mod -= 4;
+
+  if (wind > 40) mod -= 15; else if (wind > 25) mod -= 8;
+  else if (wind > 15) mod -= 3;
+  else if (wind < 8) mod += 4;
+
+  if (cond.includes('storm') || cond.includes('thunder')) mod -= 18;
+  if (cond.includes('sunny') || cond.includes('clear')) mod += 3;
+  if (cond.includes('overcast') || (cond.includes('cloudy') && !cond.includes('partly'))) mod += 4;
+  if (cond.includes('fog')) mod -= 4;
+
+  // Drucktrend-Proxy aus Wetterwechsel
+  if (cond.includes('rain') && !cond.includes('light')) mod -= 5;
+  if (humidity > 85 && rain < 1) mod += 3;
+
+  // Solar-Schätzung aus Wetterlage (für 14-Tage ohne echten Sensor)
+  const estimatedSolar = cond.includes('sunny')||cond.includes('clear') ? 750
+    : cond.includes('partly') ? 450
+    : cond.includes('overcast')||cond.includes('cloudy') ? 150
+    : cond.includes('rain') ? 80 : 350;
+  if (date) {
+    const isJune = date.getMonth() >= 5 && date.getMonth() <= 7;
+    if (estimatedSolar > 700 && isJune) mod -= 4; // Hochsommer-Intensivstrahlung
+    if (estimatedSolar < 200) mod += 3; // Bedeckt = gleichmäßigere Aktivität
+  }
+
+  // ── Mondphase ───────────────────────────────────────────
+  if (date) {
+    const phase = moonPhaseForDate(date);
+    mod += moonFishScore(phase);
+
+    // ── Saison ──────────────────────────────────────────────
+    mod += seasonalScore(date);
+
+    // ── Wochentag: Sa/So = Angelpotenzial höher (mehr Zeit) ─
+    const dow = date.getDay();
+    if (dow === 0 || dow === 6) mod += 2;
+  }
+
+  return Math.min(97, Math.max(10, Math.round((fallback || 65) + mod)));
+};
+
+const d14 = [];
+const d14labels = [];
+const now14 = new Date();
+
+// Top-Fischart aus aktuellem Ranking
+const top14Fish = (() => {
+  try {
+    const ranking = typeof liveRanking !== 'undefined' ? liveRanking : [];
+    return ranking[0]?.name || 'Rotauge';
+  } catch(e) { return 'Rotauge'; }
+})();
+const liveSensors14 = collectAllSensors();
+
+for (let i = -4; i <= 10; i++) {
+  const day = new Date(now14);
+  day.setDate(day.getDate() + i);
+  d14labels.push({ name: shortDate(day), date: day.getDate(), isPast: i < 0, isToday: i === 0 });
+
+  if (i < 0) {
+    // Vergangenheit: WEEK + Mond + Saison rückwirkend
+    const weekIdx = WEEK.length > 0 ? Math.max(0, WEEK.length - 1 + i) : -1;
+    const base    = weekIdx >= 0 && WEEK[weekIdx] ? WEEK[weekIdx] : 62;
+    const moonB   = moonFishScore(moonPhaseForDate(day));
+    const seasB   = seasonalScore(day);
+    d14.push(Math.min(97, Math.max(5, Math.round(base * 0.9 + moonB + seasB))));
+  } else if (i === 0) {
+    d14.push(calcUnifiedDayScore(top14Fish, day, now14.getHours(), liveSensors14, null));
+  } else {
+    const fcDay = fcDays14[i] || null;
+    if (fcDay) fcDay._frontInfo = detectColdFront(fcDays14, i);
+    d14.push(calcUnifiedDayScore(top14Fish, day, 10, null, fcDay));
+  }
+}
+
     return `
       <div class="panel blue" style="margin-top:10px">
-        <div class="sec">📈 14-Tage Prognose</div>
+        <div class="sec">📈 14-Tage Prognose <span style="font-weight:400;opacity:.5;font-size:9px">${top14Fish} · 4 Rückblick + Heute + 10 Vorschau</span></div>
         <div class="chart-box" style="height:200px"><svg id="chart14" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
-        <div style="display:flex;justify-content:space-around;margin-top:10px;flex-wrap:wrap;gap:3px">
-          ${d14.map((v,i)=>`<div style="text-align:center"><div style="font-size:10px;color:rgba(255,255,255,.4)">${dn[i]}</div><div style="font-size:13px;font-weight:900;color:${sc2(v)}">${v}%</div></div>`).join('')}
+        <div style="display:grid;grid-template-columns:repeat(14,1fr);gap:2px;margin-top:8px">
+          ${d14labels.map((d,i)=>`<div style="text-align:center;opacity:${d.isPast?'.45':'1'}">
+            <div style="font-size:9px;font-weight:${d.isToday?'900':'600'};color:${d.isToday?'#ffd23f':'rgba(255,255,255,.5)'}">
+              ${d.name}${d.isToday?' ★':''}
+            </div>
+            <div style="font-size:11px;font-weight:900;color:${d.isPast?'rgba(255,255,255,.35)':sc2(d14[i])}">${d14[i]}%</div>
+          </div>`).join('')}
         </div>
       </div>`;
   }
@@ -4158,6 +5104,313 @@ function getSpots() {
       success_rate:100,
     };
   }).filter(s => s.lat && s.lon);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORTS-PROGNOSE – Multi-Quellen Wetter (Open-Meteo) + Beißchance
+// ═══════════════════════════════════════════════════════════════════════════
+let _locPickerMap = null, _locPickerMarker = null, _locPicked = null;
+
+function openLocationForecast() {
+  let ov = document.getElementById('locForecastOverlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'locForecastOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:var(--bg-main,#0d1117);z-index:10000;overflow-y:auto;display:flex;flex-direction:column';
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  ov.innerHTML =
+    '<div style="position:sticky;top:0;background:var(--bg-panel,#161b22);border-bottom:1px solid var(--border,#30363d);padding:14px;display:flex;align-items:center;gap:12px;z-index:10">' +
+      '<button onclick="closeLocationForecast()" style="background:var(--kpi-bg,#21262d);border:1px solid var(--border,#30363d);color:var(--txt-main,#e6edf3);padding:8px 14px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit">← Zurück</button>' +
+      '<span style="font-size:16px;font-weight:900;color:var(--txt-main,#e6edf3)">🗺️ Ort wählen</span>' +
+    '</div>' +
+    '<div style="padding:14px">' +
+      '<div style="font-size:13px;color:var(--txt-muted,#8b949e);margin-bottom:10px">Tippe auf die Karte um einen Ort zu wählen, dann „Prognose laden".</div>' +
+      '<div id="locPickerMap" style="height:340px;border-radius:14px;overflow:hidden;border:1px solid var(--border,#30363d);margin-bottom:12px"></div>' +
+      '<input id="locNameInput" placeholder="Name (optional, z.B. Vechte Brücke)" style="width:100%;background:var(--kpi-bg,#21262d);border:1px solid var(--border,#30363d);color:var(--txt-main,#e6edf3);padding:11px;border-radius:10px;font-size:14px;font-family:inherit;margin-bottom:10px;box-sizing:border-box">' +
+      '<button id="locLoadBtn" onclick="loadPickedLocation()" disabled style="width:100%;background:var(--kpi-bg,#21262d);border:1px solid var(--border,#30363d);color:rgba(255,255,255,.3);padding:13px;border-radius:10px;font-size:14px;font-weight:800;cursor:not-allowed;font-family:inherit">📊 Prognose laden</button>' +
+      '<div id="locForecastResult" style="margin-top:14px"></div>' +
+    '</div>';
+
+  setTimeout(() => initLocationPicker(), 100);
+}
+
+function closeLocationForecast() {
+  const ov = document.getElementById('locForecastOverlay');
+  if (ov) ov.style.display = 'none';
+  if (_locPickerMap) { try { _locPickerMap.remove(); } catch(e){} _locPickerMap = null; }
+}
+
+function initLocationPicker() {
+  const el = document.getElementById('locPickerMap');
+  if (!el || typeof L === 'undefined') return;
+  const center = getBestCenter();
+  _locPickerMap = L.map(el).setView(center, 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
+  }).addTo(_locPickerMap);
+
+  // Gespeicherten Ort vorausgewählt anzeigen
+  const saved = localStorage.getItem('ft_forecast_location');
+  if (saved) {
+    try {
+      const loc = JSON.parse(saved);
+      _locPicked = { lat: loc.lat, lon: loc.lon };
+      _locPickerMarker = L.marker([loc.lat, loc.lon]).addTo(_locPickerMap);
+      _locPickerMap.setView([loc.lat, loc.lon], 13);
+      const btn = document.getElementById('locLoadBtn');
+      if (btn) { btn.disabled = false; btn.style.color = '#3fb950'; btn.style.cursor = 'pointer'; btn.style.borderColor = 'rgba(63,185,80,.4)'; }
+    } catch(e) {}
+  }
+
+  _locPickerMap.on('click', (e) => {
+    _locPicked = { lat: e.latlng.lat, lon: e.latlng.lng };
+    if (_locPickerMarker) _locPickerMarker.setLatLng(e.latlng);
+    else _locPickerMarker = L.marker(e.latlng).addTo(_locPickerMap);
+    const btn = document.getElementById('locLoadBtn');
+    if (btn) { btn.disabled = false; btn.style.color = '#3fb950'; btn.style.cursor = 'pointer'; btn.style.borderColor = 'rgba(63,185,80,.4)'; }
+  });
+
+  setTimeout(() => _locPickerMap.invalidateSize(), 200);
+}
+
+async function loadPickedLocation() {
+  if (!_locPicked) return;
+  const name = document.getElementById('locNameInput')?.value || '';
+  localStorage.setItem('ft_forecast_location', JSON.stringify({ lat: _locPicked.lat, lon: _locPicked.lon, name }));
+  await showLocationForecast(_locPicked.lat, _locPicked.lon, name);
+}
+
+// Wassertemperatur-Schätzer aus Lufttemperatur-Historie
+// Physik: Gewässer folgen der Luft mit thermischer Trägheit (Verzögerung+Dämpfung)
+// Modell: exponentielle Glättung Tw(t) = Tw(t-1) + k*(Ta_mittel - Tw(t-1))
+function estimateWaterTemp(dailyTimes, tMaxArr, tMinArr, todayIdx, kInertia) {
+  kInertia = kInertia || 0.22; // kleiner/mittlerer Fluss: schnellere Reaktion
+  // Start: Mittelwert der ersten Tage als Initialwert
+  let tw = ((tMaxArr[0] + tMinArr[0]) / 2) || 10;
+  const series = [];
+  for (let i = 0; i < tMaxArr.length; i++) {
+    const tAir = (tMaxArr[i] + tMinArr[i]) / 2;
+    // Tagesmittel-Luft mit Dämpfung der Extreme
+    tw = tw + kInertia * (tAir - tw);
+    // Wasser kühlt nicht unter ~0.5°C (Flüsse frieren selten komplett)
+    tw = Math.max(0.5, tw);
+    series.push(tw);
+  }
+  return {
+    today: series[todayIdx] != null ? series[todayIdx] : tw,
+    series,
+    trend: todayIdx >= 3 ? series[todayIdx] - series[todayIdx-3] : 0,
+  };
+}
+
+// Multi-Modell Wetterabruf von Open-Meteo
+async function fetchMultiSourceWeather(lat, lon) {
+  const hourly = 'temperature_2m,pressure_msl,wind_speed_10m,wind_direction_10m,cloud_cover,precipitation,relative_humidity_2m,shortwave_radiation';
+  const daily  = 'temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,weather_code';
+  const models = ['icon_seamless', 'gfs_seamless', 'ecmwf_ifs04'];
+  const modelNames = { icon_seamless:'ICON (DWD)', gfs_seamless:'GFS (NOAA)', ecmwf_ifs04:'ECMWF' };
+
+  const fetches = models.map(model =>
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+          `&hourly=${hourly}&daily=${daily}&models=${model}&forecast_days=14&past_days=21&timezone=auto`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => ({ model, name: modelNames[model], data: d }))
+      .catch(() => ({ model, name: modelNames[model], data: null }))
+  );
+
+  const results = await Promise.all(fetches);
+  return results.filter(r => r.data && r.data.daily);
+}
+
+async function showLocationForecast(lat, lon, name) {
+  // Falls vom Settings-Button aufgerufen: Overlay öffnen
+  let ov = document.getElementById('locForecastOverlay');
+  if (!ov || ov.style.display === 'none') {
+    openLocationForecast();
+    await new Promise(r => setTimeout(r, 300));
+  }
+  const res = document.getElementById('locForecastResult');
+  if (!res) return;
+
+  res.innerHTML = '<div style="text-align:center;padding:30px"><div style="font-size:32px;margin-bottom:10px">🌍</div><div style="color:#3fb950;font-weight:700">Lade Wetterdaten aus mehreren Quellen…</div></div>';
+
+  let sources;
+  try {
+    sources = await fetchMultiSourceWeather(lat, lon);
+  } catch(e) {
+    res.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center">❌ Wetterdaten konnten nicht geladen werden.<br><small>' + e.message + '</small></div>';
+    return;
+  }
+
+  if (!sources.length) {
+    res.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center">❌ Keine Wetterquelle erreichbar.</div>';
+    return;
+  }
+
+  // Tägliche Werte über alle Modelle mitteln (inkl. 21 Tage Historie für Wassertemp)
+  const allTimes = sources[0].data.daily.time;
+  const days = allTimes.length;
+  const PAST = 21; // past_days aus dem Fetch
+  const fullTMax = [], fullTMin = [];
+  for (let i = 0; i < days; i++) {
+    let tMax=0, tMin=0, cnt=0;
+    sources.forEach(s => {
+      const d = s.data.daily;
+      if (d.temperature_2m_max[i] != null) { tMax += d.temperature_2m_max[i]; tMin += d.temperature_2m_min[i]; cnt++; }
+    });
+    fullTMax.push(cnt ? tMax/cnt : 12);
+    fullTMin.push(cnt ? tMin/cnt : 6);
+  }
+  // Wassertemperatur-Modell über gesamte Reihe
+  const waterEst = estimateWaterTemp(allTimes, fullTMax, fullTMin, PAST);
+
+  // Zukunfts- + Heute-Tage für Anzeige (ab Index PAST)
+  const avgDaily = [];
+  for (let i = PAST; i < Math.min(days, PAST + 14); i++) {
+    let rain=0, wind=0, cnt=0;
+    sources.forEach(s => {
+      const d = s.data.daily;
+      if (d.precipitation_sum[i] != null) { rain += d.precipitation_sum[i] || 0; wind += d.wind_speed_10m_max[i] || 0; cnt++; }
+    });
+    avgDaily.push({
+      date: new Date(allTimes[i]),
+      tMax: fullTMax[i], tMin: fullTMin[i],
+      rain: cnt ? rain/cnt : 0, wind: cnt ? wind/cnt : 10,
+      waterTemp: waterEst.series[i] != null ? waterEst.series[i] : waterEst.today,
+      spread: sources.length,
+    });
+  }
+
+  // Modell-Übereinstimmung (Konfidenz): Streuung der Tagestemperaturen
+  let agreement = 100;
+  if (sources.length > 1) {
+    let totalSpread = 0, n = 0;
+    for (let i = PAST; i < Math.min(days, PAST + 7); i++) {
+      const temps = sources.map(s => s.data.daily.temperature_2m_max[i]).filter(t => t != null);
+      if (temps.length > 1) {
+        const mean = temps.reduce((a,b)=>a+b,0)/temps.length;
+        const variance = temps.reduce((a,b)=>a+(b-mean)**2,0)/temps.length;
+        totalSpread += Math.sqrt(variance); n++;
+      }
+    }
+    const avgSpread = n ? totalSpread/n : 0;
+    agreement = Math.max(40, Math.round(100 - avgSpread * 12));
+  }
+
+  // Beißchance je Tag mit unified engine
+  const topFish = (() => { try { return (typeof liveRanking !== 'undefined' && liveRanking[0]) ? liveRanking[0].name : 'Rotauge'; } catch(e){ return 'Rotauge'; } })();
+  const dayScores = avgDaily.map((d, i) => {
+    // Stündliche Werte für 10 Uhr des Tages als Repräsentant
+    const fcProxy = {
+      temperature: d.waterTemp,  // echte geschätzte Wassertemperatur statt Luft!
+      airTemp: (d.tMax + d.tMin) / 2,
+      wind_speed: d.wind,
+      precipitation: d.rain,
+      cloud_coverage: d.rain > 2 ? 80 : d.rain > 0.2 ? 50 : 25,
+      humidity: d.rain > 1 ? 85 : 65,
+      condition: d.rain > 3 ? 'rainy' : d.rain > 0.3 ? 'cloudy' : 'partlycloudy',
+      wind_bearing: 200,
+      _waterTemp: d.waterTemp,
+    };
+    return calcUnifiedDayScore(topFish, d.date, 10, null, fcProxy);
+  });
+
+  const dayName = (d) => ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()];
+  const scoreCol = (v) => v>=75?'#3fb950':v>=55?'#ffd23f':'#ff9d18';
+
+  res.innerHTML =
+    '<div style="background:var(--kpi-bg,#21262d);border:1px solid var(--border,#30363d);border-radius:12px;padding:14px;margin-bottom:12px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+        '<span style="font-size:15px;font-weight:900;color:var(--txt-main,#e6edf3)">📍 ' + (name || 'Gewählter Ort') + '</span>' +
+        '<span style="font-size:11px;color:#3fb950;font-weight:700">' + sources.length + ' Quellen</span>' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--txt-muted,#8b949e);margin-bottom:8px">' +
+        sources.map(s => s.name).join(' · ') + '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<div style="flex:1;height:6px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden">' +
+          '<div style="height:100%;width:' + agreement + '%;background:' + (agreement>75?'#3fb950':agreement>55?'#ffd23f':'#ff9d18') + '"></div>' +
+        '</div>' +
+        '<span style="font-size:11px;font-weight:700;color:var(--txt-muted,#8b949e)">' + agreement + '% Übereinstimmung</span>' +
+      '</div>' +
+    '</div>' +
+
+    '<div id="locWaterBox"></div>' +
+    '<div id="locRiverBox"></div>' +
+    '<div style="font-size:12px;font-weight:700;color:var(--txt-muted,#8b949e);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🎣 Beißchance ' + topFish + ' · 14 Tage</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:14px">' +
+      avgDaily.slice(0,14).map((d,i) =>
+        '<div style="text-align:center;background:var(--kpi-bg,#21262d);border:1px solid var(--border,#30363d);border-radius:8px;padding:6px 2px">' +
+          '<div style="font-size:9px;color:var(--txt-muted,#8b949e)">' + dayName(d.date) + '</div>' +
+          '<div style="font-size:13px;font-weight:900;color:' + scoreCol(dayScores[i]) + '">' + dayScores[i] + '</div>' +
+        '</div>'
+      ).join('') +
+    '</div>' +
+
+    '<div style="font-size:12px;font-weight:700;color:var(--txt-muted,#8b949e);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🌤️ Wetter · 7 Tage (gemittelt)</div>' +
+    '<div style="display:flex;flex-direction:column;gap:6px">' +
+      avgDaily.slice(0,7).map(d =>
+        '<div style="display:flex;align-items:center;gap:10px;background:var(--kpi-bg,#21262d);border:1px solid var(--border,#30363d);border-radius:8px;padding:8px 12px">' +
+          '<div style="width:32px;font-size:12px;font-weight:700;color:var(--txt-main,#e6edf3)">' + dayName(d.date) + '</div>' +
+          '<div style="flex:1;font-size:13px;color:var(--txt-main,#e6edf3)">🌡️ ' + Math.round(d.tMax) + '° / ' + Math.round(d.tMin) + '°</div>' +
+          '<div style="font-size:12px;color:#2ea8ff">💧 ' + d.rain.toFixed(1) + 'mm</div>' +
+          '<div style="font-size:12px;color:var(--txt-muted,#8b949e)">💨 ' + Math.round(d.wind) + '</div>' +
+        '</div>'
+      ).join('') +
+    '</div>' +
+    '<div style="font-size:10px;color:var(--txt-muted,#8b949e);text-align:center;margin-top:12px;opacity:.7">Daten: Open-Meteo + GloFAS · Beißchance mit lokalem Fischverhalten-Modell berechnet</div>';
+
+  // Wassertemperatur-Box anzeigen
+  try {
+    const wbox = document.getElementById('locWaterBox');
+    const wtNow = avgDaily[0]?.waterTemp;
+    if (wbox && wtNow != null) {
+      const wt7 = avgDaily[6]?.waterTemp;
+      const trend = wt7 != null ? wt7 - wtNow : 0;
+      const trIcon = trend > 0.5 ? '📈 steigend' : trend < -0.5 ? '📉 fallend' : '➡️ stabil';
+      const wtCol = wtNow < 8 ? '#67d3ff' : wtNow < 15 ? '#3fb950' : wtNow < 22 ? '#ffd23f' : '#ff9d18';
+      wbox.innerHTML =
+        '<div style="background:rgba(103,211,255,.08);border:1px solid rgba(103,211,255,.2);border-radius:12px;padding:12px;margin-bottom:12px">' +
+        '<div style="font-size:12px;font-weight:700;color:#67d3ff;margin-bottom:6px">🌡️ Wassertemperatur (geschätzt)</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<span style="font-size:22px;font-weight:900;color:' + wtCol + '">' + wtNow.toFixed(1) + '°C</span>' +
+        '<span style="font-size:12px;color:var(--txt-muted,#8b949e)">' + trIcon + ' (7 Tage)</span>' +
+        '</div>' +
+        '<div style="font-size:10px;color:var(--txt-muted,#8b949e);margin-top:4px;opacity:.7">Modell aus 21 Tagen Lufttemperatur-Historie</div>' +
+        '</div>';
+    }
+  } catch(e) {}
+
+  // Fluss-Abfluss für diesen Ort laden
+  try {
+    const rd = await (async () => {
+      const url = `https://flood-api.open-meteo.com/v1/flood?latitude=${lat}&longitude=${lon}&daily=river_discharge&forecast_days=7&past_days=7`;
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      const d = await r.json();
+      const vals = (d.daily?.river_discharge || []).filter(v => v != null);
+      if (vals.length < 8) return null;
+      const today = vals[7], ago = vals[4], avg = vals.reduce((a,b)=>a+b,0)/vals.length;
+      const trendPct = ago > 0 ? ((today-ago)/ago)*100 : 0;
+      const relAvg = avg > 0 ? ((today-avg)/avg)*100 : 0;
+      return { today, trendPct, relAvg };
+    })();
+    const box = document.getElementById('locRiverBox');
+    if (rd && box) {
+      const trendIcon = rd.trendPct > 8 ? '📈' : rd.trendPct < -8 ? '📉' : '➡️';
+      const trendTxt  = rd.trendPct > 8 ? 'steigend' : rd.trendPct < -8 ? 'fallend' : 'stabil';
+      const levelTxt  = rd.relAvg > 40 ? 'Hochwasser' : rd.relAvg < -30 ? 'Niedrigwasser' : 'normal';
+      const col = rd.relAvg > 40 ? '#ff9d18' : rd.relAvg < -30 ? '#ffd23f' : '#3fb950';
+      box.innerHTML =
+        '<div style="background:rgba(46,168,255,.08);border:1px solid rgba(46,168,255,.2);border-radius:12px;padding:12px;margin-bottom:14px">' +
+        '<div style="font-size:12px;font-weight:700;color:#2ea8ff;margin-bottom:6px">🌊 Fluss-Abfluss (GloFAS)</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<span style="font-size:13px;color:var(--txt-main,#e6edf3)">' + trendIcon + ' ' + rd.today.toFixed(1) + ' m³/s · ' + trendTxt + '</span>' +
+        '<span style="font-size:12px;font-weight:700;color:' + col + '">' + levelTxt + '</span>' +
+        '</div></div>';
+    }
+  } catch(e) {}
 }
 
 function showToast(msg, col) {
@@ -5011,6 +6264,21 @@ async function init() {
   try {
     await connectHA();
   } catch(e) { console.warn('HA connect:', e); }
+
+  // Deep-Link: ?action=catch öffnet direkt das Fang-Formular, ?action=nocatch loggt Schneider
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const action = params.get('action');
+    if (action === 'catch') {
+      currentView = 'logbook';
+      catchFormActive = true; catchPhotoData = null;
+    } else if (action === 'nocatch') {
+      currentView = 'logbook';
+      // Schneider direkt loggen nach kurzem Warten (HA muss verbunden sein)
+      setTimeout(() => { try { logNoCatch(); } catch(e){} }, 800);
+    }
+  } catch(e) {}
+
   try {
     buildNav();
   } catch(e) { console.error('buildNav:', e); }

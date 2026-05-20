@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fang">
+<link rel="apple-touch-icon" href="/local/fishing_tracker_icon.png">
+<title>Fishing Tracker · Schnell-Erfassung</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; margin:0; padding:0; }
+  body { font-family:'Outfit',sans-serif; color:#e8f1f2; min-height:100vh;
+    background:radial-gradient(120% 80% at 50% -10%, #0a3a44 0%, #052029 38%, #021015 68%, #01080b 100%);
+    background-attachment:fixed; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  .caustic { position:fixed; inset:0; opacity:.5; pointer-events:none; mix-blend-mode:screen; z-index:0;
+    background:radial-gradient(40% 20% at 30% 12%, rgba(64,200,224,.22), transparent 70%),
+               radial-gradient(50% 24% at 75% 18%, rgba(40,160,190,.16), transparent 70%);
+    animation:drift 9s ease-in-out infinite alternate; }
+  @keyframes drift { 0%{transform:translateY(0) scale(1)} 100%{transform:translateY(14px) scale(1.05)} }
+  .grain { position:fixed; inset:0; pointer-events:none; opacity:.05; z-index:0;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+  .wrap { max-width:440px; margin:0 auto; padding:30px 22px 36px; position:relative; z-index:1; }
+  .kicker { font-size:11px; letter-spacing:3px; text-transform:uppercase; color:#5fb8c9; font-weight:700; opacity:0; animation:up .6s .1s forwards; }
+  .title { font-family:'Fraunces',serif; font-size:36px; font-weight:900; line-height:1.02; letter-spacing:-.5px; margin:4px 0 20px; opacity:0; animation:up .6s .2s forwards;
+    background:linear-gradient(180deg,#fff,#9fd9e3); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+
+  .gauge { display:flex; align-items:center; gap:16px; padding:14px 16px; margin-bottom:24px;
+    background:linear-gradient(145deg, rgba(255,255,255,.05), rgba(255,255,255,.01));
+    border:1px solid rgba(95,184,201,.18); border-radius:20px; backdrop-filter:blur(8px);
+    opacity:0; animation:up .6s .3s forwards; }
+  .ring { position:relative; width:64px; height:64px; flex-shrink:0; }
+  .ring svg { transform:rotate(-90deg); }
+  .ring .val { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; color:#5ee6a8; }
+  .gauge .info .lbl { font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:#7aa0a8; font-weight:700; }
+  .gauge .info .fish { font-family:'Fraunces',serif; font-size:19px; font-weight:600; color:#eaf6f8; margin-top:1px; }
+
+  .btn { width:100%; border:none; border-radius:22px; padding:24px 20px; margin-bottom:14px;
+    cursor:pointer; font-family:inherit; display:flex; align-items:center; gap:18px;
+    position:relative; overflow:hidden; transition:transform .14s cubic-bezier(.2,.8,.3,1);
+    text-decoration:none; opacity:0; }
+  .btn:nth-of-type(1){ animation:up .6s .42s forwards; }
+  .btn:nth-of-type(2){ animation:up .6s .52s forwards; }
+  .btn:active { transform:scale(.975); }
+  .btn .ico { width:46px; height:46px; flex-shrink:0; }
+  .btn .txt { text-align:left; flex:1; }
+  .btn .lbl { font-size:22px; font-weight:800; letter-spacing:-.3px; }
+  .btn .desc { font-size:12px; opacity:.7; margin-top:2px; font-weight:500; }
+  .btn .arrow { font-size:22px; opacity:.4; }
+  .catch { background:linear-gradient(150deg,#0c5a42,#0a3d2e); color:#7ff0c0;
+    box-shadow:0 12px 30px rgba(10,80,60,.4), inset 0 1px 0 rgba(120,255,200,.18); }
+  .catch::before, .nocatch::before { content:''; position:absolute; top:0; left:0; right:0; height:50%;
+    background:linear-gradient(180deg,rgba(255,255,255,.08),transparent); pointer-events:none; }
+  .nocatch { background:linear-gradient(150deg,#5a2424,#3d1a1a); color:#ffa0a0;
+    box-shadow:0 12px 30px rgba(80,30,30,.35), inset 0 1px 0 rgba(255,150,150,.16); }
+
+  .status { margin-top:16px; padding:14px; border-radius:14px; text-align:center; font-size:13px; font-weight:600;
+    background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.06); color:#7aa0a8;
+    opacity:0; animation:up .6s .62s forwards; transition:color .3s, border-color .3s, background .3s; }
+  .status.ok { color:#5ee6a8; border-color:rgba(94,230,168,.35); background:rgba(94,230,168,.07); }
+  .status.err { color:#ffa0a0; border-color:rgba(255,160,160,.35); background:rgba(255,160,160,.07); }
+  .foot { margin-top:18px; text-align:center; opacity:0; animation:up .6s .7s forwards; }
+  .foot a { color:#5fb8c9; text-decoration:none; font-size:12px; font-weight:600; letter-spacing:.5px; }
+  @keyframes up { from{opacity:0; transform:translateY(14px)} to{opacity:1; transform:translateY(0)} }
+</style>
+</head>
+<body>
+  <div class="caustic"></div>
+  <div class="grain"></div>
+  <div class="wrap">
+    <div class="kicker">Fishing Tracker</div>
+    <div class="title">Schnell-<br>Erfassung</div>
+
+    <div class="gauge">
+      <div class="ring">
+        <svg width="64" height="64">
+          <circle cx="32" cy="32" r="27" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="6"/>
+          <circle cx="32" cy="32" r="27" fill="none" stroke="#5ee6a8" stroke-width="6" stroke-linecap="round"
+                  stroke-dasharray="169.6" stroke-dashoffset="169.6" id="gring"/>
+        </svg>
+        <div class="val" id="gval">–</div>
+      </div>
+      <div class="info">
+        <div class="lbl">Beste Beißchance jetzt</div>
+        <div class="fish" id="gfish">Lade…</div>
+      </div>
+    </div>
+
+    <a class="btn catch" href="/fishing-tracker?action=catch">
+      <svg class="ico" viewBox="0 0 48 48" fill="none">
+        <path d="M6 24c6-9 18-13 28-9 4 1.6 7 4.5 8 9-1 4.5-4 7.4-8 9-10 4-22 0-28-9Z" fill="#7ff0c0" opacity=".22"/>
+        <path d="M6 24c6-9 18-13 28-9 4 1.6 7 4.5 8 9-1 4.5-4 7.4-8 9-10 4-22 0-28-9Z" stroke="#7ff0c0" stroke-width="2"/>
+        <path d="M42 17c2 2.5 3 5 3 7s-1 4.5-3 7" stroke="#7ff0c0" stroke-width="2" fill="none"/>
+        <circle cx="16" cy="22" r="2" fill="#7ff0c0"/>
+      </svg>
+      <span class="txt"><div class="lbl">Fang</div><div class="desc">Formular: Art, Maß, Köder, Foto</div></span>
+      <span class="arrow">›</span>
+    </a>
+
+    <button class="btn nocatch" id="noCatchBtn">
+      <svg class="ico" viewBox="0 0 48 48" fill="none">
+        <path d="M6 24c6-9 18-13 28-9 4 1.6 7 4.5 8 9-1 4.5-4 7.4-8 9-10 4-22 0-28-9Z" stroke="#ffa0a0" stroke-width="2" opacity=".5"/>
+        <line x1="12" y1="36" x2="38" y2="12" stroke="#ffa0a0" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <span class="txt"><div class="lbl">Kein Fang</div><div class="desc">Schneider sofort speichern</div></span>
+      <span class="arrow">›</span>
+    </button>
+
+    <div class="status" id="status">Bereit.</div>
+    <div class="foot"><a href="/fishing-tracker">Zur vollen App ›</a></div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    function token() { try { return JSON.parse(localStorage.getItem('hassTokens')).access_token; } catch(e){ return null; } }
+    function setStatus(m, c) { const s=$('status'); s.textContent=m; s.className='status'+(c?' '+c:''); }
+
+    // Live Beißchance + Top-Fisch laden
+    async function loadLive() {
+      const t = token(); if (!t) { $('gfish').textContent='—'; $('gval').textContent='—'; return; }
+      try {
+        const r = await fetch('/api/states/sensor.fishing_tracker_species_ranking', { headers:{Authorization:'Bearer '+t} });
+        if (!r.ok) return;
+        const d = await r.json();
+        const a = d.attributes || {};
+        const fish = a.top_fish || a.best_fish || '—';
+        const spot = a.top_spot || a.best_spot || '';
+        const score = parseInt(a.top_score || a.best_score || d.state || 0);
+        $('gfish').textContent = fish + (spot ? ' · ' + spot : '');
+        const circ = 169.6;
+        $('gring').style.transition = 'stroke-dashoffset 1.2s cubic-bezier(.2,.8,.3,1)';
+        $('gring').style.strokeDashoffset = circ - (circ * score/100);
+        // Farbe nach Score
+        const col = score>=75?'#5ee6a8':score>=55?'#ffd23f':'#ff9d4a';
+        $('gring').style.stroke = col; $('gval').style.color = col;
+        let n=0; const iv=setInterval(()=>{ n+=3; if(n>=score){n=score;clearInterval(iv);} $('gval').textContent=n+'%'; },25);
+      } catch(e) {}
+    }
+
+    $('noCatchBtn').addEventListener('click', async () => {
+      setStatus('Speichere Schneider…');
+      const t = token();
+      if (!t) { setStatus('Öffne App…'); location.href='/fishing-tracker?action=nocatch'; return; }
+      try {
+        const r = await fetch('/api/services/fishing_tracker/log_no_catch', {
+          method:'POST', headers:{Authorization:'Bearer '+t,'Content-Type':'application/json'}, body:'{}' });
+        if (r.ok) setStatus('✓ Schneider gespeichert · '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})+' Uhr','ok');
+        else { setStatus('Öffne App…','err'); setTimeout(()=>location.href='/fishing-tracker?action=nocatch',1000); }
+      } catch(e) { setStatus('Öffne App…'); location.href='/fishing-tracker?action=nocatch'; }
+    });
+
+    loadLive();
+  </script>
+</body>
+</html>
