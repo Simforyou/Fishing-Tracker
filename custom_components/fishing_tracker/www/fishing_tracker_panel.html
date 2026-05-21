@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.27.0 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.27.1 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -251,7 +251,7 @@ const VIEWS = [
 function buildNav() {
   document.getElementById('nav').innerHTML = VIEWS.map(([v, i, l]) =>
     `<button class="ft-nav-btn ${v === currentView ? 'active' : ''}"
-      onclick="switchView('${v}')">${i} ${l}</button>`
+      data-view="${v}">${i} ${l}</button>`
   ).join('');
 }
 
@@ -2837,14 +2837,14 @@ function catchFormView() {
 }
 
 // ── Views ─────────────────────────────────────────────────────────────────────
+let _riverFetchStarted = false;
 function renderView() {
-  // Fluss-Abfluss laden (non-blocking, gecacht 3h) → triggert re-render bei Erfolg
+  // Fluss-Abfluss einmalig im Hintergrund laden (kein Auto-Re-Render → kein Interferieren mit Tab-Wechsel)
   try {
-    const ctr = getBestCenter();
-    if (ctr && !_riverData) {
-      fetchRiverDischarge(ctr[0], ctr[1]).then(rd => {
-        if (rd) { try { renderView(); } catch(e){} }
-      });
+    if (!_riverData && !_riverFetchStarted) {
+      _riverFetchStarted = true;
+      const ctr = getBestCenter();
+      if (ctr) fetchRiverDischarge(ctr[0], ctr[1]).catch(()=>{ _riverFetchStarted = false; });
     }
   } catch(e) {}
 
@@ -3096,9 +3096,8 @@ const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
           }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 5);
 
           const medals = ['🥇','🥈','🥉','4.','5.'];
-          return liveRanking.map((r, i) => `<div class="rank-row" onclick="openFishSpotMap('${r.name}')"
+          return liveRanking.map((r, i) => `<div class="rank-row" data-fishspot="${r.name}"
             style="cursor:pointer;border-radius:10px;padding:4px 6px;margin:0 -6px;transition:.15s"
-            onmouseover="this.style.background='rgba(46,168,255,.08)'" onmouseout="this.style.background=''"
             ontouchstart="this.style.background='rgba(46,168,255,.08)'" ontouchend="this.style.background=''">
             <span style="font-size:13px;font-weight:800;min-width:110px;display:flex;align-items:center;gap:5px">
               <span style="font-size:11px;opacity:.6">${medals[i]}</span>
@@ -3849,7 +3848,7 @@ const d14 = (() => {
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.27.0'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.27.1'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -4372,14 +4371,14 @@ const _AST = (() => {
     const base = new Date(date); base.setHours(0,0,0,0);
     let prevAlt = null, prevSlope = null;
     const transits = [], antitransits = [];
-    for (let m = 0; m <= 1440; m += 10) {
+    for (let m = 0; m <= 1440; m += 20) {
       const t = new Date(base.getTime() + m*60000);
       const alt = getMoonPosition(t, lat, lon).altitude;
       if (prevAlt !== null) {
         const slope = alt - prevAlt;
         if (prevSlope !== null) {
-          if (prevSlope > 0 && slope <= 0) transits.push(new Date(base.getTime() + (m-5)*60000));      // Maximum = Transit
-          if (prevSlope < 0 && slope >= 0) antitransits.push(new Date(base.getTime() + (m-5)*60000));  // Minimum = Antitransit
+          if (prevSlope > 0 && slope <= 0) transits.push(new Date(base.getTime() + (m-10)*60000));      // Maximum = Transit
+          if (prevSlope < 0 && slope >= 0) antitransits.push(new Date(base.getTime() + (m-10)*60000));  // Minimum = Antitransit
         }
         prevSlope = slope;
       }
@@ -4393,12 +4392,12 @@ const _AST = (() => {
     const base = new Date(date); base.setHours(0,0,0,0);
     let prevAlt = null;
     const rises = [], sets = [];
-    for (let m = 0; m <= 1440; m += 10) {
+    for (let m = 0; m <= 1440; m += 20) {
       const t = new Date(base.getTime() + m*60000);
       const alt = getMoonPosition(t, lat, lon).altitude;
       if (prevAlt !== null) {
-        if (prevAlt < 0 && alt >= 0) rises.push(new Date(base.getTime() + (m-5)*60000));
-        if (prevAlt >= 0 && alt < 0) sets.push(new Date(base.getTime() + (m-5)*60000));
+        if (prevAlt < 0 && alt >= 0) rises.push(new Date(base.getTime() + (m-10)*60000));
+        if (prevAlt >= 0 && alt < 0) sets.push(new Date(base.getTime() + (m-10)*60000));
       }
       prevAlt = alt;
     }
@@ -4409,7 +4408,7 @@ const _AST = (() => {
   const sunRiseSet = (date, lat, lon) => {
     const base = new Date(date); base.setHours(0,0,0,0);
     let prevAlt = null, rise = null, set = null;
-    for (let m = 0; m <= 1440; m += 5) {
+    for (let m = 0; m <= 1440; m += 15) {
       const t = new Date(base.getTime() + m*60000);
       const alt = getSunPosition(t, lat, lon).altitude;
       if (prevAlt !== null) {
@@ -4425,14 +4424,19 @@ const _AST = (() => {
   return { getMoonPosition, getSunPosition, moonTransits, moonRiseSet, sunRiseSet };
 })();
 
-// Solunar-Score für eine bestimmte Zeit aus echten Mond-Ereignissen
+// Solunar-Score für eine bestimmte Zeit aus echten Mond-Ereignissen (memoisiert)
+const _solunarCache = {};
 function calcSolunarPeriods(date, lat, lon) {
+  const key = date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+lat.toFixed(2)+'_'+lon.toFixed(2);
+  if (_solunarCache[key]) return _solunarCache[key];
   const { transits, antitransits } = _AST.moonTransits(date, lat, lon);
   const { rises, sets } = _AST.moonRiseSet(date, lat, lon);
-  return {
+  const result = {
     major: [...transits, ...antitransits],  // Mond oben/unten = stärkste Beißzeit
     minor: [...rises, ...sets],             // Mondauf/untergang = mittlere Beißzeit
   };
+  _solunarCache[key] = result;
+  return result;
 }
 
 // Wie nah ist eine Stunde an einem Solunar-Fenster? → Bonus
@@ -4454,13 +4458,18 @@ function solunarBonusAt(date, hour, lat, lon) {
   return 0;
 }
 
-// Photoperiode: Tageslänge + Änderungsrate (Tageslicht-Trend)
+// Photoperiode: Tageslänge + Änderungsrate (Tageslicht-Trend) (memoisiert)
+const _photoCache = {};
 function photoperiodFactor(date, lat, lon) {
+  const key = date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+lat.toFixed(2)+'_'+lon.toFixed(2);
+  if (_photoCache[key]) return _photoCache[key];
   const today = _AST.sunRiseSet(date, lat, lon);
   const prev = new Date(date); prev.setDate(prev.getDate() - 5);
   const before = _AST.sunRiseSet(prev, lat, lon);
   const trend = today.dayLength - before.dayLength; // Std pro 5 Tage
-  return { dayLength: today.dayLength, trend, rise: today.rise, set: today.set };
+  const result = { dayLength: today.dayLength, trend, rise: today.rise, set: today.set };
+  _photoCache[key] = result;
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6241,6 +6250,22 @@ function calcFactors() {
 // ── Init ──────────────────────────────────────────────────────────────────────
 // ── Event-Delegation (iOS-sicher) ────────────────────────────────────────────
 document.addEventListener('click', function(e) {
+  // Haupt-Navigation (Tabs)
+  const navBtn = e.target.closest('[data-view]');
+  if (navBtn) {
+    e.preventDefault();
+    switchView(navBtn.dataset.view);
+    return;
+  }
+
+  // Fischart-Ranking → Spot-Empfehlung
+  const fishSpot = e.target.closest('[data-fishspot]');
+  if (fishSpot) {
+    e.preventDefault();
+    try { openFishSpotMap(fishSpot.dataset.fishspot); } catch(err) { console.error('openFishSpotMap:', err); }
+    return;
+  }
+
   // Forecast Tabs
   const fcTab = e.target.closest('[data-fctab]');
   if (fcTab) {
