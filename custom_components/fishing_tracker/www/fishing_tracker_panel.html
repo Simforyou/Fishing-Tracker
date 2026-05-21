@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.27.1 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.27.2 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1016,6 +1016,8 @@ function calcSpeciesScore(fishName) {
 }
 
 function calcAngelwetterIndex() {
+  // Zielfisch-Kontext für Tiefen-/Fluss-/Personal-Faktoren (Standard: gewählter Fisch)
+  const fishName = (typeof selFish !== 'undefined' && selFish) ? selFish : 'Zander';
   const wx       = getVerifiedWeather();
   const waterT   = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
   const cloud    = wx.cloud_coverage;
@@ -3848,7 +3850,7 @@ const d14 = (() => {
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.27.1'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.27.2'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
