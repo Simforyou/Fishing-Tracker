@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.28.1 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.29.0 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1336,6 +1336,43 @@ function toggleSeaMap() {
 function closeFishSpotMap() {
   const ov = document.getElementById('fishSpotOverlay');
   if (ov) ov.style.display = 'none';
+}
+
+function fishSpotForecastHTML(fishName) {
+  const fmt = (h) => String(h).padStart(2,'0') + ':00';
+  let windowBox = '', tripBox = '';
+  try {
+    const win = bestWindowToday(fishName);
+    windowBox =
+      '<div style="background:linear-gradient(145deg,rgba(255,210,63,.1),rgba(255,157,24,.06));border:1px solid rgba(255,210,63,.3);border-radius:13px;padding:12px;margin-bottom:10px">' +
+      '<div style="font-size:11px;font-weight:700;color:#ffd23f;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">\u23f0 Bestes Bei\u00dffenster heute</div>' +
+      '<div style="font-size:20px;font-weight:900;color:var(--txt-main)">' + fmt(win.windowStart) + ' \u2013 ' + fmt(win.windowEnd + 1) + '</div>' +
+      '<div style="font-size:12px;color:var(--txt-muted);margin-top:2px">\ud83c\udfaf Peak um ' + fmt(win.peak.hour) + ' \u00b7 ' + win.peak.score + '% Bei\u00dfchance</div>' +
+      '</div>';
+  } catch(e) {}
+  try {
+    const trip = planBestTrip(fishName);
+    const dayNames = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+    const best = trip[0];
+    const bestLabel = best.dayOffset === 0 ? 'Heute' : best.dayOffset === 1 ? 'Morgen' : dayNames[best.date.getDay()];
+    tripBox =
+      '<div style="background:linear-gradient(145deg,rgba(63,185,80,.1),rgba(46,168,255,.06));border:1px solid rgba(63,185,80,.3);border-radius:13px;padding:12px;margin-bottom:10px">' +
+      '<div style="font-size:11px;font-weight:700;color:#3fb950;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">\ud83d\udcc5 Bester Tag diese Woche</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<span style="font-size:18px;font-weight:900;color:var(--txt-main)">' + bestLabel + ' ' + fmt(best.bestHour) + '</span>' +
+      '<span style="font-size:18px;font-weight:900;color:#3fb950">' + best.score + '%</span></div>' +
+      '<div style="display:flex;gap:3px">' +
+      trip.slice().sort((a,b)=>a.dayOffset-b.dayOffset).map(dd => {
+        const lbl = dd.dayOffset === 0 ? 'Heute' : dayNames[dd.date.getDay()];
+        const dcol = dd.score >= 75 ? '#3fb950' : dd.score >= 55 ? '#ffd23f' : '#ff9d18';
+        const isBest = dd.dayOffset === best.dayOffset;
+        return '<div style="flex:1;text-align:center;padding:5px 2px;border-radius:6px;background:' + (isBest?'rgba(63,185,80,.15)':'transparent') + '">' +
+          '<div style="font-size:9px;color:var(--txt-muted)">' + lbl + '</div>' +
+          '<div style="font-size:12px;font-weight:800;color:' + dcol + '">' + dd.score + '</div></div>';
+      }).join('') + '</div></div>';
+  } catch(e) {}
+  const mapBtn = '<div data-fishmap="' + fishName + '" style="cursor:pointer;text-align:center;background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:11px;margin-bottom:4px;font-size:13px;font-weight:700;color:#2ea8ff">\ud83d\uddfa\ufe0f Deine Fangspots f\u00fcr ' + fishName + ' auf Karte</div>';
+  return windowBox + tripBox + mapBtn;
 }
 
 function openFishSpotMap(fishName) {
@@ -3237,6 +3274,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
           <div class="box"><small>🌡️ Idealtemp.</small><div class="val">${d.temp}</div></div>
         </div>
       </div>
+      ${fishSpotForecastHTML(selFish)}
       <div class="panel">
         <div class="sec">📊 ${actLabel} nach Wassertemperatur</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -3801,7 +3839,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.28.1'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.29.0'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -6326,11 +6364,19 @@ document.addEventListener('click', function(e) {
     return;
   }
 
-  // Fischart-Ranking → Spot-Empfehlung
+  // Fischart-Ranking → Zielfisch-Seite des Fisches
   const fishSpot = e.target.closest('[data-fishspot]');
   if (fishSpot) {
     e.preventDefault();
-    try { openFishSpotMap(fishSpot.dataset.fishspot); } catch(err) { console.error('openFishSpotMap:', err); }
+    selFish = fishSpot.dataset.fishspot;
+    switchView('species');
+    return;
+  }
+  // Fangspot-Karte öffnen (Button auf Zielfisch-Seite)
+  const fishMap = e.target.closest('[data-fishmap]');
+  if (fishMap) {
+    e.preventDefault();
+    try { openFishSpotMap(fishMap.dataset.fishmap); } catch(err) { console.error('openFishSpotMap:', err); }
     return;
   }
 
@@ -6378,7 +6424,7 @@ async function init() {
     const fishParam = params.get('fish');
     if (fishParam) {
       currentView = 'species';
-      setTimeout(() => { try { openFishSpotMap(decodeURIComponent(fishParam)); } catch(e){} }, 600);
+      try { selFish = decodeURIComponent(fishParam); } catch(e) {}
     }
   } catch(e) {}
 
