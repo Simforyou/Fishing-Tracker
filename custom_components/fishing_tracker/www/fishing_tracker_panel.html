@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.29.1 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.29.3 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1206,6 +1206,73 @@ function toggleSeaMap() {
 function closeFishSpotMap() {
   const ov = document.getElementById('fishSpotOverlay');
   if (ov) ov.style.display = 'none';
+}
+
+function estimateFishDepth(fishName) {
+  const base = DEPTH_PREF[fishName] || [1, 4];
+  let lo = base[0], hi = base[1];
+  const sensors = collectAllSensors();
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const waterTemp = sensors.waterTemp != null ? sensors.waterTemp
+    : parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+  let sunElev = sensors.sunElevation || 0;
+  let solar = sensors.solar || 0;
+  try {
+    const ctr = getBestCenter();
+    sunElev = _AST.getSunPosition(now, ctr[0], ctr[1]).altitude * 180 / Math.PI;
+    const clearSky = Math.max(0, Math.sin(sunElev * Math.PI / 180)) * 950;
+    solar = clearSky * (1 - Math.min(0.85, ((sensors.cloudCover || 50) / 100) * 0.85));
+  } catch(e) {}
+
+  let shift = 0;
+  const reasons = []; // [emoji, text, |impact|]
+  // Licht: hell -> tiefer, dunkel -> flacher
+  if (solar > 600)      { shift += 1.5; reasons.push(['\u2600\ufe0f','Greller Sonnenschein \u2192 tiefer', 1.5]); }
+  else if (solar > 300) { shift += 0.6; reasons.push(['\ud83c\udf24\ufe0f','Heller Tag \u2192 etwas tiefer', 0.6]); }
+  else if (solar < 40)  { shift -= 1.2; reasons.push(['\ud83c\udf19','D\u00e4mmerung/Nacht \u2192 flach & ufernah', 1.2]); }
+  else if (solar < 150) { shift -= 0.5; reasons.push(['\u2601\ufe0f','Schwaches Licht \u2192 flacher', 0.5]); }
+  // Wassertemperatur
+  if (waterTemp < 6)       { shift += 1.6; reasons.push(['\ud83e\uddca','Kaltes Wasser \u2192 tiefe Kolke/Gumpen', 1.6]); }
+  else if (waterTemp < 9)  { shift += 0.7; reasons.push(['\u2744\ufe0f','K\u00fchles Wasser \u2192 tiefer', 0.7]); }
+  else if (waterTemp > 24) { shift += 1.3; reasons.push(['\ud83e\udd75','Sehr warm \u2192 k\u00fchle Tiefe / O\u2082-reiche Str\u00f6mung', 1.3]); }
+  else if (waterTemp >= 12 && waterTemp <= 20) { shift -= 0.4; reasons.push(['\ud83c\udf21\ufe0f','Komforttemperatur \u2192 aktiv, auch flach', 0.4]); }
+  // D\u00e4mmerung: Fresszug ins Flache
+  if (sunElev > -8 && sunElev < 8) { shift -= 0.8; reasons.push(['\ud83c\udfaf','D\u00e4mmerungs-Fresszug ins Flache', 0.8]); }
+  // Jahreszeit
+  if (month === 12 || month <= 2) { shift += 0.8; reasons.push(['\ud83d\uddd3\ufe0f','Winter \u2192 tiefe Standpl\u00e4tze', 0.8]); }
+  // Nachtaktive R\u00e4uber jagen flacher
+  if (sunElev < -2 && ['Zander','Aal','Wels','Hecht'].includes(fishName)) { shift -= 0.6; reasons.push(['\ud83c\udf11','Nachtjagd \u2192 flacher', 0.6]); }
+
+  lo = Math.max(0.3, Math.round((lo + shift) * 2) / 2);
+  hi = Math.max(lo + 0.5, Math.round((hi + shift) * 2) / 2);
+  const mid = (lo + hi) / 2;
+  const zone = mid < 1.5 ? 'Flachwasser / Ufer' : mid < 4 ? 'Mittlere Tiefe' : mid < 8 ? 'Tieferes Wasser' : 'Tiefwasser / Grund';
+  reasons.sort((a, b) => b[2] - a[2]);
+  return { lo, hi, zone, reasons: reasons.slice(0, 2), waterTemp, base };
+}
+
+function fishDepthHTML(fishName) {
+  let est;
+  try { est = estimateFishDepth(fishName); } catch(e) { return ''; }
+  const maxScale = 12;
+  const loPct = Math.min(100, est.lo / maxScale * 100);
+  const hiPct = Math.min(100, est.hi / maxScale * 100);
+  const bandLeft = loPct, bandWidth = Math.max(5, hiPct - loPct);
+  const reasonsHTML = est.reasons.map(r =>
+    '<div style="font-size:12px;color:var(--txt-muted);margin-top:3px">' + r[0] + ' ' + r[1] + '</div>').join('');
+  return '' +
+    '<div class="panel" style="margin-bottom:10px">' +
+      '<div class="sec">\ud83c\udf0a Wahrscheinliche Tiefe jetzt</div>' +
+      '<div style="font-size:26px;font-weight:900;color:#2ea8ff;line-height:1">' + est.lo + ' \u2013 ' + est.hi + ' m</div>' +
+      '<div style="font-size:13px;color:var(--txt-main);font-weight:600;margin:4px 0 10px">' + est.zone + '</div>' +
+      '<div style="position:relative;height:24px;border-radius:6px;background:linear-gradient(to right,#9ddcff,#2ea8ff,#0a3050);overflow:hidden">' +
+        '<div style="position:absolute;left:' + bandLeft + '%;width:' + bandWidth + '%;top:0;bottom:0;background:rgba(255,224,102,.5);border-left:3px solid #ffd23f;border-right:3px solid #ffd23f"></div>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--txt-muted);margin-top:2px"><span>0 m</span><span>6 m</span><span>' + maxScale + '+ m</span></div>' +
+      reasonsHTML +
+      '<div style="font-size:11px;color:var(--txt-muted);margin-top:9px;font-style:italic">\ud83d\udca1 In kleinen Fl\u00fcssen: tiefste verf\u00fcgbare Stelle suchen (Kolk, Prallhang, Br\u00fcckenpfeiler, Krautkante)</div>' +
+    '</div>';
 }
 
 function fishSpotForecastHTML(fishName) {
@@ -3145,6 +3212,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         </div>
       </div>
       ${fishSpotForecastHTML(selFish)}
+      ${fishDepthHTML(selFish)}
       <div class="panel">
         <div class="sec">📊 ${actLabel} nach Wassertemperatur</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -3709,7 +3777,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.29.1'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.29.3'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -4451,6 +4519,19 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData) {
     })();
   }
 
+  // ── Sonnenstand IMMER pro Stunde astronomisch berechnen ───────────────────
+  // Sonst hätte die Tageskurve im Live-Modus einen konstanten Sonnenstand
+  // (aktueller Sensorwert für alle 24 Std) → keine Dämmerungs/Nacht-Struktur.
+  try {
+    const ctrSun = getBestCenter();
+    const dAtHour = new Date(date); dAtHour.setHours(hour, 0, 0, 0);
+    const sunAlt = _AST.getSunPosition(dAtHour, ctrSun[0], ctrSun[1]).altitude * 180 / Math.PI;
+    sunElevation = sunAlt;
+    // Einstrahlung aus Sonnenhöhe + Bewölkung schätzen (W/m² Näherung)
+    const clearSky = Math.max(0, Math.sin(sunAlt * Math.PI / 180)) * 950;
+    solar = Math.round(clearSky * (1 - Math.min(0.85, (cloudCover / 100) * 0.85)));
+  } catch(e) {}
+
   // ── 1. Biologische Aktivitätskurve ───────────────────────────────────────
   const curve    = d.curve || Array(24).fill(50);
   const bioNow   = curve[hour] || 50;
@@ -4508,7 +4589,10 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData) {
   const isNight  = sunElevation < 0;
   const highSun  = sunElevation > 40;
 
-  if (isDawn) lightBonus += 12; // Dämmerung: universell optimal
+  // Dämmerung: vorteilhaft – aber an biologische Aktivität gekoppelt, damit
+  // Tagfische (z.B. Rotauge) keine künstliche Morgendämmerungs-Spitze bekommen.
+  // Raubfische (Bio-Peak bei Dämmerung) behalten den vollen Bonus.
+  if (isDawn) lightBonus += 12 * (0.35 + 0.65 * Math.min(1, bioNow / 70));
 
   if (['Zander','Aal'].includes(fishName)) {
     if (isNight || solar < 30)   lightBonus += 15;
