@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.29.0 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.29.1 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -879,141 +879,11 @@ const WIND_PREF = {
 };
 
 function calcSpeciesScore(fishName) {
-  const d = _globalFishData[fishName];
-  if (!d) return 50;
-
-  const now    = new Date();
-  const hour   = now.getHours();
-  const month  = now.getMonth() + 1;
-  const wx     = getVerifiedWeather();
-  const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
-  const trend  = parseFloat(findFTSensor('pressure_trend')?.state || 0);
-  const sol    = haStates['sensor.solunar_beisszeiten']?.attributes || {};
-  const windDir = parseFloat(haStates['sensor.haftenkamp_windrichtung']?.state || 180);
-  const solar   = parseFloat(haStates['sensor.haftenkamp_sonneneinstrahlung']?.state || 0);
-
-  // ── 1. Biologische Aktivität jetzt (0-100) ───────────────────────────────
-  const bioNow = d.curve[hour] || 10;
-
-  // ── 2. Wassertemperatur-Faktor ───────────────────────────────────────────
-  const tm = (d.temp || '').match(/(\d+)[^\d]+(\d+)/);
-  let tempFactor = 1.0;
-  if (tm) {
-    const lo = +tm[1], hi = +tm[2], mid = (lo + hi) / 2;
-    const spread = (hi - lo) / 2;
-    const dist = Math.abs(waterT - mid) / spread;
-    tempFactor = dist <= 1 ? 1.0 : dist <= 1.5 ? 0.75 : dist <= 2 ? 0.5 : 0.25;
-  }
-
-  // ── 3. Laichzeit-Modifier ────────────────────────────────────────────────
-  const spawn = SPAWN_MONTHS[fishName] || [];
-  let spawnMod = 1.0;
-  if (spawn.length === 2) {
-    const [s1, s2] = spawn;
-    const inSpawn = s1 <= s2
-      ? (month >= s1 && month <= s2)
-      : (month >= s1 || month <= s2);
-    const preSpawn = s1 <= s2
-      ? (month === s1 - 1 || (s1 === 1 && month === 12))
-      : false;
-    if (inSpawn)   spawnMod = 0.55; // Stark reduziert während Laich
-    if (preSpawn)  spawnMod = 1.25; // Fresswelle vor Laich
-  }
-
-  // ── 4. Solunar-Fenster Bonus ─────────────────────────────────────────────
-  let solunarBonus = 0;
-  const nowStr = String(hour).padStart(2,'0') + ':00';
-  const checkSolunar = (timeStr, windowMin) => {
-    if (!timeStr || timeStr === '--:--') return false;
-    const [sh, sm] = timeStr.split(':').map(Number);
-    const solMin  = sh * 60 + sm;
-    const nowMin  = hour * 60 + now.getMinutes();
-    return Math.abs(nowMin - solMin) <= windowMin;
-  };
-  if (checkSolunar(sol.major1, 60) || checkSolunar(sol.major2, 60)) solunarBonus = 18;
-  else if (checkSolunar(sol.minor1, 45) || checkSolunar(sol.minor2, 45)) solunarBonus = 10;
-  else if (checkSolunar(sol.major1, 90) || checkSolunar(sol.major2, 90)) solunarBonus = 8; // Ankündigung
-
-  // Nachtfische profitieren mehr von Solunar in der Nacht
-  if (d.type === 'raubfisch' && (hour < 6 || hour > 20)) solunarBonus *= 1.3;
-
-  // ── 5. Luftdrucktrend (artspezifisch) ────────────────────────────────────
-  let pressureBonus = 0;
-  if (trend >= -2 && trend < -0.5) pressureBonus = 12;       // Leicht fallend: ideal
-  else if (trend >= -3 && trend < -2) pressureBonus = 8;     // Stärker fallend
-  else if (trend > 1.5 && trend <= 3) pressureBonus = -8;    // Steigend: ungünstig
-  else if (trend > 3) pressureBonus = -15;                    // Stark steigend: schlecht
-  // Karpfen & Brasse reagieren empfindlicher auf Druckschwankungen
-  if (['Karpfen','Brasse','Schleie'].includes(fishName)) pressureBonus *= 1.3;
-
-  // ── 6. Windrichtung vs. Fischart ─────────────────────────────────────────
-  let windBonus = 0;
-  const pref = WIND_PREF[fishName] || 'neutral';
-  if (pref === 'windward') {
-    // SW-W Wind (180-270°) = typisch gut → Bonus
-    if (windDir >= 180 && windDir <= 270) windBonus = 8;
-    else if (windDir > 90 && windDir < 180) windBonus = 3;
-    else windBonus = -5; // Gegen den Wind
-  } else if (pref === 'lee') {
-    // Ruhiges Wasser bevorzugt: schwacher Wind besser
-    const windSpeed = wx.wind_speed || 0;
-    windBonus = windSpeed < 8 ? 8 : windSpeed < 15 ? 3 : windSpeed > 25 ? -8 : 0;
-  }
-
-  // ── 7. Licht/Solar (artspezifisch aus sensor.haftenkamp_sonneneinstrahlung) ──
-  let lightBonus = 0;
-  const isDawn   = hour >= 5 && hour <= 8;
-  const isDusk   = hour >= 17 && hour <= 21;
-  const isNight  = hour < 5 || hour > 21;
-  const isNoon   = hour >= 11 && hour <= 14;
-
-  // Dämmerung ist für fast alle Arten optimal (Faustregel Nr. 1 beim Angeln)
-  if (isDawn || isDusk) lightBonus += 12;
-
-  // Artspezifische Sonneneinstrahlung
-  if (['Zander','Aal'].includes(fishName)) {
-    // Lichtscheue Arten: Zander hat gelbe Hornhaut, filtert Blaulicht
-    if (solar < 30)          lightBonus += 15;   // Nacht/Dämmerung: optimal
-    else if (solar < 150)    lightBonus += 8;
-    else if (solar < 400)    lightBonus += 2;
-    else if (solar > 600)    lightBonus -= 10;   // Helles Tageslicht: schlecht
-    else if (solar > 900)    lightBonus -= 18;   // Intensive Sonne: sehr schlecht
-  } else if (['Wels','Grundel'].includes(fishName)) {
-    // Nacht-/Dämmerungsaktiv
-    if (isNight || solar < 50)  lightBonus += 12;
-    else if (isDawn || isDusk)  lightBonus += 8;
-    else if (solar > 700)       lightBonus -= 8;
-  } else if (['Hecht','Barsch','Rapfen'].includes(fishName)) {
-    // Predatoren: Jagdvorteil bei niedrigem Licht, aber auch tagsüber aktiv
-    if (isDawn || isDusk)       lightBonus += 8;
-    else if (solar > 200 && solar < 500) lightBonus += 3;  // Mittleres Licht OK
-    else if (solar > 800)       lightBonus -= 6;
-    else if (isNight)           lightBonus -= 3;
-  } else if (['Karpfen','Schleie'].includes(fishName)) {
-    // Tagaktiv mit Sonne, aber nicht bei zu intensiver Strahlung
-    if (solar > 100 && solar < 500) lightBonus += 6;
-    else if (solar > 700)       lightBonus -= 4;
-    else if (isNight)           lightBonus -= 8;
-  } else if (['Ukelei','Döbel','Rotauge','Rotfeder'].includes(fishName)) {
-    // Oberflächenfische: bei bewölktem Licht aktiv, intensive Sonne → tiefer
-    if (solar > 50 && solar < 300)  lightBonus += 5;
-    else if (solar > 600 && isNoon) lightBonus -= 8; // Flucht vor Mittagssonne
-    else if (isNight)               lightBonus -= 5;
-  }
-
-  // UV-Index Proxy: sehr hohe Strahlung → alle Fische reagieren
-  if (solar > 850 && isNoon) lightBonus -= 5; // allgemeiner Hochsommer-Malus
-
-  // ── 8. Wetter-Bonus (allgemein aus Angelwetter-Index) ────────────────────
-  const awIdx    = parseInt(calcAngelwetterIndex()) || 60;
-  const wxBonus  = (awIdx - 60) * 0.3; // Moderat: Wetter ist nicht alles
-
-  // ── Finale Berechnung ─────────────────────────────────────────────────────
-  const base = bioNow * tempFactor * spawnMod;
-  const bonus = solunarBonus + pressureBonus + windBonus + lightBonus + wxBonus;
-  const final = Math.round(Math.min(99, Math.max(3, base + bonus)));
-
-  return final;
+  // Einheitliche Engine: identischer Wert wie Aktivitätskurve, Beißfenster & Tagesprognose ("jetzt")
+  try {
+    const now = new Date();
+    return calcUnifiedDayScore(fishName, now, now.getHours(), collectAllSensors(), null);
+  } catch(e) { return 50; }
 }
 
 function calcAngelwetterIndex() {
@@ -3839,7 +3709,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.29.0'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.29.1'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -4054,40 +3924,10 @@ function addChartTouch(svgId, pts, color) {
         addChartTouch('weekChart', WEEK, '#2ea8ff');
     // Fischart-spezifischer Score: Biologie dominiert über Wetter
 const fishCurve = (() => {
-  const d = fishData[selFish];
-  if (!d) return DAY;
-  const curve = d.curve; // 0-100: biologische Aktivitätskurve pro Stunde
-  const now = new Date().getHours();
-
-  return DAY.map((v, h) => {
-    const bioActivity = curve[h] / 100;      // 0-1: Wie aktiv ist der Fisch biologisch?
-    const weatherScore = v / 100;             // 0-1: Wie gut ist das Wetter?
-
-        // Biologie direkt (0-100%) + Wettermodifikation
-    const bioScore = curve[h]; // Direkte biologische Aktivität
-
-    // Temperatur-Faktor
-    const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
-    const tempRange = d.temp || '12–20°C';
-    const tMatch = tempRange.match(/(\d+)[^0-9]+(\d+)/);
-    let tempFactor = 1.0;
-    if (tMatch) {
-      const lo = parseFloat(tMatch[1]), hi = parseFloat(tMatch[2]);
-      if (waterT < lo - 5) tempFactor = 0.35;
-      else if (waterT < lo - 2) tempFactor = 0.60;
-      else if (waterT < lo) tempFactor = 0.80;
-      else if (waterT > hi + 5) tempFactor = 0.40;
-      else if (waterT > hi + 2) tempFactor = 0.65;
-      else if (waterT > hi) tempFactor = 0.85;
-    }
-
-    // Wetter modifiziert um max ±15 Punkte
-    const weatherBonus = (weatherScore - 0.5) * 30;
-
-    // Finale Berechnung: Biologie dominiert vollständig
-    const final = bioScore * tempFactor + weatherBonus;
-    return Math.round(Math.min(95, Math.max(3, final)));
-  });
+  // Einheitliche Engine: stündlich exakt wie Beißfenster (bestWindowToday) & "jetzt"
+  const sensors = collectAllSensors();
+  const now = new Date();
+  return Array.from({length: 24}, (_, h) => calcUnifiedDayScore(selFish, now, h, sensors, null));
 })();
 drawChart('specChart', fishCurve, '#67d33f');
     addChartTouch('specChart', fishCurve, '#67d33f');
