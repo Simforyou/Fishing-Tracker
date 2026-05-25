@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.29.3 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.29.6 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -878,6 +878,82 @@ const WIND_PREF = {
   Ukelei:  'lee',
 };
 
+// ── Empfohlene Angelart + Köder pro Zielfisch (recherchiert) ──────────────────
+const BAIT_GUIDE = {
+  Zander: { methods: [
+    {m:'Spinnfischen – Gummifisch', rig:'Jigkopf, Grundkontakt halten', hook:'Jighaken 3/0–4/0', weight:'10–21 g (Tiefe/Strömung)', bait:'Schlanker Gummifisch 8–14 cm (Winter bis 18 cm)', tip:'Faulenzer-/Jiggen an Kanten und Löchern; meist direkt am Grund'},
+    {m:'Ansitz – Köderfisch', rig:'Grund-/Posenmontage mit Freilauf', hook:'1er–2er Einzel/Drilling', bait:'Toter Köderfisch (kl. Rotauge, Grundel)', tip:'Bisse oft zaghaft – Schnur kurz geben, dann anschlagen'}
+  ]},
+  Hecht: { methods: [
+    {m:'Spinnfischen', rig:'Stahl-/Hardmono-Vorfach Pflicht!', hook:'Drilling/Einzel am Köder', bait:'Wobbler/Gummifisch 12–20 cm, Spinner Gr. 4–5, Blinker', tip:'Krautkanten und Seerosen abklopfen; Dämmerung am besten'},
+    {m:'Ansitz – Köderfisch unter Pose', rig:'Posenmontage + Stahlvorfach', hook:'Einzelhaken 2/0 oder System', weight:'Pose 20–30 g', bait:'Toter Köderfisch 12–20 cm', tip:'Biss erst ablaufen lassen, dann anschlagen'}
+  ]},
+  Barsch: { methods: [
+    {m:'Dropshot', rig:'Haken direkt in die Schnur, Blei unten', hook:'1er–4er (dickdrahtig für Wurm)', weight:'10–20 g (See) / 30–50 g (Fluss)', bait:'Gummiköder 2–4″ oder Tauwurm', tip:'Über Grund auf der Stelle zupfen; Schwärme gezielt anwerfen'},
+    {m:'Spinnfischen', rig:'Jigkopf', hook:'Jig 1er–4er', weight:'5–14 g', bait:'Kleiner Gummifisch 5–8 cm, Spinner Gr. 2–3', tip:'Aktiv führen; Barsche jagen im Rudel'}
+  ]},
+  Karpfen: { methods: [
+    {m:'Grundangeln – Haar-Rig', rig:'Festblei/Safety-Clip, Haarvorfach', hook:'Boilie 2er–4er · Mais/Pellet 6er–10er', weight:'Festblei 60–120 g', bait:'Boilie, Mais, Tigernuss, Pellet', tip:'Vorfüttern lohnt sich; Nacht und Dämmerung'},
+    {m:'Method Feeder', rig:'Inline, kurzes Haarvorfach', hook:'8er–14er', weight:'Korb 30–80 g', bait:'Mini-Boilie, Pellet, Mais', tip:'Köder im Futter; nur Still-/langsames Wasser'}
+  ]},
+  Schleie: { methods: [
+    {m:'Method Feeder', rig:'Inline, Haarvorfach', hook:'10er–14er', weight:'Korb 20–40 g', bait:'Mais, Maden, Mini-Boilie, Wurm', tip:'Früh morgens in Krautlücken; sparsam füttern'},
+    {m:'Posenangeln', rig:'Laufpose, Köder auf Grund', hook:'10er–14er', weight:'Pose 2–4 g', bait:'Tauwurm, Mais, Maden', tip:'An Seerosen und Schilf, früh und spät'}
+  ]},
+  Aal: { methods: [
+    {m:'Grundangeln', rig:'Durchlauf-/Festblei, kurzes Vorfach', hook:'4er–8er (langschenklig)', weight:'Blei 10–40 g', bait:'Tauwurm/Mistwurm (auch Bündel), Fischfetzen', tip:'Nachts ufernah an Steinpackung/Krautkante; warme, dunkle Nächte'},
+    {m:'Posenmontage (Knicklicht)', rig:'Schlanke Pose, Köder knapp über Grund', hook:'4er–6er', bait:'Tauwurm', tip:'Im Sommer flach für jagende Aale'}
+  ]},
+  Brasse: { methods: [
+    {m:'Feedern', rig:'Schlaufenmontage, Vorfach 60–80 cm', hook:'8er–14er', weight:'Korb 20–50 g', bait:'Wurm-Maden-Cocktail, Mais', tip:'Süßliches Futter; kräftig nachfüttern'},
+    {m:'Method Feeder', rig:'Inline, Haarvorfach', hook:'10er–14er', weight:'Korb 30–50 g', bait:'Mini-Boilie, Mais, Pellet', tip:'Selbsthakeffekt; eher Stillwasser'}
+  ]},
+  Rotauge: { methods: [
+    {m:'Feedern', rig:'Langschenkliger Haken, Vorfach 50–70 cm', hook:'14er–18er', weight:'Korb 20–40 g', bait:'Made, Caster, Mais, Pinkie', tip:'Fein und wenig füttern; Winter Pinkies + dunkles Futter'},
+    {m:'Posenangeln', rig:'Feine Laufpose', hook:'16er–20er', weight:'Pose 1–3 g', bait:'Made, Caster, Brotflocke', tip:'Im Fluss treibend anbieten'}
+  ]},
+  Rotfeder: { methods: [
+    {m:'Posenangeln (flach)', rig:'Leichte Pose, Mittelwasser/Oberfläche', hook:'12er–16er', weight:'Pose 1–2 g', bait:'Made, Brotflocke, Mais', tip:'An Kraut und Seerosen; Köder hoch anbieten'}
+  ]},
+  Döbel: { methods: [
+    {m:'Treib-/Posenangeln', rig:'Pose 3–8 g, Vorfach 50–80 cm', hook:'8er–14er', weight:'Pose 3–8 g', bait:'Schwimmbrot, Frühstücksfleisch, Käse, Made, Tauwurm', tip:'Köder natürlich abtreiben lassen; vorsichtig anfüttern'},
+    {m:'UL-Spinnfischen', rig:'Leichte Spinnrute', hook:'Einzel/Drilling', bait:'Kleiner Crankbait, Spinner Gr. 2–3', tip:'Unter überhängenden Bäumen; ganzjährig fängig'}
+  ]},
+  Rapfen: { methods: [
+    {m:'Spinnfischen (oberflächennah)', rig:'Schnelle Köderführung', hook:'Drilling/Einzel am Köder', bait:'Popper, schlanker Blinker, Wobbler, Streamer', tip:'An Wehren, Buhnen und Strömungskanten auf Raubzüge werfen'}
+  ]},
+  Wels: { methods: [
+    {m:'Grundangeln (schweres Gerät)', rig:'Festblei/U-Pose, stabiles Vorfach', hook:'4/0–8/0', bait:'Tauwurmbündel, Köderfisch, Calamari, Boilie', tip:'Warme Nächte; tiefe Löcher, Gumpen und Hindernisse'},
+    {m:'U-Pose', rig:'Auftriebspose über Grund', hook:'4/0–6/0', bait:'Großer Köderfisch, Tauwurmbündel', tip:'Köder über Hindernissen anbieten'}
+  ]},
+  Güster: { methods: [
+    {m:'Feedern / Posenangeln', rig:'Feines Vorfach', hook:'14er–18er', weight:'Korb 20–40 g / Pose 1–3 g', bait:'Made, kleiner Wurm, Mais', tip:'Fein füttern; oft im Schwarm mit Brassen'}
+  ]},
+  Grundel: { methods: [
+    {m:'Grundangeln (leicht)', rig:'Kurzes Vorfach am Grund', hook:'8er–12er', weight:'leicht', bait:'Wurmstück, Made, Fischfetzen', tip:'Direkt am Grund an Steinpackungen; beißt fast immer'}
+  ]},
+  Ukelei: { methods: [
+    {m:'Feine Pose (Oberfläche)', rig:'Sehr leichte Pose, flach', hook:'18er–20er', weight:'Pose <1 g', bait:'Einzelne Made, Brotkrume', tip:'Knapp unter der Oberfläche; ideal als Köderfisch-Lieferant'}
+  ]},
+  Forelle: { methods: [
+    {m:'Sbirolino / Pose', rig:'Sbirolino + langes Vorfach', hook:'8er–12er', weight:'Sbirolino 5–20 g', bait:'Bienenmade, Forellenteig, Tauwurm', tip:'Teig auftreibend über Grund; sehr langsam einholen'},
+    {m:'Spinnfischen', rig:'Leichte Spinnrute', hook:'Einzel/Drilling', weight:'3–8 g', bait:'Spinner Gr. 1–3, kleiner Wobbler, Spoon', tip:'Strömung und Gumpen absuchen'}
+  ]}
+};
+
+// ── Köder/Methoden-Presets für "Kein Fang" (Fehlversuch nur kompatiblen Arten anrechnen) ──
+const METHOD_PRESETS = [
+  {id:'made_feeder',    label:'🐛 Made – Feeder/Pose',      bait:'Made',            method:'Feeder',         fish:['Rotauge','Brasse','Güster','Rotfeder','Schleie','Ukelei','Karpfen']},
+  {id:'mais_grund',     label:'🌽 Mais – Grund/Feeder',     bait:'Mais',            method:'Grund',          fish:['Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Döbel']},
+  {id:'tauwurm_grund',  label:'🪱 Tauwurm – Grund',          bait:'Tauwurm',         method:'Grund',          fish:['Aal','Barsch','Schleie','Brasse','Döbel','Wels','Forelle','Grundel']},
+  {id:'boilie_grund',   label:'🔴 Boilie – Grund (Haar-Rig)',bait:'Boilie',          method:'Grund',          fish:['Karpfen','Schleie','Brasse']},
+  {id:'gufi_spinn',     label:'🐟 Gummifisch – Spinnfischen',bait:'Gummifisch',      method:'Spinnfischen',   fish:['Zander','Hecht','Barsch','Döbel','Rapfen']},
+  {id:'hardbait_spinn', label:'✨ Wobbler/Spinner – Spinn',  bait:'Wobbler/Spinner', method:'Spinnfischen',   fish:['Hecht','Barsch','Rapfen','Döbel','Forelle','Zander']},
+  {id:'kofi_ansitz',    label:'🎣 Köderfisch – Ansitz',      bait:'Köderfisch',      method:'Ansitz',         fish:['Hecht','Zander','Aal','Wels','Barsch']},
+  {id:'brot_pose',      label:'🍞 Brot – Pose',              bait:'Brot',            method:'Pose',           fish:['Döbel','Rotfeder','Karpfen','Rotauge']},
+  {id:'forelle_teig',   label:'🌈 Teig/Bienenmade – Forelle',bait:'Forellenteig',    method:'Sbirolino/Pose', fish:['Forelle']},
+];
+
 function calcSpeciesScore(fishName) {
   // Einheitliche Engine: identischer Wert wie Aktivitätskurve, Beißfenster & Tagesprognose ("jetzt")
   try {
@@ -1208,6 +1284,28 @@ function closeFishSpotMap() {
   if (ov) ov.style.display = 'none';
 }
 
+
+function fishBaitMethodHTML(fishName) {
+  const g = BAIT_GUIDE[fishName];
+  if (!g || !g.methods || !g.methods.length) return '';
+  const methodsHTML = g.methods.map((mt, i) => {
+    const rows = [];
+    if (mt.rig)    rows.push(['Montage', mt.rig]);
+    if (mt.hook)   rows.push(['Haken', mt.hook]);
+    if (mt.weight) rows.push(['Gewicht', mt.weight]);
+    if (mt.bait)   rows.push(['Köder', mt.bait]);
+    const rowsHTML = rows.map(r =>
+      '<div style="display:flex;gap:8px;margin-top:3px"><span style="width:60px;flex:none;font-size:11px;color:var(--txt-muted)">' + r[0] + '</span><span style="font-size:12px;color:var(--txt-main);font-weight:600;flex:1">' + r[1] + '</span></div>').join('');
+    const badge = i === 0 ? '<span style="font-size:9px;font-weight:800;color:#3fb950;background:rgba(63,185,80,.13);border:1px solid rgba(63,185,80,.4);border-radius:6px;padding:1px 6px;margin-left:6px">TOP</span>' : '';
+    return '<div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:11px;margin-top:8px">'
+      + '<div style="font-size:13px;font-weight:800;color:var(--txt-main)">' + (i + 1) + '. ' + mt.m + badge + '</div>'
+      + rowsHTML
+      + (mt.tip ? '<div style="font-size:11px;color:var(--txt-muted);margin-top:7px;font-style:italic">💡 ' + mt.tip + '</div>' : '')
+      + '</div>';
+  }).join('');
+  return '<div class="panel" style="margin-bottom:10px"><div class="sec">🪱 Empfohlene Angelart & Köder</div>' + methodsHTML + '</div>';
+}
+
 function estimateFishDepth(fishName) {
   const base = DEPTH_PREF[fishName] || [1, 4];
   let lo = base[0], hi = base[1];
@@ -1273,6 +1371,58 @@ function fishDepthHTML(fishName) {
       reasonsHTML +
       '<div style="font-size:11px;color:var(--txt-muted);margin-top:9px;font-style:italic">\ud83d\udca1 In kleinen Fl\u00fcssen: tiefste verf\u00fcgbare Stelle suchen (Kolk, Prallhang, Br\u00fcckenpfeiler, Krautkante)</div>' +
     '</div>';
+}
+
+function multiFishDayChartHTML() {
+  const sensors = collectAllSensors();
+  const now = new Date();
+  const nowH = now.getHours();
+  const fishList = (typeof FISHES_ORDER !== 'undefined' && FISHES_ORDER.length) ? FISHES_ORDER : Object.keys(_globalFishData);
+  const rows = [];
+  for (const name of fishList) {
+    const d = _globalFishData[name];
+    if (!d) continue;
+    const curve = Array.from({ length: 24 }, (_, h) => calcUnifiedDayScore(name, now, h, sensors, null));
+    let peakH = 0, peakV = 0;
+    curve.forEach((v, h) => { if (v > peakV) { peakV = v; peakH = h; } });
+    rows.push({ name, emoji: d.emoji || '\ud83d\udc1f', curve, peakH, peakV });
+  }
+  if (!rows.length) return '';
+  rows.sort((a, b) => b.peakV - a.peakV);
+  const best = rows[0];
+  const heatColor = (s) => s>=78?'#2fb344':s>=66?'#74bd3f':s>=54?'#b9cf38':s>=42?'#efc015':s>=30?'#ee8f2b':s>=18?'#c25a3a':'#5a3030';
+  const fmt = (h) => String(h).padStart(2, '0');
+
+  let header = '<div style="display:flex;align-items:flex-end;margin-bottom:4px"><div style="width:60px;flex:none"></div><div style="flex:1;display:flex;position:relative;height:11px">';
+  for (let h = 0; h < 24; h += 3) header += '<div style="position:absolute;left:' + (h/24*100) + '%;font-size:8px;color:var(--txt-muted)">' + fmt(h) + '</div>';
+  header += '<div style="position:absolute;right:0;font-size:8px;color:var(--txt-muted)">24</div></div><div style="width:28px;flex:none"></div></div>';
+
+  const rowsHTML = rows.map(r => {
+    const cells = r.curve.map((v, h) => {
+      const isNow = h === nowH, isPeak = h === r.peakH;
+      return '<div title="' + fmt(h) + ':00 \u00b7 ' + v + '%" style="flex:1;height:15px;background:' + heatColor(v) + ';'
+        + (isPeak ? 'box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.95);z-index:2;' : '')
+        + (isNow ? 'outline:2px solid #2ea8ff;outline-offset:-1px;z-index:3;' : '') + '"></div>';
+    }).join('');
+    return '<div class="rank-row" data-fishspot="' + r.name + '" style="cursor:pointer;display:flex;align-items:center;margin-bottom:2px">'
+      + '<div style="width:60px;flex:none;font-size:11px;font-weight:600;color:var(--txt-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + r.emoji + ' ' + r.name + '</div>'
+      + '<div style="flex:1;display:flex;border-radius:4px;overflow:hidden">' + cells + '</div>'
+      + '<div style="width:28px;flex:none;text-align:right;font-size:11px;font-weight:800;color:' + heatColor(r.peakV) + '">' + r.peakV + '</div>'
+      + '</div>';
+  }).join('');
+
+  return '<div class="panel">'
+    + '<div class="sec">\ud83d\uddd3\ufe0f Wann bei\u00dft was? \u2013 Tages\u00fcbersicht</div>'
+    + '<div style="font-size:12px;color:var(--txt-muted);margin:-2px 0 10px">Beste Kombi heute: <b style="color:var(--txt-main)">' + best.emoji + ' ' + best.name + '</b> um <b style="color:#2fb344">' + fmt(best.peakH) + ':00</b> (' + best.peakV + '%)</div>'
+    + header + rowsHTML
+    + '<div style="display:flex;align-items:center;gap:6px;margin-top:9px;font-size:9px;color:var(--txt-muted)">'
+    +   '<span>wenig</span>'
+    +   '<div style="flex:1;height:8px;border-radius:4px;background:linear-gradient(to right,#5a3030,#c25a3a,#ee8f2b,#efc015,#b9cf38,#74bd3f,#2fb344)"></div>'
+    +   '<span>viel</span>'
+    +   '<span style="margin-left:6px;white-space:nowrap">\u25a1 Peak \u00b7 <span style="color:#2ea8ff">\u25a2 jetzt</span></span>'
+    + '</div>'
+    + '<div style="font-size:10px;color:var(--txt-muted);margin-top:6px;text-align:center;opacity:.7">Tippe einen Fisch f\u00fcr Details</div>'
+    + '</div>';
 }
 
 function fishSpotForecastHTML(fishName) {
@@ -2142,14 +2292,43 @@ async function deeperRunAI(btn) {
 
 function deeperCheckReady() {}  // nicht mehr nötig
 
-async function logNoCatch() {
+function logNoCatch() {
+  // Auswahl-Dialog: Köder + Methode wählen → Fehlversuch nur kompatiblen Arten anrechnen
+  if (document.getElementById('noCatchPicker')) return;
+  const ov = document.createElement('div');
+  ov.id = 'noCatchPicker';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:10000;display:flex;align-items:flex-end;justify-content:center';
+  const presetBtns = METHOD_PRESETS.map(p =>
+    '<button data-ncpreset="' + p.id + '" style="display:block;width:100%;text-align:left;background:var(--kpi-bg);border:1px solid var(--border);color:var(--txt-main);border-radius:12px;padding:12px 14px;margin-bottom:8px;font-weight:700;cursor:pointer">'
+    + '<div style="font-size:14px">' + p.label + '</div>'
+    + '<div style="font-size:10px;color:var(--txt-muted);font-weight:500;margin-top:3px">zählt für: ' + p.fish.join(', ') + '</div></button>'
+  ).join('');
+  ov.innerHTML = '<div style="background:var(--bg-panel);border:1px solid var(--border);border-radius:18px 18px 0 0;padding:18px 16px 28px;width:100%;max-width:460px;max-height:85vh;overflow-y:auto">'
+    + '<div style="font-size:16px;font-weight:800;margin-bottom:4px">🐟✕ Kein Fang – womit hast du geangelt?</div>'
+    + '<div style="font-size:12px;color:var(--txt-muted);margin-bottom:14px">Der Schneider zählt nur als Fehlversuch für die Arten, die mit diesem Köder/dieser Methode überhaupt fangbar sind.</div>'
+    + presetBtns
+    + '<button data-ncpreset="__generic" style="display:block;width:100%;background:transparent;border:1px dashed var(--border);color:var(--txt-muted);border-radius:12px;padding:11px;margin-top:4px;font-size:13px;cursor:pointer">Ohne Angabe speichern</button>'
+    + '<button data-ncpreset="__cancel" style="display:block;width:100%;background:transparent;border:none;color:var(--txt-muted);padding:12px;margin-top:4px;font-size:13px;cursor:pointer">Abbrechen</button>'
+    + '</div>';
+  document.body.appendChild(ov);
+  ov.addEventListener('click', (e) => {
+    if (e.target === ov) { ov.remove(); return; }
+    const btn = e.target.closest('[data-ncpreset]');
+    if (!btn) return;
+    const id = btn.dataset.ncpreset;
+    ov.remove();
+    if (id === '__cancel') return;
+    if (id === '__generic') { doLogNoCatch(null); return; }
+    doLogNoCatch(METHOD_PRESETS.find(p => p.id === id) || null);
+  });
+}
+
+async function doLogNoCatch(preset) {
   const now = new Date();
-  const ts  = now.toISOString();
   const wx  = getVerifiedWeather();
   const awIdx = calcAngelwetterIndex();
-
   const data = {
-    timestamp:         ts,
+    timestamp:         now.toISOString(),
     caught:            0,
     temperature:       wx.temperature,
     wind_speed:        wx.wind_speed,
@@ -2158,17 +2337,18 @@ async function logNoCatch() {
     precipitation:     wx.precipitation,
     angelwetter_index: awIdx,
   };
+  if (preset) { data.bait = preset.bait; data.method = preset.method; data.target_fish = preset.fish; }
 
   const ok = await callHAService('fishing_tracker', 'log_no_catch', data);
 
-  // Visuelles Feedback
   const toast = document.createElement('div');
   toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);'
     + 'background:rgba(60,10,10,.95);border:1px solid rgba(255,107,107,.5);'
     + 'color:#ff8080;padding:12px 24px;border-radius:12px;font-weight:800;'
-    + 'font-size:14px;z-index:9999;white-space:nowrap';
-  toast.textContent = ok ? '🐟 Kein Fang gespeichert · ' + now.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}) + ' Uhr'
-                         : '⚠️ Fehler beim Speichern';
+    + 'font-size:14px;z-index:10001;white-space:nowrap';
+  toast.textContent = ok
+    ? '🐟 Kein Fang gespeichert' + (preset ? ' · ' + preset.bait : '')
+    : '⚠️ Fehler beim Speichern';
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 2500);
 
@@ -3057,6 +3237,7 @@ const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
           </div>
         </div>
       </div>
+      ${multiFishDayChartHTML()}
       <div class="panel">
         <div class="sec">🏆 Zielfisch-Ranking <span style="font-size:9px;font-weight:400;opacity:.5">Jetzt · Live</span></div>
         ${(() => {
@@ -3248,10 +3429,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         <div class="sec">📈 Aktivitätskurve – Tageskurve (00:00–24:00 Uhr)</div>
         <div class="chart-box" style="height:200px"><svg id="specChart" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
       </div>
-      <div class="panel">
-        <div class="sec">🪱 Empfohlene Köder</div>
-        <div class="bait-grid">${(d.baits||[]).slice(0,4).map(b=>baitCard(b,'')).join('')}</div>
-      </div>
+      ${fishBaitMethodHTML(selFish)}
       <div class="panel" style="margin-top:0">${sightBox}</div>
       <div class="panel" style="margin-top:0">
         <div class="sec">📍 Typische Spots</div>
@@ -3777,7 +3955,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.29.3'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.29.6'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -4473,6 +4651,7 @@ function collectAllSensors() {
 // Unified day score für beliebiges Datum + Stunde
 // liveData: von collectAllSensors() ODER null für Forecast-Modus
 // fcData: weather.home forecast-Objekt für Zukunftstage
+const _sunAltCache = {}; // memoisierter Sonnenstand pro Tag+Stunde+Ort (Heatmap ruft 360× auf)
 function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData) {
   const d = _globalFishData[fishName];
   if (!d) return 65;
@@ -4524,8 +4703,13 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData) {
   // (aktueller Sensorwert für alle 24 Std) → keine Dämmerungs/Nacht-Struktur.
   try {
     const ctrSun = getBestCenter();
-    const dAtHour = new Date(date); dAtHour.setHours(hour, 0, 0, 0);
-    const sunAlt = _AST.getSunPosition(dAtHour, ctrSun[0], ctrSun[1]).altitude * 180 / Math.PI;
+    const _sk = date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+hour+'_'+ctrSun[0].toFixed(2)+'_'+ctrSun[1].toFixed(2);
+    let sunAlt = _sunAltCache[_sk];
+    if (sunAlt === undefined) {
+      const dAtHour = new Date(date); dAtHour.setHours(hour, 0, 0, 0);
+      sunAlt = _AST.getSunPosition(dAtHour, ctrSun[0], ctrSun[1]).altitude * 180 / Math.PI;
+      _sunAltCache[_sk] = sunAlt;
+    }
     sunElevation = sunAlt;
     // Einstrahlung aus Sonnenhöhe + Bewölkung schätzen (W/m² Näherung)
     const clearSky = Math.max(0, Math.sin(sunAlt * Math.PI / 180)) * 950;

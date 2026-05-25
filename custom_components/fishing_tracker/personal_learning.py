@@ -135,6 +135,26 @@ def compute_personal_patterns(entries: list[dict]) -> dict[str, Any]:
     """
     by_fish: dict[str, dict] = {}
 
+    # Schneider mit Köder/Methode (target_fish) als Fehlversuch den kompatiblen
+    # Arten anrechnen: einen Blank pro Zielfisch zu einem virtuellen Eintrag machen.
+    _expanded: list[dict] = []
+    for e in entries:
+        _caught = int(e.get("caught", 0) or 0)
+        if e.get("fish_type"):
+            _expanded.append(e)
+        elif _caught <= 0 and e.get("target_fish"):
+            _tf = e.get("target_fish")
+            _tf = _tf if isinstance(_tf, list) else [_tf]
+            for _f in _tf:
+                if not _f:
+                    continue
+                _ne = dict(e)
+                _ne["fish_type"] = _f
+                _expanded.append(_ne)
+        else:
+            _expanded.append(e)  # generischer Blank ohne Zielfisch → wird unten übersprungen
+    entries = _expanded
+
     for e in entries:
         fish = e.get("fish_type")
         if not fish:
