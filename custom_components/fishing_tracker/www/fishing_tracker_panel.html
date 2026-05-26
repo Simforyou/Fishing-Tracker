@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.29.6 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.29.9 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1371,6 +1371,101 @@ function fishDepthHTML(fishName) {
       reasonsHTML +
       '<div style="font-size:11px;color:var(--txt-muted);margin-top:9px;font-style:italic">\ud83d\udca1 In kleinen Fl\u00fcssen: tiefste verf\u00fcgbare Stelle suchen (Kolk, Prallhang, Br\u00fcckenpfeiler, Krautkante)</div>' +
     '</div>';
+}
+
+
+
+// Heutige Hoch-Aktivitätsfenster eines Fisches aus der Engine (dynamische "Beste Zeit")
+function bestTimeWindowsStr(fishName) {
+  try {
+    const sensors = collectAllSensors();
+    const now = new Date();
+    const curve = Array.from({ length: 24 }, (_, h) => calcUnifiedDayScore(fishName, now, h, sensors, null));
+    const peak = Math.max(...curve);
+    if (!isFinite(peak) || peak <= 0) return null;
+    const thr = peak * 0.8;
+    const wins = []; let start = -1;
+    for (let h = 0; h < 24; h++) {
+      if (curve[h] >= thr) { if (start < 0) start = h; }
+      else if (start >= 0) { wins.push([start, h]); start = -1; }
+    }
+    if (start >= 0) wins.push([start, 24]);
+    if (!wins.length) return null;
+    const fmt = h => String(h).padStart(2, '0') + ':00';
+    return wins.slice(0, 2).map(w => fmt(w[0]) + '–' + fmt(w[1])).join(' / ');
+  } catch(e) { return null; }
+}
+
+// ── Allgemeine Tageskurve aus der Engine (Mittel aller Arten/Stunde) ──────────
+// Ersetzt den statischen Backend-Sensor: ändert sich täglich (Sonnenstand, Solunar,
+// Wassertemperatur) statt jeden Tag gleich auszusehen.
+let _genDayCurve = null, _genDayKey = '';
+function generalDayCurve() {
+  const now = new Date();
+  const key = now.toDateString() + '_' + now.getHours();
+  if (_genDayKey === key && _genDayCurve) return _genDayCurve;
+  const fl = Object.keys(_globalFishData || {});
+  if (!fl.length) return (typeof DAY !== 'undefined' ? DAY : new Array(24).fill(50));
+  const sensors = collectAllSensors();
+  const curve = new Array(24).fill(50);
+  for (let h = 0; h < 24; h++) {
+    let sum = 0, n = 0;
+    for (const f of fl) {
+      const v = calcUnifiedDayScore(f, now, h, sensors, null);
+      if (!isNaN(v)) { sum += v; n++; }
+    }
+    curve[h] = n ? Math.round(sum / n) : 50;
+  }
+  _genDayKey = key; _genDayCurve = curve;
+  return curve;
+}
+
+
+// ── 7-Tage-Prognose aus der Engine (Mittel aller Arten pro Tag) ───────────────
+// Ersetzt den Backend-Sensor: nutzt Solunar + Sonnenstand + Tagesvorhersage,
+// konsistent mit Tageskurve & 14-Tage. Heute zuerst, dann +1..+6.
+let _genWeek = null, _genWeekKey = '';
+function generalWeekForecast(numDays) {
+  numDays = numDays || 7;
+  const now0 = new Date();
+  const key = now0.toDateString() + '_' + now0.getHours() + '_' + numDays;
+  if (_genWeekKey === key && _genWeek) return _genWeek;
+  const fl = Object.keys(_globalFishData || {});
+  const wd = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+  // _globalFishData noch nicht befüllt → Fallback OHNE Cachen (nächster Render rechnet neu)
+  if (!fl.length) {
+    return Array.from({ length: numDays }, (_, i) => {
+      const day = new Date(); day.setDate(day.getDate() + i);
+      return { d: wd[day.getDay()], date: ('0'+day.getDate()).slice(-2)+'.'+('0'+(day.getMonth()+1)).slice(-2)+'.', v: 50, isToday: i === 0 };
+    });
+  }
+  const sensors = collectAllSensors();
+  const fcArr = haStates['weather.home']?.attributes?.forecast || [];
+  const fcByDate = {};
+  fcArr.forEach(f => { try { const dd = new Date(f.datetime).toDateString(); if (!fcByDate[dd]) fcByDate[dd] = f; } catch(e){} });
+  const sampleH = [6, 9, 12, 15, 18, 21];
+  const out = [];
+  for (let i = 0; i < numDays; i++) {
+    const day = new Date(); day.setHours(12,0,0,0); day.setDate(day.getDate() + i);
+    const isToday = i === 0;
+    const fcDay = fcByDate[day.toDateString()] || null;
+    let sum = 0, n = 0;
+    if (fl.length) {
+      for (const h of sampleH) for (const f of fl) {
+        const v = isToday ? calcUnifiedDayScore(f, day, h, sensors, null)
+                          : calcUnifiedDayScore(f, day, h, null, fcDay);
+        if (!isNaN(v)) { sum += v; n++; }
+      }
+    }
+    out.push({
+      d: wd[day.getDay()],
+      date: ('0'+day.getDate()).slice(-2) + '.' + ('0'+(day.getMonth()+1)).slice(-2) + '.',
+      v: n ? Math.round(sum / n) : 50,
+      isToday
+    });
+  }
+  _genWeekKey = key; _genWeek = out;
+  return out;
 }
 
 function multiFishDayChartHTML() {
@@ -3019,15 +3114,13 @@ function renderView() {
   const pressure = Math.round(_wx.pressure) || weather.pressure || '1015';
 
   // Top Beißzeiten direkt aus DAY-Array berechnen
-const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
+const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
   .sort((a,b) => b.v-a.v)
   .slice(0,6);
   // Echte 7-Tage Daten aus HA-Sensor
   const dailyForecast = findFTSensor('daily_fc_sensor')?.attributes?.days || null;
   const useReal = dailyForecast && dailyForecast.length > 0;
-  const weekDays = useReal
-    ? dailyForecast.slice(0,7).map(d => ({d: d.weekday, date: d.date_str, v: d.avg_score, peak: d.peak_score, isToday: d.is_today}))
-    : [{d:'Mo',v:72},{d:'Di',v:65},{d:'Mi',v:58},{d:'Do',v:71},{d:'Sa',v:68},{d:'So',v:74},{d:'Mo',v:62}];
+  const weekDays = generalWeekForecast(7);
   const factors = calcFactors();
 
   const fishData = {
@@ -3338,11 +3431,11 @@ const tops = DAY.map((v,h) => ({h:String(h).padStart(2,'0')+':00', v}))
         try {
           const ti = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
           if (tab==='overview'||tab==='7days') {
-            drawChart('weekChart', WEEK, '#2ea8ff', ti);
-            addChartTouch('weekChart', WEEK, '#2ea8ff');
+            drawChart('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff', 0);
+            addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
           } else if (tab==='24h') {
-            drawChart('dayChart24', DAY, '#ff9d18');
-            addChartTouch('dayChart24', DAY, '#ff9d18');
+            drawChart('dayChart24', generalDayCurve(), '#ff9d18');
+            addChartTouch('dayChart24', generalDayCurve(), '#ff9d18');
           } else if (tab==='14days') {
             // 14-Tage Prognose aus echten HA-Wetterdaten
 const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(WEEK).slice(0,15);
@@ -3388,7 +3481,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         </div>
         ${noteBox}
         <div class="grid2">
-          <div class="box"><small>⏰ Beste Zeit</small><div class="val" style="font-size:13px;line-height:1.3">${d.best}</div></div>
+          <div class="box"><small>⏰ Beste Zeit heute</small><div class="val" style="font-size:13px;line-height:1.3">${bestTimeWindowsStr(selFish) || d.best}</div></div>
           <div class="box"><small>🌡️ Idealtemp.</small><div class="val">${d.temp}</div></div>
         </div>
       </div>
@@ -3955,7 +4048,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.29.6'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.29.9'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -4162,12 +4255,12 @@ function addChartTouch(svgId, pts, color) {
 
   // Draw charts after render
   setTimeout(() => {
-    drawChart('dayChart', DAY, '#ff9d18');
-    addChartTouch('dayChart', DAY, '#ff9d18');
+    drawChart('dayChart', generalDayCurve(), '#ff9d18');
+    addChartTouch('dayChart', generalDayCurve(), '#ff9d18');
     // overviewMap entfernt (doppelt)
     const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
-        drawChart('weekChart', WEEK, '#2ea8ff', _todayIdx);
-        addChartTouch('weekChart', WEEK, '#2ea8ff');
+        drawChart('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff', 0);
+        addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
     // Fischart-spezifischer Score: Biologie dominiert über Wetter
 const fishCurve = (() => {
   // Einheitliche Engine: stündlich exakt wie Beißfenster (bestWindowToday) & "jetzt"
@@ -4207,12 +4300,12 @@ function selectFcTab(btn, tab) {
       try {
         if (tab === 'overview' || tab === '7days') {
           const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
-        drawChart('weekChart', WEEK, '#2ea8ff', _todayIdx);
-        addChartTouch('weekChart', WEEK, '#2ea8ff');
-          addChartTouch('weekChart', WEEK, '#2ea8ff');
+        drawChart('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff', 0);
+        addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
+          addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
         } else if (tab === '24h') {
-          drawChart('dayChart24', DAY, '#ff9d18');
-          addChartTouch('dayChart24', DAY, '#ff9d18');
+          drawChart('dayChart24', generalDayCurve(), '#ff9d18');
+          addChartTouch('dayChart24', generalDayCurve(), '#ff9d18');
         } else if (tab === '14days') {
           // 14-Tage Prognose aus echten HA-Wetterdaten
 const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(WEEK).slice(0,15);
@@ -4233,7 +4326,7 @@ function buildForecastTab(tab) {
   const dailyForecast2 = findFTSensor('daily_fc_sensor')?.attributes?.days || null;
   const useReal2 = dailyForecast2 && dailyForecast2.length > 0;
   // WEEK_DATA ist bereits korrekt aus HA-Sensor – dieselbe Quelle wie Chart!
-  const weekDays = WEEK_DATA;
+  const weekDays = generalWeekForecast(7);
   const sc2 = v => v>=80?'#67d33f':v>=60?'#ffd23f':'#ff9d18';
   const sol = haStates['sensor.solunar_beisszeiten']?.attributes || {};
   const factors = calcFactors();
@@ -4274,7 +4367,7 @@ function buildForecastTab(tab) {
       <div class="panel" style="margin-top:0">
         <div class="sec">⏰ Stundenweise Prognose</div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
-          ${[6,9,12,15,18,19,20,21].map(h=>{const v=DAY[h]||50;return`<div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:10px;padding:8px;text-align:center"><div style="font-size:11px;color:var(--txt-muted)">${String(h).padStart(2,'0')}:00</div><div style="font-size:16px;font-weight:900;color:${sc2(v)};margin-top:3px">${v}%</div></div>`}).join('')}
+          ${[6,9,12,15,18,19,20,21].map(h=>{const v=generalDayCurve()[h]||50;return`<div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:10px;padding:8px;text-align:center"><div style="font-size:11px;color:var(--txt-muted)">${String(h).padStart(2,'0')}:00</div><div style="font-size:16px;font-weight:900;color:${sc2(v)};margin-top:3px">${v}%</div></div>`}).join('')}
         </div>
       </div>`;
   } else {
@@ -6365,14 +6458,15 @@ function openFishSheet(targetVar, onSelect, currentVal) {
       const item = document.createElement('div');
       item.className = 'fish-sheet-item' + (f === getCurrent() ? ' active' : '');
       const svgIcon = (FISH_SVG && FISH_SVG[f]) || '';
-      const sc4 = d.score >= 80 ? '#67d33f' : d.score >= 65 ? '#ffd23f' : '#ff9d18';
+      const liveScore = (() => { try { return calcSpeciesScore(f); } catch(e) { return d.score || 50; } })();
+      const sc4 = liveScore >= 80 ? '#67d33f' : liveScore >= 65 ? '#ffd23f' : '#ff9d18';
       item.innerHTML = `
         ${svgIcon}
         <div>
           <div class="fish-sheet-item-name">${f}</div>
           <div class="fish-sheet-item-type">${d.type==='raubfisch'?'Raubfisch':d.type==='sonderfall'?'Sonderfall':'Friedfisch'}</div>
         </div>
-        <div class="fish-sheet-item-score" style="color:${sc4}">${d.score||'?'}%</div>`;
+        <div class="fish-sheet-item-score" style="color:${sc4}">${liveScore}%</div>`;
       item.onclick = () => {
         window[targetVar] = f;
         overlay.remove();
