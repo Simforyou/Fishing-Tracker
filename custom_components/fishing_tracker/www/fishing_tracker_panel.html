@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.29.10 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.29.12 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -246,7 +246,6 @@ const VIEWS = [
   ['bait',     '🪱', 'Köder-Wizard'],
   ['weather',  '🌦️', 'Wetter'],
   ['settings', '⚙️', 'Einstellungen'],
-  ['spinmad',  '🎯', 'SpinMad Guide'],
 ];
 
 function buildNav() {
@@ -1397,49 +1396,134 @@ function bestTimeWindowsStr(fishName) {
   } catch(e) { return null; }
 }
 
-// ── Allgemeine Tageskurve aus der Engine (Mittel aller Arten/Stunde) ──────────
-// Ersetzt den statischen Backend-Sensor: ändert sich täglich (Sonnenstand, Solunar,
-// Wassertemperatur) statt jeden Tag gleich auszusehen.
+
+// ── Reine Angelwetter-Bewertung (universell, ohne Fischbiologie) ──────────────
+// Beantwortet "wie gut ist das Angelwetter heute/dieser Tag?" – Solunar,
+// Luftdruck, Sonnenstand, Wind, Wolken, Wassertemp, Niederschlag, Mond.
+// Score = 50 (Basis) + universelle Wetter-/Astro-Boni. Keine Idealtemp/
+// Laichzeit/Tiefenpräferenz pro Art.
+function calcAngelwetterDayScore(date, hour, liveData, fcData) {
+  hour = (hour == null) ? new Date(date).getHours() : hour;
+  // Werte sammeln (live oder Tagesvorhersage)
+  let pressure, pressureTrend, windSpeed, cloudCover, waterTemp, solar, precipitation;
+  if (fcData) {
+    pressure       = fcData.pressure       != null ? fcData.pressure       : 1015;
+    pressureTrend  = 0;
+    windSpeed      = fcData.wind_speed     != null ? fcData.wind_speed     : 10;
+    cloudCover     = fcData.cloud_coverage != null ? fcData.cloud_coverage : 50;
+    waterTemp      = (liveData && liveData.waterTemp != null) ? liveData.waterTemp : 15;
+    precipitation  = fcData.precipitation  != null ? fcData.precipitation  : 0;
+    solar          = null;
+  } else {
+    const s = liveData || {};
+    pressure      = s.pressure      != null ? s.pressure      : 1015;
+    pressureTrend = s.pressureTrend != null ? s.pressureTrend : 0;
+    windSpeed     = s.windSpeed     != null ? s.windSpeed     : 10;
+    cloudCover    = s.cloudCover    != null ? s.cloudCover    : 50;
+    waterTemp     = s.waterTemp     != null ? s.waterTemp     : 15;
+    precipitation = 0;
+    solar         = s.solar;
+  }
+  // Astronomie
+  const ctr = (typeof getBestCenter === 'function') ? getBestCenter() : [52.4, 7.1];
+  const lat = ctr[0], lon = ctr[1];
+  const dAtHour = new Date(date); dAtHour.setHours(hour, 0, 0, 0);
+
+  // Solunar (universell, gleich gewichtet für alle)
+  let solunarBonus = 0;
+  if (typeof solunarBonusAt === 'function') {
+    try { solunarBonus = solunarBonusAt(date, hour, lat, lon) || 0; } catch(e) {}
+  }
+
+  // Sonnenhöhe & Tageszeit
+  let sunAlt = 30;
+  if (typeof _AST !== 'undefined' && _AST && _AST.getSunPosition) {
+    try { sunAlt = _AST.getSunPosition(dAtHour, lat, lon).altitude * 180 / Math.PI; } catch(e) {}
+  }
+  const isDawn   = sunAlt > -6 && sunAlt < 6;
+  const isNight  = sunAlt < -6;
+  const highSun  = sunAlt > 50;
+
+  // Luftdruck-Bonus (langsam fallend = top, stark steigend/sehr hoch = schlecht)
+  let pressureBonus = 0;
+  if (pressureTrend >= -2 && pressureTrend < -0.5)      pressureBonus = 12;
+  else if (pressureTrend >= -3 && pressureTrend < -2)   pressureBonus = 8;
+  else if (pressureTrend > 1.5 && pressureTrend <= 3)   pressureBonus = -8;
+  else if (pressureTrend > 3)                           pressureBonus = -15;
+  if (pressure > 1020 && Math.abs(pressureTrend) < 0.5) pressureBonus += 5;   // stabiles Hoch: leicht positiv
+  if (pressure < 1000 && pressureTrend > 0)             pressureBonus += 8;   // nach Tief, Druck steigt: gut
+
+  // Licht/Tageszeit (universelles Dämmerungsplus)
+  let lightBonus = 0;
+  if (isDawn)                                       lightBonus += 10;
+  else if (highSun && (solar == null || solar > 700)) lightBonus -= 6;
+  else if (isNight && (cloudCover > 40 || solar == null || solar < 30)) lightBonus += 4;
+
+  // Wind (universell: leicht-mittel gut, Flaute/Sturm schlecht)
+  let windBonus = 0;
+  if (windSpeed < 4)        windBonus = -3;
+  else if (windSpeed < 18)  windBonus = 5;
+  else if (windSpeed > 28)  windBonus = -8;
+
+  // Wolken (bedeckt leicht besser als wolkenlos hell)
+  let cloudBonus = 0;
+  if (cloudCover >= 40 && cloudCover <= 80) cloudBonus = 4;
+  else if (cloudCover > 80)                 cloudBonus = 2;
+  else if (cloudCover < 10 && highSun)      cloudBonus = -4;
+
+  // Wassertemp (universelle Befischbarkeit: extreme Werte schlecht)
+  let waterTempBonus = 0;
+  if (waterTemp < 4 || waterTemp > 28)              waterTempBonus = -8;
+  else if (waterTemp >= 10 && waterTemp <= 22)      waterTempBonus = 4;
+
+  // Niederschlag (leichter Regen gut, Starkregen schlecht)
+  let precipBonus = 0;
+  if (precipitation > 0.1 && precipitation < 1.5)   precipBonus = 3;
+  else if (precipitation > 6)                       precipBonus = -5;
+
+  // Mond (Voll-/Neumond bonus, Viertel leicht negativ)
+  let moonBonus = 0;
+  if (typeof _AST !== 'undefined' && _AST && _AST.getMoonIllumination) {
+    try {
+      const f = _AST.getMoonIllumination(date).fraction;
+      if (f > 0.9 || f < 0.1)        moonBonus = 5;
+      else if (f > 0.4 && f < 0.6)   moonBonus = -2;
+    } catch(e) {}
+  }
+
+  const score = 50 + solunarBonus + pressureBonus + lightBonus
+              + windBonus + cloudBonus + waterTempBonus + precipBonus + moonBonus;
+  return Math.max(5, Math.min(97, Math.round(score)));
+}
+
+// ── Allgemeine Tageskurve aus der Engine (Angelwetter pro Stunde) ────────────
+// Reines Angelwetter (kein Fisch-Mittel): Solunar, Sonnenstand, Druck, Wind, Wolken, Wassertemp.
 let _genDayCurve = null, _genDayKey = '';
 function generalDayCurve() {
   const now = new Date();
   const key = now.toDateString() + '_' + now.getHours();
   if (_genDayKey === key && _genDayCurve) return _genDayCurve;
-  const fl = Object.keys(_globalFishData || {});
-  if (!fl.length) return (typeof DAY !== 'undefined' ? DAY : new Array(24).fill(50));
   const sensors = collectAllSensors();
   const curve = new Array(24).fill(50);
   for (let h = 0; h < 24; h++) {
-    let sum = 0, n = 0;
-    for (const f of fl) {
-      const v = calcUnifiedDayScore(f, now, h, sensors, null);
-      if (!isNaN(v)) { sum += v; n++; }
-    }
-    curve[h] = n ? Math.round(sum / n) : 50;
+    const v = calcAngelwetterDayScore(now, h, sensors, null);
+    curve[h] = isNaN(v) ? 50 : v;
   }
   _genDayKey = key; _genDayCurve = curve;
   return curve;
 }
 
 
-// ── 7-Tage-Prognose aus der Engine (Mittel aller Arten pro Tag) ───────────────
-// Ersetzt den Backend-Sensor: nutzt Solunar + Sonnenstand + Tagesvorhersage,
-// konsistent mit Tageskurve & 14-Tage. Heute zuerst, dann +1..+6.
+// ── 7-Tage Angelwetter aus der Engine (universell, keine Fischbiologie) ──────
+// Pro Tag: Mittel über mehrere Sample-Stunden aus calcAngelwetterDayScore.
+// Tagesvorhersage für Zukunftstage. Heute zuerst, dann +1..+6.
 let _genWeek = null, _genWeekKey = '';
 function generalWeekForecast(numDays) {
   numDays = numDays || 7;
   const now0 = new Date();
   const key = now0.toDateString() + '_' + now0.getHours() + '_' + numDays;
   if (_genWeekKey === key && _genWeek) return _genWeek;
-  const fl = Object.keys(_globalFishData || {});
   const wd = ['So','Mo','Di','Mi','Do','Fr','Sa'];
-  // _globalFishData noch nicht befüllt → Fallback OHNE Cachen (nächster Render rechnet neu)
-  if (!fl.length) {
-    return Array.from({ length: numDays }, (_, i) => {
-      const day = new Date(); day.setDate(day.getDate() + i);
-      return { d: wd[day.getDay()], date: ('0'+day.getDate()).slice(-2)+'.'+('0'+(day.getMonth()+1)).slice(-2)+'.', v: 50, isToday: i === 0 };
-    });
-  }
   const sensors = collectAllSensors();
   const fcArr = haStates['weather.home']?.attributes?.forecast || [];
   const fcByDate = {};
@@ -1451,12 +1535,10 @@ function generalWeekForecast(numDays) {
     const isToday = i === 0;
     const fcDay = fcByDate[day.toDateString()] || null;
     let sum = 0, n = 0;
-    if (fl.length) {
-      for (const h of sampleH) for (const f of fl) {
-        const v = isToday ? calcUnifiedDayScore(f, day, h, sensors, null)
-                          : calcUnifiedDayScore(f, day, h, null, fcDay);
-        if (!isNaN(v)) { sum += v; n++; }
-      }
+    for (const h of sampleH) {
+      const v = isToday ? calcAngelwetterDayScore(day, h, sensors, null)
+                        : calcAngelwetterDayScore(day, h, null, fcDay);
+      if (!isNaN(v)) { sum += v; n++; }
     }
     out.push({
       d: wd[day.getDay()],
@@ -3315,7 +3397,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
         <div class="kpi"><div class="kpi-label">Wassertemp.</div><div class="kpi-val blueText">${waterT}°C</div><div class="kpi-delta muted">🌊 Gewässertemperatur</div></div>
       </div>
       <div class="panel blue">
-        <div class="sec">📈 Aktivitätsprognose Heute</div>
+        <div class="sec">🌤️ Angelwetter Heute</div>
         <div class="chart-box" style="height:200px"><svg id="dayChart" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
         <div style="margin-top:14px;background:var(--kpi-bg);border-radius:12px;padding:10px 14px">
           <div style="font-size:11px;font-weight:800;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">🏆 Top Beißzeiten</div>
@@ -4042,7 +4124,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.29.10'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.29.12'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -4092,246 +4174,6 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
           : '<div style="font-size:12px;color:var(--txt-muted);text-align:center;padding:8px">Noch keine Scans importiert</div>');
         })()}
       </div>`,
-
-  // ── SpinMad Guide ──────────────────────────────────────────────────────────
-  spinmad: () => {
-    const sm_colors = [
-      // [name, hex_body, hex_accent, rang, wissenschaft, gruen, braun, praxis]
-      ['Möhrchen',    '#FF6B00','#FF9940','🥇','Rotspektrum wahrnehmbar, tiefes Eindringen','⭐⭐⭐⭐⭐','⭐⭐⭐','~30 Barsche, ~13 Hechte ✅'],
-      ['Redhead',     '#FFFFFF','#CC0000','🥇','Rot+Weiß, Verwundungssignal, universell','⭐⭐⭐⭐⭐','⭐⭐⭐⭐⭐','~30 Barsche, ~13 Hechte ✅'],
-      ['Black Perch', '#1A1A1A','#CC3300','🥇','Rot wahrnehmbar, Schwarz=max. Kontrast','⭐⭐⭐⭐','⭐⭐⭐⭐','Ergänzung'],
-      ['Hero',        '#CC0000','#111111','🥇','Rot+Schwarz, max. Kontrast+Farbreiz','⭐⭐⭐⭐','⭐⭐⭐⭐','Ergänzung'],
-      ['Lemon Tiger', '#FFD700','#111111','🥈','Gelb dringt tief in trübes Wasser','⭐⭐⭐','⭐⭐⭐⭐⭐','Pendant Möhrchen (braun)'],
-      ['Captain',     '#222222','#C0C0C0','🥈','Max. Hell-Dunkel-Kontrast','⭐⭐⭐⭐','⭐⭐⭐⭐','Brücke/Schatten ✅'],
-      ['Firetiger',   '#228B22','#FF6600','🥉','Universell – Grün verschwindet im grünen Wasser','⭐⭐⭐','⭐⭐⭐','Landet im Baum 😂'],
-      ['Sheriff',     '#4A4A2A','#6B6B3A','🥉','Olivbraun – nur Dämmerung sinnvoll','⭐⭐','⭐⭐⭐','Dämmerung'],
-      ['Charly',      '#556B2F','#8B7355','9','Naturimitation – verschwindet in grünem Wasser','⭐','⭐⭐','5–6 Barsche'],
-      ['Ayu',         '#6B8E6B','#C0C0C0','9','Olivgrün-silber – verschwindet','⭐','⭐⭐','5–6 Barsche'],
-      ['Whisky',      '#8B6914','#FFFFFF','11','Braun-Weiß – klares Wasser','⭐⭐','⭐⭐⭐','Selten'],
-      ['Green Lemon', '#7FCC00','#FFE000','11','Grün verschwindet im grünen Wasser','⭐','⭐⭐⭐','Wenig'],
-      ['Diesel',      '#2D4A1E','#3D5A2E','11','Dunkelgrün-Braun – verschwindet','⭐','⭐⭐','Wenig'],
-      ['Sunny',       '#A8A8A8','#FFFFFF','14','Nur Kontrast, kein Farbvorteil','⭐⭐','⭐⭐','Selten'],
-      ['Flipper',     '#003399','#C0C0C0','16','Blau UNSICHTBAR für Hecht/Barsch','❌','❌','Nicht empfohlen'],
-      ['Pinky',       '#FF69B4','#FFFFFF','16','Blauanteil unsichtbar','❌','❌','Nicht empfohlen'],
-      ['Magic',       '#6600CC','#4400AA','16','Lila/Blau – kaum wahrnehmbar','❌','❌','Nicht empfohlen'],
-      ['Laser',       '#0055AA','#E8E8E8','16','Nur Silber nutzbar, Blau unsichtbar','⭐','⭐','Nicht empfohlen'],
-      ['Future',      '#0088CC','#00CCAA','16','Grünanteil ok, Blau unsichtbar','⭐','⭐','Nicht empfohlen'],
-      ['Cookie',      '#8B4513','#CD853F','🥈','Braun-Kupfer, Rotspektrum, naturalistisch','⭐⭐⭐','⭐⭐⭐⭐','Sonderfarbe 2023'],
-    ];
-
-    const topBox = [
-      {nr:'1', farbe:'Möhrchen',    hex:'#FF6B00', einsatz:'Sonne + grünes Wasser',        farbe2:'Neonorange', stat:'~43 Fische ✅'},
-      {nr:'2', farbe:'Redhead',     hex:'#CC0000', einsatz:'Alle Bedingungen, grün+braun', farbe2:'Weiß+Rotkopf', stat:'~43 Fische ✅'},
-      {nr:'3', farbe:'Captain',     hex:'#333333', einsatz:'Schatten, Brücke, Dämmerung',  farbe2:'Schwarz-Silber', stat:'Brücke ✅'},
-      {nr:'4', farbe:'Black Perch', hex:'#1A1A1A', einsatz:'Zickige Fische, Problemtage', farbe2:'Schwarz-Rot', stat:'Ergänzung'},
-      {nr:'5', farbe:'Lemon Tiger', hex:'#FFD700', einsatz:'Braunes/trübes Wasser',        farbe2:'Gelb-Schwarz', stat:'Pendant Möhrchen'},
-    ];
-
-    const größen = [
-      // [zielfisch, situation, typ, gramm, zwilling, farbe, strategie]
-      ['🐟 Barsch','Suchen/Sondieren','Original','6g','#8','Möhrchen / Redhead','Weiter werfen, große Fläche absuchen'],
-      ['🐟 Barsch','Normalbarsch 15–25cm','Original','10g','#6','Möhrchen / Redhead','Durchkurbeln oder jiggen'],
-      ['🐟 Barsch','Dickbarsch 25cm+','Jigmaster','8g','#5','Möhrchen / Black Perch','Langsam faulenzen, größere Silhouette'],
-      ['🐟 Barsch','Ausangeln Spot','Jigmaster','8g','#5','Redhead / Möhrchen','Langsam über Spot halten'],
-      ['🐟 Barsch','Schatten / Brücke','Original','10g','#6','Captain','Kontrast dominiert – langsam führen'],
-      ['🦷 Hecht','Suchen/Sondieren','Original','14g','#5','Redhead / Lemon Tiger','Weit werfen, schnell absuchen'],
-      ['🦷 Hecht','Normalhecht bis 70cm','Jigmaster','12g','#6','Redhead / Möhrchen','Langsam führen, Volumen lockt'],
-      ['🦷 Hecht','Großhecht 70cm+','Jigmaster','24g','#3','Redhead / Black Perch','Große Silhouette, selektiv'],
-      ['🦷 Hecht','Ausangeln Spot','Jigmaster','12g','#6','Redhead / Hero','Faulenzen im heißen Bereich'],
-      ['🦷 Hecht','Braunes Wasser','Original','14g','#5','Lemon Tiger / Redhead','Gelb dringt tief ein'],
-    ];
-
-    const haken = [
-      ['Jigmaster 8g', 'Original 14g', '#5', 'SpinMad Originals Ersatzhaken'],
-      ['Jigmaster 12g', 'Original 10g', '#6', 'SpinMad Originals Ersatzhaken'],
-      ['Jigmaster 24g', 'Original 18g', '#3', 'SpinMad Originals Ersatzhaken'],
-    ];
-
-    const situation = [
-      ['☀️ Sonne, grünes Wasser',        'Original 6–10g', 'Möhrchen',    '#FF6B00'],
-      ['☁️ Bewölkt, diffuses Licht',      'Original 10g',   'Redhead',     '#CC0000'],
-      ['🌉 Schatten / Brücke',            'Original 10g',   'Captain',     '#333333'],
-      ['🌅 Dämmerung / Abend',            'Original 10–14g','Captain',     '#333333'],
-      ['🟫 Braunes Wasser',               'Original 14g',   'Lemon Tiger', '#FFD700'],
-      ['😐 Fische zickig, kein Biss',     'Jigmaster 8–12g','Black Perch', '#1A1A1A'],
-      ['🔍 Barsch ausangeln',             'Jigmaster 8g',   'Möhrchen',    '#FF6B00'],
-      ['🔍 Hecht ausangeln',              'Jigmaster 12g',  'Redhead',     '#CC0000'],
-      ['🎯 Großhecht gezielt',            'Jigmaster 24g',  'Redhead',     '#CC0000'],
-      ['🌿 Sommer, träge Fische',         'Jigmaster 8–12g','Redhead',     '#CC0000'],
-    ];
-
-    return `
-    <div class="panel" style="padding:0">
-
-      <!-- Header -->
-      <div style="background:linear-gradient(135deg,#0a1f35,#0d2d4a);border-radius:18px 18px 0 0;padding:18px 16px 14px;border-bottom:1px solid rgba(46,168,255,.2)">
-        <div style="font-size:20px;font-weight:950;color:#fff;margin-bottom:3px">🎯 SpinMad Guide</div>
-        <div style="font-size:12px;color:rgba(255,255,255,.45)">Wissenschaftlich + Praxiserprobt · Dinkel / Dinkelsee · Grün-Algenreiches Wasser</div>
-      </div>
-
-      <!-- Sub-Tabs -->
-      <div id="sm-tabs" style="display:flex;overflow-x:auto;background:rgba(0,0,0,.3);border-bottom:1px solid rgba(255,255,255,.06);scrollbar-width:none">
-        ${['ranking','topbox','groessen','situationsguide'].map((t,i) =>
-          `<button onclick="document.querySelectorAll('.sm-tab').forEach(x=>x.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.sm-section').forEach(x=>x.style.display='none');document.getElementById('sm-${t}').style.display='block'"
-            class="sm-tab ft-nav-btn ${i===0?'active':''}" style="font-size:12px;padding:10px 14px">${
-              ['📊 Farbranking','⭐ Meine Box','📏 Größen','🗂️ Situationen'][i]
-            }</button>`
-        ).join('')}
-      </div>
-
-      <!-- SECTION 1: Farbranking -->
-      <div id="sm-ranking" class="sm-section" style="padding:14px">
-        <div style="font-size:11px;font-weight:800;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px">
-          Alle Farben · Wissenschaft vs. Praxis für grün/braunes Wasser
-        </div>
-
-        <!-- Wissenschaft Info Box -->
-        <div style="background:rgba(46,168,255,.08);border:1px solid rgba(46,168,255,.2);border-radius:12px;padding:12px;margin-bottom:14px;font-size:12px;line-height:1.6;color:rgba(255,255,255,.7)">
-          🔬 <b style="color:#2ea8ff">Wissenschaftlicher Hintergrund:</b>
-          Hecht & Barsch haben <b>Grün- und Rot-Zapfen</b>, aber <b>keine Blau-Zapfen</b> (gelbe Hornhaut filtert Blau heraus).
-          In grünem Wasser verschwindet Grün im Hintergrund → beste Farben sind Orange, Rot, Weiß und Schwarz (Kontrast).
-          In braunem Wasser dringt Gelb am tiefsten ein.
-        </div>
-
-        ${sm_colors.map(([name, hex1, hex2, rang, wiss, gruen, braun, praxis]) => {
-          const rangBg = rang === '🥇' ? 'rgba(26,107,42,.4)' : rang === '🥈' ? 'rgba(26,82,118,.4)' : rang === '🥉' ? 'rgba(110,47,14,.4)' : rang === '❌' ? 'rgba(147,43,33,.3)' : 'rgba(255,255,255,.04)';
-          const rangBorder = rang === '🥇' ? 'rgba(67,211,63,.3)' : rang === '🥈' ? 'rgba(46,168,255,.3)' : rang === '🥉' ? 'rgba(255,157,24,.3)' : rang === '❌' ? 'rgba(248,81,73,.3)' : 'rgba(255,255,255,.08)';
-          return `
-          <div style="background:${rangBg};border:1px solid ${rangBorder};border-radius:12px;padding:11px 12px;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px">
-            <!-- Farbvorschau -->
-            <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,${hex1},${hex2});flex-shrink:0;border:2px solid rgba(255,255,255,.15)"></div>
-            <div style="flex:1;min-width:0">
-              <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-                <span style="font-size:14px;font-weight:900;color:#fff">${name}</span>
-                <span style="font-size:13px">${rang}</span>
-              </div>
-              <div style="font-size:11px;color:rgba(255,255,255,.5);margin-bottom:4px">${wiss}</div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <span style="font-size:11px;background:rgba(0,150,0,.2);border-radius:6px;padding:2px 7px;color:#7dda58">🌿 Grün: ${gruen}</span>
-                <span style="font-size:11px;background:rgba(150,100,0,.2);border-radius:6px;padding:2px 7px;color:#ffd23f">🟫 Braun: ${braun}</span>
-                <span style="font-size:11px;background:rgba(46,168,255,.1);border-radius:6px;padding:2px 7px;color:#2ea8ff">🎣 ${praxis}</span>
-              </div>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>
-
-      <!-- SECTION 2: Meine Top-Box -->
-      <div id="sm-topbox" class="sm-section" style="padding:14px;display:none">
-        <div style="font-size:11px;font-weight:800;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px">
-          Persönliche Top-Box · Dinkel / Dinkelsee
-        </div>
-
-        <!-- Fangstatistik Highlight -->
-        <div style="background:rgba(103,211,63,.08);border:1px solid rgba(103,211,63,.2);border-radius:12px;padding:12px;margin-bottom:14px;display:flex;justify-content:space-around;text-align:center">
-          <div><div style="font-size:28px;font-weight:950;color:#67d33f">~43</div><div style="font-size:11px;color:rgba(255,255,255,.4)">Fische gesamt</div></div>
-          <div style="width:1px;background:rgba(255,255,255,.1)"></div>
-          <div><div style="font-size:28px;font-weight:950;color:#2ea8ff">~30</div><div style="font-size:11px;color:rgba(255,255,255,.4)">Barsche</div></div>
-          <div style="width:1px;background:rgba(255,255,255,.1)"></div>
-          <div><div style="font-size:28px;font-weight:950;color:#ff9d18">~13</div><div style="font-size:11px;color:rgba(255,255,255,.4)">Hechte</div></div>
-        </div>
-
-        ${topBox.map((k,i) => `
-        <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin-bottom:10px;display:flex;gap:12px;align-items:center">
-          <div style="width:42px;height:42px;border-radius:12px;background:${k.hex};display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;color:#fff;flex-shrink:0;border:2px solid rgba(255,255,255,.15)">${k.nr}</div>
-          <div style="flex:1">
-            <div style="font-size:15px;font-weight:900;color:#fff;margin-bottom:2px">${k.farbe}</div>
-            <div style="font-size:11px;color:rgba(255,255,255,.4);margin-bottom:5px">${k.farbe2}</div>
-            <div style="font-size:12px;color:rgba(255,255,255,.6)">${k.einsatz}</div>
-          </div>
-          <div style="font-size:11px;color:#67d33f;text-align:right;flex-shrink:0">${k.stat}</div>
-        </div>`).join('')}
-
-        <!-- Wissenschaft Fazit -->
-        <div style="background:rgba(255,157,24,.06);border:1px solid rgba(255,157,24,.2);border-radius:12px;padding:12px;margin-top:6px;font-size:12px;color:rgba(255,255,255,.6);line-height:1.6">
-          💡 <b style="color:#ff9d18">Fazit:</b> Möhrchen & Redhead fangen ~7x mehr als Ayu – weil Grün/Olivtöne in deinem grün-algenreichen Wasser verschwinden. Orange & Rot heben sich maximal ab.
-        </div>
-      </div>
-
-      <!-- SECTION 3: Größen & Zielfisch -->
-      <div id="sm-groessen" class="sm-section" style="padding:14px;display:none">
-
-        <div style="font-size:11px;font-weight:800;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px">
-          Größen & Zielfisch-Strategie
-        </div>
-
-        <!-- Tabelle -->
-        <div style="overflow-x:auto;border-radius:12px;border:1px solid rgba(255,255,255,.08)">
-          <table style="width:100%;border-collapse:collapse;font-size:12px">
-            <thead>
-              <tr style="background:rgba(46,168,255,.15)">
-                ${['Zielfisch','Situation','Typ','Gewicht','Zwilling','Farbe','Strategie'].map(h =>
-                  `<th style="padding:8px 10px;text-align:left;color:rgba(255,255,255,.6);font-size:11px;white-space:nowrap">${h}</th>`
-                ).join('')}
-              </tr>
-            </thead>
-            <tbody>
-              ${größen.map((r,i) => `
-              <tr style="background:${i%2===0?'rgba(255,255,255,.03)':'rgba(255,255,255,.01)'};border-top:1px solid rgba(255,255,255,.05)">
-                ${r.map((c,j) => `<td style="padding:8px 10px;color:${j===0?'#2ea8ff':j===5?'#ffd23f':'rgba(255,255,255,.7)'};white-space:${j===6?'normal':'nowrap'}">${c}</td>`).join('')}
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Ersatzhaken -->
-        <div style="margin-top:16px">
-          <div style="font-size:11px;font-weight:800;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px">
-            🔧 Ersatzhaken (Zwilling statt Drilling – weniger Kraut)
-          </div>
-          <div style="background:rgba(30,132,73,.1);border:1px solid rgba(30,132,73,.3);border-radius:12px;overflow:hidden">
-            ${haken.map((h,i) => `
-            <div style="padding:10px 12px;${i>0?'border-top:1px solid rgba(255,255,255,.06)':''}display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-              <span style="font-size:13px;font-weight:800;color:#fff">${h[0]}</span>
-              <span style="font-size:12px;color:rgba(255,255,255,.5)">≈ ${h[1]}</span>
-              <span style="background:rgba(46,168,255,.2);color:#2ea8ff;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:800">Größe ${h[2]}</span>
-              <span style="font-size:11px;color:rgba(255,255,255,.35)">${h[3]}</span>
-            </div>`).join('')}
-          </div>
-          <div style="font-size:11px;color:rgba(255,255,255,.35);margin-top:8px;padding:0 4px">
-            ⚠️ Zwilling wird durch das Öhr des Jigmaster-Körpers gefädelt (nicht am Sprengring).
-          </div>
-        </div>
-      </div>
-
-      <!-- SECTION 4: Situationsguide -->
-      <div id="sm-situationsguide" class="sm-section" style="padding:14px;display:none">
-        <div style="font-size:11px;font-weight:800;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px">
-          Schnellreferenz am Wasser
-        </div>
-
-        ${situation.map(([sit, köder, farbe, hex]) => `
-        <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:12px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:10px">
-          <div style="width:10px;height:40px;border-radius:5px;background:${hex};flex-shrink:0"></div>
-          <div style="flex:1">
-            <div style="font-size:13px;font-weight:800;color:#fff;margin-bottom:3px">${sit}</div>
-            <div style="font-size:11px;color:rgba(255,255,255,.45)">${köder}</div>
-          </div>
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:13px;font-weight:900;color:#ffd23f">${farbe}</div>
-          </div>
-        </div>`).join('')}
-
-        <!-- Wasserfarben-Info -->
-        <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px;margin-top:6px">
-          <div style="font-size:12px;font-weight:800;color:rgba(255,255,255,.6);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">💧 Wasserfarbe = Köderfarbe verschwindet</div>
-          ${[
-            ['🌿 Grünes Wasser (Algen)', 'Grün verschwindet', 'Möhrchen, Redhead, Black Perch, Captain', '#228B22'],
-            ['🟫 Braunes Wasser (Huminsäure)', 'Braun/Orange schwächer', 'Lemon Tiger, Redhead, Captain', '#8B4513'],
-            ['💧 Klares Wasser', 'Alle Farben sichtbar', 'Charly, Ayu, Whisky (naturalistisch)', '#4A90D9'],
-          ].map(([w,p,f,c]) => `
-          <div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid rgba(255,255,255,.06)">
-            <div style="width:8px;height:8px;border-radius:50%;background:${c};flex-shrink:0;margin-top:4px"></div>
-            <div>
-              <div style="font-size:12px;font-weight:800;color:#fff">${w}</div>
-              <div style="font-size:11px;color:rgba(255,255,255,.4)">${p} → <b style="color:#ffd23f">${f}</b></div>
-            </div>
-          </div>`).join('')}
-        </div>
-      </div>
-
-    </div>`;
-  },
   };
 
   let html = '';
@@ -4352,6 +4194,99 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
   });
 
 // Touch-Interaktion für Charts
+
+// ── Echter Luftdruck-Verlauf & -Prognose ──────────────────────────────────────
+// Verlauf: lokal gesnapshotter Ringpuffer (max 24h). Prognose: stündliche Wetter-
+// Forecast-Daten von HA (weather.home). Fallback: ehrliche Trend-Extrapolation.
+const PRESSURE_HISTORY_KEY = 'ft_pressure_history_v1';
+
+function recordPressureSample(pressureHpa) {
+  const p = parseFloat(pressureHpa);
+  if (!p || isNaN(p)) return;
+  try {
+    const raw = localStorage.getItem(PRESSURE_HISTORY_KEY);
+    let arr = raw ? JSON.parse(raw) : [];
+    const now = Date.now();
+    // Nicht doppelt aufzeichnen innerhalb 15 min
+    if (arr.length && now - arr[arr.length - 1].t < 15 * 60 * 1000) return;
+    arr.push({ t: now, p: Math.round(p * 10) / 10 });
+    // Älter als 24h verwerfen
+    const cutoff = now - 24 * 3600 * 1000;
+    arr = arr.filter(s => s.t >= cutoff);
+    localStorage.setItem(PRESSURE_HISTORY_KEY, JSON.stringify(arr));
+  } catch(e) {}
+}
+
+function getPressureHistory12h(currentP, trend) {
+  // 7 Punkte über die letzten 12h, anker am rechten Ende = current
+  try {
+    const raw = localStorage.getItem(PRESSURE_HISTORY_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const now = Date.now();
+    const cutoff = now - 12 * 3600 * 1000;
+    const samples = arr.filter(s => s.t >= cutoff).sort((a,b) => a.t - b.t);
+    if (samples.length >= 3) {
+      const pts = [];
+      for (let i = 0; i < 7; i++) {
+        const tTarget = cutoff + (i / 6) * 12 * 3600 * 1000;
+        let best = samples[0], bestD = Math.abs(samples[0].t - tTarget);
+        for (const s of samples) {
+          const d = Math.abs(s.t - tTarget);
+          if (d < bestD) { best = s; bestD = d; }
+        }
+        pts.push(best.p);
+      }
+      pts[pts.length - 1] = currentP; // rechter Punkt = jetzt
+      return pts;
+    }
+  } catch(e) {}
+  // Fallback: lineare Extrapolation aus Trend (begrenzt auf ±8 hPa/12h)
+  const t = Math.max(-1.5, Math.min(1.5, trend || 0));
+  const pastDelta = Math.max(-8, Math.min(8, t * 12));
+  const start = currentP - pastDelta;
+  return Array.from({length: 7}, (_, i) => Math.round((start + (currentP - start) * (i / 6)) * 10) / 10);
+}
+
+function getPressureForecast12h(currentP, trend) {
+  // Versucht stündliche HA-Wettervorhersage (verschiedene Provider nutzen andere Feldnamen)
+  try {
+    const fc = (haStates && haStates['weather.home']
+                && haStates['weather.home'].attributes
+                && haStates['weather.home'].attributes.forecast) || [];
+    const now = Date.now();
+    const hours = [];
+    for (const f of fc) {
+      try {
+        const dt = new Date(f.datetime).getTime();
+        if (dt > now && dt < now + 13 * 3600 * 1000) {
+          const p = (f.pressure != null) ? f.pressure
+                  : (f.pressure_msl != null) ? f.pressure_msl
+                  : (f.air_pressure != null) ? f.air_pressure
+                  : null;
+          if (p != null && !isNaN(parseFloat(p))) hours.push({ t: dt, p: parseFloat(p) });
+        }
+      } catch(e) {}
+    }
+    if (hours.length >= 3) {
+      hours.sort((a,b) => a.t - b.t);
+      const pts = [currentP];
+      for (let i = 1; i <= 4; i++) {
+        const tTarget = now + (i / 4) * 12 * 3600 * 1000;
+        let best = hours[0], bestD = Math.abs(hours[0].t - tTarget);
+        for (const h of hours) {
+          const d = Math.abs(h.t - tTarget);
+          if (d < bestD) { best = h; bestD = d; }
+        }
+        pts.push(Math.round(best.p * 10) / 10);
+      }
+      return pts;
+    }
+  } catch(e) {}
+  // Fallback: lineare Trend-Extrapolation (Trend = hPa/h)
+  const t = Math.max(-1.5, Math.min(1.5, trend || 0));
+  return Array.from({length: 5}, (_, i) => Math.round((currentP + t * (i * 3)) * 10) / 10);
+}
+
 function drawPressureChart(id, pastPts, futurePts, base) {
   const svg = document.getElementById(id);
   if (!svg) return;
@@ -4504,10 +4439,13 @@ const fishCurve = (() => {
 })();
 drawChart('specChart', fishCurve, '#67d33f');
     addChartTouch('specChart', fishCurve, '#67d33f');
-    // Luftdruck-Chart mit Y-Achse und gestrichelter Prognose
+    // Luftdruck-Chart: echter Verlauf (lokaler Ringpuffer) + HA-Wettervorhersage
     const basePressure = parseFloat(pressure) || 1015;
-    const pastData = [basePressure-4, basePressure-3, basePressure-5, basePressure-3, basePressure-2, basePressure-1, basePressure];
-    const futureData = [basePressure, basePressure+1, basePressure+2, basePressure+2, basePressure+3];
+    const _sensorsForP = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
+    const _trend = (_sensorsForP && _sensorsForP.pressureTrend != null) ? _sensorsForP.pressureTrend : 0;
+    recordPressureSample(basePressure);
+    const pastData   = getPressureHistory12h(basePressure, _trend);
+    const futureData = getPressureForecast12h(basePressure, _trend);
     drawPressureChart('pressureChart', pastData, futureData, basePressure);
   }, 50);
 }
@@ -4568,7 +4506,7 @@ function buildForecastTab(tab) {
   if (tab === 'overview' || tab === '7days') {
     return `
       <div class="panel blue" style="margin-top:10px">
-        <div class="sec">📈 Aktivitätsprognose – 7 Tage</div>
+        <div class="sec">🌤️ Angelwetter – 7 Tage</div>
         <div class="chart-box" style="height:200px"><svg id="weekChart" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
         <div style="display:flex;justify-content:space-around;margin-top:10px;flex-wrap:wrap;gap:4px">
           ${weekDays.map(w=>`<div style="text-align:center;${w.isToday?'background:rgba(46,168,255,.15);border-radius:8px;padding:2px 6px':''}">
@@ -4595,7 +4533,7 @@ function buildForecastTab(tab) {
   } else if (tab === '24h') {
     return `
       <div class="panel blue" style="margin-top:10px">
-        <div class="sec">📈 24h Aktivitätsprognose – Heute</div>
+        <div class="sec">🌤️ 24h Angelwetter – Heute</div>
         <div class="chart-box" style="height:200px"><svg id="dayChart24" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
       </div>
       <div class="panel" style="margin-top:0">
