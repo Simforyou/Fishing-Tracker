@@ -20,6 +20,7 @@ from .water_temperature import WaterTemperatureEngine, estimate_oxygen, oxygen_l
 from .water_level import WaterLevelEngine, turbidity_score_modifier
 from .spawning import spawning_status
 from .bait_advisor import full_bait_recommendation, wettermethode_color
+from .forecast_aggregator import get_consolidated_forecast
 from .const import (
     CONF_MOON_ENTITY, CONF_PERSON_ENTITY, CONF_USE_ONLINE_WEATHER,
     CONF_WEATHER_ENTITY, CONF_WATER_TEMP_URL, CONF_LATITUDE, CONF_LONGITUDE,
@@ -57,6 +58,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         WaterLevelSensor(hass, entry),
         BaitAdvisorSensor(hass, entry),
         AngelwetterIndexSensor(hass, entry, store),
+        ConsolidatedForecastSensor(hass, entry),
+        ForecastAccuracySensor(entry, store),
     ], True)
 
 
@@ -1277,3 +1280,146 @@ class BaitAdvisorSensor(SensorEntity):
             self._attrs = {}
 
 
+
+class ConsolidatedForecastSensor(SensorEntity):
+    """Aggregates forecasts from all available weather entities into one consolidated forecast.
+
+    Calls weather.get_forecasts service for each weather.* entity periodically,
+    means numeric fields across sources, and exposes the result as `forecast` attribute.
+
+    This replaces the deprecated weather.xxx.attributes.forecast pattern.
+    """
+
+    _attr_has_entity_name = False
+    _attr_should_poll = False
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
+        self.hass = hass
+        self.entry = entry
+        self._attr_name = "Consolidated Forecast"
+        self._attr_unique_id = f"{entry.entry_id}_consolidated_forecast"
+        self._state: int = 0
+        self._attrs: dict[str, Any] = {"forecast": [], "sources_active": [], "agreement_score": 100.0}
+        self._unsub = None
+
+    async def async_added_to_hass(self) -> None:
+        from homeassistant.helpers.event import async_track_time_interval
+        # initial fetch
+        await self._async_update_now()
+        # periodic refresh every 30 min
+        self._unsub = async_track_time_interval(
+            self.hass, self._async_periodic, timedelta(minutes=30)
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub:
+            self._unsub()
+            self._unsub = None
+
+    async def _async_periodic(self, _now) -> None:
+        await self._async_update_now()
+
+    async def _async_update_now(self) -> None:
+        try:
+            # Configured override list (optional), else auto-discover
+            cfg = self.entry.options.get("forecast_entities") or self.entry.data.get("forecast_entities")
+            entity_ids = cfg if isinstance(cfg, list) and cfg else None
+            result = await get_consolidated_forecast(self.hass, entity_ids, forecast_type="hourly")
+            self._state = len(result.get("sources_active") or [])
+            self._attrs = result
+        except Exception as err:  # noqa: BLE001
+            self._state = 0
+            self._attrs = {"forecast": [], "sources_active": [], "error": str(err)}
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> int:
+        return self._state
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        return "sources"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attrs
+
+    @property
+    def icon(self) -> str:
+        return "mdi:weather-cloudy-arrow-right"
+
+class ForecastAccuracySensor(FishingBaseSensor):
+    """Backtest: misst Treffsicherheit der Vorhersage gegen tatsächliche Fänge.
+
+    Aus allen gespeicherten Entries (Fang oder Schneider) wird die Kalibrierung
+    der ehemaligen Vorhersage (chance) ausgewertet:
+    - Buckets nach Vorhersage-Score
+    - Hit-Rate pro Bucket = Anteil mit caught>=1
+    - Overall Accuracy = wie gut korreliert hohe Vorhersage mit Fang
+    """
+
+    def __init__(self, entry: ConfigEntry, store):
+        super().__init__(entry, store, "forecast_accuracy", "Forecast Accuracy")
+        self._attr_icon = "mdi:target-arrow"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+
+    def _compute(self) -> tuple[Any, dict[str, Any]]:
+        entries = list(self.store.entries or [])
+        # Nur Entries mit valider chance + caught-Feld
+        valid = [e for e in entries if isinstance(e.get("chance"), (int, float))
+                                    and isinstance(e.get("caught"), (int, float))]
+        if len(valid) < 3:
+            return None, {
+                "status": "Zu wenig Daten — mindestens 3 Sessions nötig",
+                "entries_total": len(entries),
+                "entries_valid": len(valid),
+                "buckets": [],
+                "overall_accuracy": None,
+            }
+        # Buckets
+        buckets = [
+            {"label": "0-25%",  "range": (0, 25),  "n": 0, "hits": 0},
+            {"label": "25-50%", "range": (25, 50), "n": 0, "hits": 0},
+            {"label": "50-75%", "range": (50, 75), "n": 0, "hits": 0},
+            {"label": "75-100%","range": (75, 101),"n": 0, "hits": 0},
+        ]
+        for e in valid:
+            c = float(e.get("chance", 0))
+            caught = float(e.get("caught", 0))
+            for b in buckets:
+                if b["range"][0] <= c < b["range"][1]:
+                    b["n"] += 1
+                    if caught >= 1:
+                        b["hits"] += 1
+                    break
+        for b in buckets:
+            b["hit_rate"] = round(100 * b["hits"] / b["n"], 1) if b["n"] > 0 else None
+        # Overall: gewichtete Kalibrierungs-Score (näher an monotonem Anstieg = besser)
+        # Erwartung: hit_rate steigt mit bucket — wir bewerten als Korrelation chance vs caught
+        try:
+            n = len(valid)
+            chances = [float(e["chance"]) for e in valid]
+            outcomes = [1.0 if float(e["caught"]) >= 1 else 0.0 for e in valid]
+            mean_c = sum(chances) / n
+            mean_o = sum(outcomes) / n
+            num = sum((chances[i] - mean_c) * (outcomes[i] - mean_o) for i in range(n))
+            den_c = (sum((c - mean_c) ** 2 for c in chances)) ** 0.5
+            den_o = (sum((o - mean_o) ** 2 for o in outcomes)) ** 0.5
+            corr = num / (den_c * den_o) if (den_c * den_o) > 0 else 0
+            # Skaliere [-1, 1] auf [0, 100]
+            overall = round(50 + corr * 50, 1)
+        except Exception:
+            overall = None
+        return overall, {
+            "buckets": buckets,
+            "entries_valid": len(valid),
+            "entries_total": len(entries),
+            "overall_accuracy": overall,
+            "method": "Pearson-Korrelation Vorhersage vs. tatsächlicher Fang (50=zufällig, 100=perfekt)",
+            "status": "OK" if overall is not None else "Berechnung fehlgeschlagen",
+        }
+
+    def update(self) -> None:
+        state, attrs = self._compute()
+        self._state = state
+        self._attrs = attrs
