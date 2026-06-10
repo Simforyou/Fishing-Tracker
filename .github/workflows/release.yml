@@ -1,0 +1,78 @@
+name: Create Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'custom_components/fishing_tracker/manifest.json'
+  workflow_dispatch:
+
+# Verhindert dass mehrere Workflow-Runs gleichzeitig laufen
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Wichtig: GitHub-Default seit 2024 ist read-only, brauchen explizit write
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Volle History für Tag-Check
+
+      - name: Read version from manifest
+        id: version
+        run: |
+          VERSION=$(jq -r .version custom_components/fishing_tracker/manifest.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Check if release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Release ${{ steps.version.outputs.tag }} existiert bereits — wird neu erstellt"
+            # Lösche existierende Release UND Tag damit neu erstellt werden kann
+            gh release delete "${{ steps.version.outputs.tag }}" --repo "${{ github.repository }}" --yes --cleanup-tag
+            sleep 2
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✓ Tag ${{ steps.version.outputs.tag }} ist neu"
+          fi
+
+      - name: Build ZIP artifact
+        run: |
+          cd custom_components/fishing_tracker
+          # Cache cleanup
+          find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name "*.pyc" -delete 2>/dev/null || true
+          # ZIP mit deterministischer Reihenfolge
+          zip -r ../../fishing_tracker.zip . -x "*.pyc" "__pycache__/*"
+          cd ../..
+          ls -la fishing_tracker.zip
+          echo "ZIP size: $(du -h fishing_tracker.zip | cut -f1)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          files: fishing_tracker.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
