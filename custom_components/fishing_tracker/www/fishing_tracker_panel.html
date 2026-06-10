@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.34.0 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.34.2 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -538,12 +538,21 @@ async function fetchOpenMeteoForecast(lat, lon) {
 // Wassertemperatur-Schätzung aus Internetquellen, wenn Sensor fehlt oder als Vergleichswert
 // Fallback-Kette: Sensor → Open-Meteo surface_temperature → 5-Tage gleitendes Luft-Temp-Mittel
 function getEstimatedWaterTemp() {
-  // 1. Echter Sensor
+  // 1. Echter Sensor (wenn HA-State vorhanden + valider Wert)
   const sensorVal = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state);
   if (!isNaN(sensorVal) && sensorVal > -2 && sensorVal < 40) {
     return { value: sensorVal, source: 'sensor', label: 'Sensor' };
   }
-  // 2. Open-Meteo surface_temperature für aktuellen Spot (cached)
+  // 2. Aus dem Location-Forecast (wird vom Top-Card schon geladen)
+  try {
+    if (typeof _locForecast !== 'undefined' && _locForecast && _locForecast.avgDaily) {
+      const wt = _locForecast.avgDaily[0]?.waterTemp;
+      if (wt != null && !isNaN(wt) && wt > -2 && wt < 40) {
+        return { value: Math.round(wt * 10) / 10, source: 'locforecast', label: 'Modell (Open-Meteo)' };
+      }
+    }
+  } catch(e) {}
+  // 3. Open-Meteo surface_temperature für aktuellen Spot (separater Cache)
   try {
     const ctr = (typeof getBestCenter === 'function') ? getBestCenter() : null;
     if (ctr) {
@@ -567,7 +576,7 @@ function getEstimatedWaterTemp() {
             return { value: Math.round(v * 10) / 10, source: 'openmeteo', label: 'Modell (Open-Meteo)' };
           }
         }
-        // 3. Fallback: 5-Tage-Mittel der Luft-Temperatur (gedämpft, fischereiwiss. Standard)
+        // 4. Fallback: 5-Tage-Mittel der Luft-Temperatur (gedämpft, fischereiwiss. Standard)
         const past = cache.data.filter(f => {
           const d = new Date(f.datetime).getTime();
           return d <= nowMs && d > nowMs - 5 * 24 * 3600 * 1000;
@@ -4502,13 +4511,15 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel">
         <div class="sec">🌊 Wassertemperatur-Verlauf <span style="font-weight:400;opacity:.5;font-size:9px">${(() => {
-          if (_waterTempHistoryAsync && _waterTempHistoryAsync.samples && _waterTempHistoryAsync.samples.length >= 2) {
-            // Heuristik: wenn min/max ähnlich Open-Meteo Werte → "modelliert", sonst "gemessen"
+          // Defensiv gegen Safari iOS TDZ-Quirk bei let-Vars in Template-Literals
+          let wha = null;
+          try { wha = (typeof _waterTempHistoryAsync !== 'undefined') ? _waterTempHistoryAsync : null; } catch(e) {}
+          if (wha && wha.samples && wha.samples.length >= 2) {
             const isOM = (() => {
               try {
                 const om = (typeof buildOpenMeteoWaterTempHistory === 'function') ? buildOpenMeteoWaterTempHistory() : [];
                 if (om.length === 0) return false;
-                return JSON.stringify(_waterTempHistoryAsync.samples.slice(0,2)) === JSON.stringify(om.slice(0,2));
+                return JSON.stringify(wha.samples.slice(0,2)) === JSON.stringify(om.slice(0,2));
               } catch(e) { return false; }
             })();
             return isOM ? 'letzte 24h · Open-Meteo Modell' : 'letzte 24h aus HA Recorder';
@@ -4697,7 +4708,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.34.0'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.34.2'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -5051,9 +5062,10 @@ function drawWaterTempChart(id, samples) {
   const w=900, h=130, padL=52, padR=16, padT=10, padB=24;
   // Wenn Fetch noch läuft: "Daten laden", sonst "Keine Daten" als finaler Zustand
   if (!samples || samples.length < 2) {
-    const msg = _waterTempHistoryInFlight
-      ? 'Daten laden…'
-      : (_waterTempHistoryAsync ? 'Kein Verlauf verfügbar (Sensor ist Schätzung)' : 'Daten laden…');
+    let inFlight = false, haveAsync = false;
+    try { inFlight = (typeof _waterTempHistoryInFlight !== 'undefined') && _waterTempHistoryInFlight; } catch(e) {}
+    try { haveAsync = (typeof _waterTempHistoryAsync !== 'undefined') && !!_waterTempHistoryAsync; } catch(e) {}
+    const msg = inFlight ? 'Daten laden…' : (haveAsync ? 'Kein Verlauf verfügbar (Sensor ist Schätzung)' : 'Daten laden…');
     svg.innerHTML = `<text x="${w/2}" y="${h/2}" fill="rgba(255,255,255,.4)" font-size="13" text-anchor="middle">${msg}</text>`;
     return;
   }
