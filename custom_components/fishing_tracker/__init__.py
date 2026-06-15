@@ -127,8 +127,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Water Temperature Engine aufbauen
     water_temp_engine = WaterTemperatureEngine(hass)
     water_temp_url = entry.options.get(CONF_WATER_TEMP_URL) or entry.data.get(CONF_WATER_TEMP_URL, "")
-    if water_temp_url:
-        water_temp_engine.set_url(water_temp_url)
+    # Default: Vechte (für User in Grafschaft Bentheim / Niedergrafschaft).
+    # Lässt sich über das Config-Flow überschreiben (jedes Gewässer auf wassertemperatur.site).
+    if not water_temp_url:
+        water_temp_url = "https://wassertemperatur.site/flusse/water-temp-in-vechte"
+    water_temp_engine.set_url(water_temp_url)
 
     # Pegelstand Engine aufbauen
     water_level_engine = WaterLevelEngine(hass)

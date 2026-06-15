@@ -1,213 +1,182 @@
-// Fishing Barometer Card v1.0.0
-// Lovelace Custom Card für Home Assistant
+/**
+ * Fishing Barometer Card v2.0 — TRAC-Style
+ * Halbkreis-Druckanzeige 980-1050 hPa mit Fang-Bedingungs-Farbzonen.
+ *
+ * Lovelace:
+ *   type: custom:fishing-barometer-card
+ *   pressure_sensor: sensor.haftenkamp_druck      # optional
+ *   title: Fishing Barometer                       # optional
+ */
 class FishingBarometerCard extends HTMLElement {
-  set hass(hass) {
-    if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
-    this._hass = hass;
-    this.render();
-  }
-
   setConfig(config) {
-    this.config = config || {};
+    this.config = {
+      title: "Fishing Barometer",
+      pressure_sensor: "sensor.haftenkamp_druck",
+      ...config,
+    };
+    this.attachShadow({ mode: "open" });
+    this._built = false;
+    this.build();
   }
 
-  static getConfigElement() { return document.createElement('div'); }
+  set hass(hass) { this._hass = hass; this.update(); }
+  getCardSize() { return 5; }
 
-  getCardSize() { return 3; }
+  _num(v, f = null) { const n = parseFloat(v); return isNaN(n) ? f : n; }
 
-  val(entity, fallback = '--') {
-    const s = this._hass?.states?.[entity];
-    return s ? s.state : fallback;
+  // Druck → Winkel im Halbkreis (980 = links 180°, 1050 = rechts 0°)
+  _pressureToAngle(p) {
+    const clamped = Math.min(1050, Math.max(980, p));
+    return 180 - ((clamped - 980) / 70) * 180;
   }
-  attr(entity, attr, fallback = '--') {
-    const s = this._hass?.states?.[entity];
-    return s?.attributes?.[attr] ?? fallback;
+  // Polar → kartesisch
+  _polar(cx, cy, r, angleDeg) {
+    const a = angleDeg * Math.PI / 180;
+    return [cx - Math.cos(a) * r, cy - Math.sin(a) * r];
+  }
+  // SVG arc-path zwischen zwei Winkeln auf Radius r
+  _arcPath(cx, cy, r, startDeg, endDeg) {
+    const [x1, y1] = this._polar(cx, cy, r, startDeg);
+    const [x2, y2] = this._polar(cx, cy, r, endDeg);
+    const largeArc = Math.abs(endDeg - startDeg) > 180 ? 1 : 0;
+    // sweep flag: 0 wegen unserer "spiegelverkehrten" Polar (cosine subtraction)
+    return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 0 ${x2} ${y2}`;
   }
 
-  render() {
-    const hass = this._hass;
-    if (!hass) return;
+  _trend(p, m1h, m3h) {
+    if (p == null || isNaN(p)) return { label: "Unbekannt", arrow: "?", quality: "POOR", advice: "—" };
+    const d1 = (m1h != null && !isNaN(m1h)) ? p - m1h : 0;
+    const d3 = (m3h != null && !isNaN(m3h)) ? (p - m3h) / 3 : 0;
+    const rate = Math.abs(d1) > Math.abs(d3) ? d1 : d3;
+    let label, arrow, quality, advice;
+    if (rate > 2.0)      { label = "Schnell steigend"; arrow = "↑"; quality = "GOOD"; advice = "Gut – Druckanstieg"; }
+    else if (rate > 0.4) { label = "Steigend";         arrow = "↗"; quality = "GREAT"; advice = "Beste Bedingungen"; }
+    else if (rate < -2.0){ label = "Schnell fallend";  arrow = "↓"; quality = "GOOD"; advice = "Gut JETZT, dann schwach"; }
+    else if (rate < -0.4){ label = "Fallend";          arrow = "↘"; quality = "GOOD"; advice = "Gut, wird schlechter"; }
+    else                 { label = "Stabil";           arrow = "→"; quality = "POOR"; advice = "Schwach – kein Trend"; }
+    // Override: sehr tief
+    if (p < 1005) { quality = "POOR"; if (rate > -0.4 && rate < 0.4) advice = "Sehr tief – schwach"; }
+    return { label, arrow, quality, advice };
+  }
 
-    const chance = parseFloat(this.val('sensor.fishing_tracker_bite_chance', '70')) || 70;
-    const pressure = parseFloat(this.attr('weather.home', 'pressure', 1015)) || 1015;
-    const bestTime = this.val('sensor.fishing_tracker_best_time', '--:--');
-    const waterTemp = this.val('sensor.wassertemperatur_gewaesser', '--');
-    const sol = hass.states['sensor.solunar_beisszeiten']?.attributes || {};
-
-    // Barometer Bewertung
-    const zone = chance >= 80 ? 'GREAT' : chance >= 60 ? 'GOOD' : 'POOR';
-    const zoneColor = zone === 'GREAT' ? '#67d33f' : zone === 'GOOD' ? '#ffd23f' : '#ff6b6b';
-    const zoneBg = zone === 'GREAT' ? 'rgba(103,211,63,.15)' : zone === 'GOOD' ? 'rgba(255,210,63,.12)' : 'rgba(255,107,107,.12)';
-
-    // Zeiger-Winkel: 0% = -130°, 100% = +130°
-    const angle = -130 + (chance / 100) * 260;
-
-    // Begründung
-    const trend = pressure > 1015 ? '↗ Steigender Druck' : pressure < 1010 ? '↘ Fallender Druck' : '→ Stabiler Druck';
-    const reason = chance >= 80
-      ? `${trend} · Optimale Bedingungen`
-      : chance >= 60
-      ? `${trend} · Gute Bedingungen`
-      : `${trend} · Schwierige Bedingungen`;
-
+  build() {
+    if (this._built) return;
+    this._built = true;
     this.shadowRoot.innerHTML = `
-    <style>
-      :host { display: block; font-family: 'DM Sans', system-ui, sans-serif; }
-      .card {
-        background: linear-gradient(145deg, rgba(8,18,34,.97), rgba(3,7,14,.99));
-        border: 1px solid rgba(46,168,255,.18);
-        border-radius: 20px;
-        padding: 16px;
-        color: #fff;
-        box-shadow: 0 4px 24px rgba(0,0,0,.4);
+      <style>
+        :host { display:block; }
+        .card { border-radius:18px; font-family:system-ui,-apple-system,sans-serif; color:#e8f1f2; background:linear-gradient(135deg,rgba(15,32,52,.97),rgba(8,15,28,.99)); padding:16px; position:relative; overflow:hidden; }
+        .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+        .head .t { font-size:11px; font-weight:850; letter-spacing:1.5px; color:rgba(255,255,255,.55); text-transform:uppercase; }
+        .head .live { font-size:10px; color:#4ade80; display:flex; align-items:center; gap:6px; }
+        .head .live::before { content:""; width:7px; height:7px; border-radius:50%; background:#4ade80; box-shadow:0 0 6px #4ade80; }
+
+        .dial { position:relative; width:100%; aspect-ratio:1.6/1; margin:8px 0 12px; }
+        .dial svg { width:100%; height:100%; display:block; }
+
+        .big { text-align:center; margin:4px 0 6px; }
+        .pv { font-size:42px; font-weight:950; line-height:1; letter-spacing:-1px; }
+        .pu { font-size:14px; font-weight:700; color:rgba(255,255,255,.5); margin-left:6px; }
+        .trend { display:flex; align-items:center; justify-content:center; gap:8px; font-size:13px; font-weight:800; margin-top:4px; }
+
+        .quality { text-align:center; margin:10px 0 12px; padding:10px 14px; border-radius:10px; font-size:12px; font-weight:850; letter-spacing:.5px; }
+        .quality.GREAT { background:rgba(74,222,128,.15); border:1px solid rgba(74,222,128,.4); color:#4ade80; }
+        .quality.GOOD  { background:rgba(163,230,53,.13); border:1px solid rgba(163,230,53,.35); color:#a3e635; }
+        .quality.POOR  { background:rgba(239,68,68,.13); border:1px solid rgba(239,68,68,.35); color:#ff8585; }
+
+        .legend { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; font-size:10.5px; color:rgba(255,255,255,.6); line-height:1.4; }
+        .legend .row { display:flex; align-items:center; gap:6px; }
+        .legend .ar { font-weight:800; width:14px; text-align:center; }
+      </style>
+      <div class="card">
+        <div class="head">
+          <span class="t">🎣 Fishing Barometer</span>
+          <span class="live">Live</span>
+        </div>
+        <div class="dial"><svg id="svg" viewBox="0 0 360 220" preserveAspectRatio="xMidYMid meet"></svg></div>
+        <div class="big">
+          <span class="pv" id="pv">—</span><span class="pu">hPa</span>
+        </div>
+        <div class="trend" id="trend"><span>—</span></div>
+        <div class="quality" id="quality">—</div>
+        <div class="legend">
+          <div class="row"><span class="ar" style="color:#4ade80">↗</span><span>Steigend → Beste Chancen</span></div>
+          <div class="row"><span class="ar" style="color:#a3e635">↑</span><span>Schnell steigend → Gut</span></div>
+          <div class="row"><span class="ar" style="color:#a3e635">↘</span><span>Fallend → Gut, wird schwächer</span></div>
+          <div class="row"><span class="ar" style="color:#a3e635">↓</span><span>Schnell fallend → Beißen jetzt</span></div>
+          <div class="row"><span class="ar" style="color:#ff8585">→</span><span>Stabil → Schwach</span></div>
+          <div class="row"><span class="ar" style="color:#ff8585">⬇</span><span>Sehr tief (&lt;1005) → Schwach</span></div>
+        </div>
+      </div>
+    `;
+  }
+
+  update() {
+    if (!this._built || !this._hass) return;
+    const root = this.shadowRoot;
+    const pSens = this._hass.states[this.config.pressure_sensor];
+    const pressure = this._num(pSens?.state);
+    const m1h = this._num(pSens?.attributes?.mean_1h);
+    const m3h = this._num(pSens?.attributes?.mean_3h);
+    const trend = this._trend(pressure, m1h, m3h);
+
+    // Zifferblatt aufbauen
+    const svg = root.getElementById("svg");
+    const cx = 180, cy = 200, rOuter = 150, rInner = 130, rMid = (rOuter + rInner) / 2;
+    // Farbzonen: 980-1010=POOR, 1010-1025=GREAT, 1025-1040=GOOD, 1040-1050=hoch (gelb)
+    const zones = [
+      { from: 980,  to: 1010, color: "#ef4444", op: 0.65 },  // POOR — rot
+      { from: 1010, to: 1025, color: "#4ade80", op: 0.85 },  // GREAT — grün
+      { from: 1025, to: 1040, color: "#a3e635", op: 0.75 },  // GOOD — limette
+      { from: 1040, to: 1050, color: "#fde047", op: 0.65 },  // zu hoch — gelb
+    ];
+    let zonesHtml = "";
+    for (const z of zones) {
+      const a1 = this._pressureToAngle(z.from);
+      const a2 = this._pressureToAngle(z.to);
+      const d = this._arcPath(cx, cy, rMid, a1, a2);
+      zonesHtml += `<path d="${d}" fill="none" stroke="${z.color}" stroke-width="22" stroke-linecap="butt" opacity="${z.op}"/>`;
+    }
+    // Tick marks alle 5 hPa
+    let ticksHtml = "";
+    for (let v = 980; v <= 1050; v += 5) {
+      const a = this._pressureToAngle(v);
+      const [tx1, ty1] = this._polar(cx, cy, rInner - 2, a);
+      const [tx2, ty2] = this._polar(cx, cy, rInner - 10, a);
+      const isMajor = v % 10 === 0;
+      ticksHtml += `<line x1="${tx1}" y1="${ty1}" x2="${tx2}" y2="${ty2}" stroke="rgba(255,255,255,${isMajor?0.85:0.4})" stroke-width="${isMajor?2:1}"/>`;
+      if (isMajor) {
+        const [lx, ly] = this._polar(cx, cy, rInner - 22, a);
+        ticksHtml += `<text x="${lx}" y="${ly+3}" text-anchor="middle" font-size="10" font-weight="700" fill="rgba(255,255,255,.85)" font-family="system-ui">${v}</text>`;
       }
-      .header { display:flex; align-items:center; gap:10px; margin-bottom:14px }
-      .header-icon { font-size:22px }
-      .header-title { font-size:14px; font-weight:800; letter-spacing:.05em; color:rgba(255,255,255,.8) }
-      .header-sub { font-size:11px; color:rgba(255,255,255,.45); margin-top:2px }
+    }
+    // Zeiger
+    let pointerHtml = "";
+    if (pressure != null && !isNaN(pressure)) {
+      const a = this._pressureToAngle(pressure);
+      const [px, py] = this._polar(cx, cy, rOuter - 8, a);
+      pointerHtml = `
+        <line x1="${cx}" y1="${cy}" x2="${px}" y2="${py}" stroke="#ff4444" stroke-width="3.5" stroke-linecap="round"/>
+        <circle cx="${cx}" cy="${cy}" r="7" fill="#ffd23f" stroke="#aa8800" stroke-width="1.5"/>
+      `;
+    }
 
-      /* Barometer */
-      .baro-wrap { display:flex; flex-direction:column; align-items:center; margin:8px 0 14px }
-      .baro-svg { width:200px; height:120px }
+    svg.innerHTML = `${zonesHtml}${ticksHtml}${pointerHtml}`;
 
-      /* Zone Badge */
-      .zone-badge {
-        display:inline-block;
-        border-radius:8px;
-        padding:5px 16px;
-        font-size:14px;
-        font-weight:900;
-        letter-spacing:.08em;
-        margin-top:8px;
-        background:${zoneBg};
-        color:${zoneColor};
-        border:1px solid ${zoneColor}44;
-      }
-      .zone-reason { font-size:12px; color:rgba(255,255,255,.5); margin-top:6px; text-align:center }
-
-      /* Stats */
-      .stats { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:12px }
-      .stat { background:rgba(255,255,255,.05); border-radius:12px; padding:10px; text-align:center }
-      .stat-val { font-size:18px; font-weight:900 }
-      .stat-label { font-size:10px; color:rgba(255,255,255,.45); font-weight:700; text-transform:uppercase; letter-spacing:.06em; margin-top:3px }
-
-      /* Solunar */
-      .sol-row { display:flex; gap:6px; margin-top:10px }
-      .sol-box { flex:1; border-radius:10px; padding:8px; text-align:center }
-      .sol-main { background:rgba(103,211,63,.08); border:1px solid rgba(103,211,63,.2) }
-      .sol-minor { background:rgba(46,168,255,.07); border:1px solid rgba(46,168,255,.15) }
-      .sol-time { font-size:16px; font-weight:900; margin:2px 0 }
-      .sol-label { font-size:9px; color:rgba(255,255,255,.45); text-transform:uppercase; letter-spacing:.06em }
-    </style>
-
-    <div class="card">
-      <div class="header">
-        <div class="header-icon">🎣</div>
-        <div>
-          <div class="header-title">FISHING BAROMETER</div>
-          <div class="header-sub">Angelwetter-Bewertung · Live</div>
-        </div>
-      </div>
-
-      <!-- SVG Barometer -->
-      <div class="baro-wrap">
-        <svg class="baro-svg" viewBox="0 0 200 120">
-          <defs>
-            <linearGradient id="poorGrad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stop-color="#ff6b6b" stop-opacity=".7"/>
-              <stop offset="100%" stop-color="#ff9d18" stop-opacity=".5"/>
-            </linearGradient>
-            <linearGradient id="goodGrad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stop-color="#ffd23f" stop-opacity=".6"/>
-              <stop offset="100%" stop-color="#a8e063" stop-opacity=".5"/>
-            </linearGradient>
-            <linearGradient id="greatGrad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stop-color="#67d33f" stop-opacity=".7"/>
-              <stop offset="100%" stop-color="#2ea8ff" stop-opacity=".5"/>
-            </linearGradient>
-          </defs>
-
-          <!-- Hintergrund-Bögen -->
-          <!-- Zonen exakt: POOR<60%, GOOD 60-80%, GREAT>80% -->
-          <path d="M 22 100 A 78 78 0 0 1 124.1 25.8" fill="none" stroke="url(#poorGrad)" stroke-width="13" stroke-linecap="round" opacity=".75"/>
-          <path d="M 124.1 25.8 A 78 78 0 0 1 163.1 54.2" fill="none" stroke="url(#goodGrad)" stroke-width="13" stroke-linecap="round" opacity=".75"/>
-          <path d="M 163.1 54.2 A 78 78 0 0 1 178 100" fill="none" stroke="url(#greatGrad)" stroke-width="13" stroke-linecap="round" opacity=".75"/>
-
-          <!-- Skalen-Markierungen -->
-          ${[0,25,50,75,100].map(v => {
-            const a = Math.PI * (1 - v / 100);
-            const x1 = 100 + 68 * Math.cos(a), y1 = 100 - 68 * Math.sin(a);
-            const x2 = 100 + 78 * Math.cos(a), y2 = 100 - 78 * Math.sin(a);
-            return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="rgba(255,255,255,.3)" stroke-width="1.5"/>`;
-          }).join('')}
-
-          <!-- Labels -->
-          <text x="9.0" y="104.0" fill="rgba(255,107,107,.8)" font-size="8.5" text-anchor="middle" font-weight="700">POOR</text>
-          <text x="100" y="14" fill="rgba(255,210,63,.8)" font-size="8.5" text-anchor="middle" font-weight="700">GOOD</text>
-          <text x="191.0" y="104.0" fill="rgba(103,211,63,.8)" font-size="8.5" text-anchor="middle" font-weight="700">GREAT</text>
-
-          <!-- Mittelpunkt -->
-          <circle cx="100" cy="100" r="8" fill="#1a2a3a" stroke="rgba(255,255,255,.2)" stroke-width="1.5"/>
-
-          <!-- Zeiger -->
-          <line
-            x1="100" y1="100"
-            x2="${(100 + 65 * Math.cos(angle * Math.PI / 180)).toFixed(1)}"
-            y2="${(100 + 65 * Math.sin(angle * Math.PI / 180)).toFixed(1)}"
-            stroke="${zoneColor}"
-            stroke-width="3"
-            stroke-linecap="round"
-          />
-          <circle cx="100" cy="100" r="5" fill="${zoneColor}"/>
-
-          <!-- Score im Zentrum -->
-          <text x="100" y="85" fill="white" font-size="16" font-weight="900" text-anchor="middle">${Math.round(chance)}%</text>
-        </svg>
-
-        <div class="zone-badge">${zone}</div>
-        <div class="zone-reason">${reason}</div>
-      </div>
-
-      <!-- Stats -->
-      <div class="stats">
-        <div class="stat">
-          <div class="stat-val" style="color:#67d33f">${Math.round(chance)}%</div>
-          <div class="stat-label">Beißchance</div>
-        </div>
-        <div class="stat">
-          <div class="stat-val" style="color:#2ea8ff; font-size:14px">${bestTime}</div>
-          <div class="stat-label">Beste Zeit</div>
-        </div>
-        <div class="stat">
-          <div class="stat-val" style="color:#2ea8ff">${waterTemp}°C</div>
-          <div class="stat-label">Wassertemp</div>
-        </div>
-      </div>
-
-      <!-- Solunar -->
-      <div class="sol-row">
-        <div class="sol-box sol-main">
-          <div class="sol-label">Hauptbeißzeit 1</div>
-          <div class="sol-time" style="color:#67d33f">${sol.major1 || '--:--'}</div>
-        </div>
-        <div class="sol-box sol-main">
-          <div class="sol-label">Hauptbeißzeit 2</div>
-          <div class="sol-time" style="color:#67d33f">${sol.major2 || '--:--'}</div>
-        </div>
-        <div class="sol-box sol-minor">
-          <div class="sol-label">Nebenzeit</div>
-          <div class="sol-time" style="color:#2ea8ff">${sol.minor1 || '--:--'}</div>
-        </div>
-      </div>
-    </div>`;
+    root.getElementById("pv").textContent = pressure != null ? Math.round(pressure) : "—";
+    root.getElementById("trend").innerHTML = `<span style="font-size:18px">${trend.arrow}</span> ${trend.label}`;
+    const qEl = root.getElementById("quality");
+    qEl.textContent = `${trend.quality} · ${trend.advice}`;
+    qEl.className = `quality ${trend.quality}`;
   }
 }
 
-customElements.define('fishing-barometer-card', FishingBarometerCard);
+customElements.define("fishing-barometer-card", FishingBarometerCard);
+
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: 'fishing-barometer-card',
-  name: 'Fishing Barometer',
-  description: 'Angelwetter-Barometer mit Beißchance, Solunar-Zeiten und Wassertemperatur',
-  preview: true,
+  type: "fishing-barometer-card",
+  name: "Fishing Barometer Card",
+  preview: false,
+  description: "Luftdruck im TRAC-Style mit Trend-Interpretation und Fang-Bedingungen",
 });

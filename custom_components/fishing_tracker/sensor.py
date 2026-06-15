@@ -18,6 +18,7 @@ from .advanced_intelligence import advanced_analysis
 from .solunar import solunar_times
 from .water_temperature import WaterTemperatureEngine, estimate_oxygen, oxygen_level_label
 from .water_level import WaterLevelEngine, turbidity_score_modifier
+from .nlwkn_water_temp import NlwknWaterTempEngine
 from .spawning import spawning_status
 from .bait_advisor import full_bait_recommendation, wettermethode_color
 from .forecast_aggregator import get_consolidated_forecast
@@ -60,6 +61,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         AngelwetterIndexSensor(hass, entry, store),
         ConsolidatedForecastSensor(hass, entry),
         ForecastAccuracySensor(entry, store),
+        # v2.35: echte Wassertemperatur via NLWKN Gewässergüte (Laar/Vechte)
+        NlwknWaterTempSensor(hass, entry),
     ], True)
 
 
@@ -1423,3 +1426,76 @@ class ForecastAccuracySensor(FishingBaseSensor):
         state, attrs = self._compute()
         self._state = state
         self._attrs = attrs
+
+
+# ── NLWKN Wassertemperatur-Sensor (v2.35) ─────────────────────────────────────
+# Bezieht echte Wassertemperatur von NLWKN Gewässergüte-Messstationen
+# Default: Station 2004 (Laar / Vechte) - die einzige kontinuierlich überwachte
+# Vechte-Station. Update alle 15min (entspricht NLWKN-Messintervall).
+class NlwknWaterTempSensor(SensorEntity):
+    _attr_has_entity_name = True
+    _attr_name = "NLWKN Wassertemperatur"
+    _attr_icon = "mdi:water-thermometer"
+    _attr_native_unit_of_measurement = "°C"
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_should_poll = True
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_nlwkn_water_temp"
+        self.entity_id = "sensor.fishing_tracker_nlwkn_water_temp"
+        self._state: float | None = None
+        self._attrs: dict[str, Any] = {}
+        # Engine lazy initialisieren
+        self._engine: NlwknWaterTempEngine | None = None
+        # Update-Intervall: 15min (NLWKN misst alle 15min)
+        self._last_update: datetime | None = None
+        self._min_interval = timedelta(minutes=15)
+
+    @property
+    def native_value(self) -> float | None:
+        return self._state
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attrs
+
+    async def async_update(self) -> None:
+        # Throttle: höchstens alle 15 min wirklich abfragen
+        now = datetime.now()
+        if self._last_update and (now - self._last_update) < self._min_interval and self._state is not None:
+            return
+
+        if self._engine is None:
+            self._engine = NlwknWaterTempEngine(self.hass)
+            # Optional konfigurierbar — Default ist Laar (2004) für Vechte
+            try:
+                station_id = self.entry.options.get("nlwkn_station_id") or self.entry.data.get("nlwkn_station_id")
+                if station_id:
+                    self._engine.set_station(station_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+        data = await self._engine.async_get()
+        if data is None:
+            # Keine Daten — bisherigen State behalten, Status-Attribut setzen
+            self._attrs = {
+                "status": "Keine Daten von NLWKN",
+                "station_id": self._engine.station_id,
+                "station_name": self._engine.station_info.get("name", "?"),
+                "river": self._engine.station_info.get("river", "?"),
+            }
+            return
+
+        self._state = data["temp"]
+        self._attrs = {
+            "measurement_time": data["timestamp"],
+            "station_id": data["station_id"],
+            "station_name": data["station_name"],
+            "river": data["river"],
+            "source": data["source"],
+            "url": data["url"],
+            "status": "OK",
+        }
+        self._last_update = now

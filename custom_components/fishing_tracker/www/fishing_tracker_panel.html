@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.34.2 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.3 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -279,6 +279,10 @@ function smooth(pp) {
 function drawChart(id, pts, color = '#ff9d18', todayIdx = null, customLabels = null) {
   const svg = document.getElementById(id);
   if (!svg) return;
+  // Anti-Flicker: Hash der Inputs — wenn unverändert, nicht neu zeichnen
+  const newHash = 'dc:' + (pts || []).join(',') + '|' + color + '|' + (todayIdx == null ? '-' : todayIdx) + '|' + (Array.isArray(customLabels) ? customLabels.join(',') : '-');
+  if (svg.dataset.hash === newHash) return;
+  svg.dataset.hash = newHash;
   // Feste Dimensionen mit Y-Achse links
   const w=900, h=220, padL=38, padR=10, padT=16, padB=24;
   const step = (w - padL - padR) / (pts.length - 1);
@@ -538,10 +542,30 @@ async function fetchOpenMeteoForecast(lat, lon) {
 // Wassertemperatur-Schätzung aus Internetquellen, wenn Sensor fehlt oder als Vergleichswert
 // Fallback-Kette: Sensor → Open-Meteo surface_temperature → 5-Tage gleitendes Luft-Temp-Mittel
 function getEstimatedWaterTemp() {
-  // 1. Echter Sensor (wenn HA-State vorhanden + valider Wert)
-  const sensorVal = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state);
-  if (!isNaN(sensorVal) && sensorVal > -2 && sensorVal < 40) {
-    return { value: sensorVal, source: 'sensor', label: 'Sensor' };
+  // 1. wassertemperatur.site Live-Daten (echte Messung/Modell des konfigurierten Gewässers)
+  //    Erkennbar an `source` Attribut: kein "Monatstabelle" / "Schätzung"
+  const wtds = haStates['sensor.wassertemperatur_gewaesser'];
+  if (wtds) {
+    const v = parseFloat(wtds.state);
+    const src = (wtds.attributes?.source || '').toLowerCase();
+    const isLive = src && !src.includes('monatstabelle') && !src.includes('schätzung') && !src.includes('schaetzung');
+    if (isLive && !isNaN(v) && v > -2 && v < 40) {
+      return { value: v, source: 'wassertemperatur_site', label: wtds.attributes?.source || 'wassertemperatur.site' };
+    }
+  }
+  // 2. NLWKN Gewässergüte (echte Messstation, wenn aktiv)
+  const nlwknVal = parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state);
+  if (!isNaN(nlwknVal) && nlwknVal > -2 && nlwknVal < 40) {
+    const a = haStates['sensor.fishing_tracker_nlwkn_water_temp']?.attributes || {};
+    const label = a.station_name ? `NLWKN ${a.station_name}` : 'NLWKN';
+    return { value: nlwknVal, source: 'nlwkn', label: label };
+  }
+  // 3. Sensor (auch wenn Schätzung) als Fallback
+  if (wtds) {
+    const v = parseFloat(wtds.state);
+    if (!isNaN(v) && v > -2 && v < 40) {
+      return { value: v, source: 'sensor', label: wtds.attributes?.source || 'Sensor' };
+    }
   }
   // 2. Aus dem Location-Forecast (wird vom Top-Card schon geladen)
   try {
@@ -1109,6 +1133,214 @@ function getVerifiedWeather() {
 
   return { ...merged, sourceCount: totalSources, confidence, deviation, sourceLabel,
            localAvailable, onlineCount: onlineSources.length };
+}
+
+/**
+ * fetchWeatherAtTime(isoDatetime)
+ * Gibt das Wetter zum Zeitpunkt des Fangs zurück.
+ *
+ * - Wenn der Zeitpunkt < 30 Min in der Vergangenheit liegt: aktuelles Wetter (haStates).
+ * - Sonst: HA Recorder-History für ±90 Min um den Fangzeitpunkt abfragen,
+ *   für jeden Sensor den zeitlich nächsten Messwert nehmen.
+ * - Falls Recorder keine Daten hat: Fallback auf aktuelles Wetter mit Warnung.
+ *
+ * @param {string} isoDatetime  ISO-8601 Datetime string (z.B. "2026-06-10T19:30")
+ * @returns {Promise<Object>}   Wetter-Objekt wie getVerifiedWeather() + Feld `weatherAtCatch`
+ */
+/**
+ * fetchWeatherAtTime(isoDatetime, lat, lon)
+ *
+ * Holt das Wetter für eine EXAKTE GPS-Position zum EXAKTEN Fangzeitpunkt.
+ * Immer GPS-basiert via Open-Meteo — kein fixer DWD-Standort.
+ *
+ * Quellen (in Priorität):
+ *   1. < 3h alt + GPS  → Open-Meteo Forecast API (past_days=1, positionsgenau)
+ *   2. < 5 Tage + GPS  → Open-Meteo Forecast API (past_days=N, positionsgenau)
+ *   3. Älter + GPS     → Open-Meteo Archive API (positionsgenau, ab 1940)
+ *   4. Kein GPS        → DWD Haftenkamp Recorder (Fallback, lokale Station)
+ *   5. Alles fehlgesch.→ aktuelles Wetter (letzter Ausweg)
+ *
+ * @param {string} isoDatetime  z.B. "2026-06-10T19:30"
+ * @param {number|null} lat     GPS-Breitengrad des Fangspots
+ * @param {number|null} lon     GPS-Längengrad des Fangspots
+ */
+async function fetchWeatherAtTime(isoDatetime, lat, lon) {
+  const catchTs = isoDatetime ? new Date(isoDatetime).getTime() : Date.now();
+  const ageMs   = Date.now() - catchTs;
+
+  // Helfer: zeitlich nächsten Wert aus Stunden-Array finden
+  function closestHour(times, values, targetTs) {
+    if (!times?.length || !values?.length) return null;
+    let best = null, bestDiff = Infinity;
+    for (let i = 0; i < times.length; i++) {
+      const diff = Math.abs(new Date(times[i]).getTime() - targetTs);
+      if (diff < bestDiff && values[i] != null && !isNaN(values[i])) {
+        bestDiff = diff; best = values[i];
+      }
+    }
+    return best;
+  }
+
+  // ── 1–3: GPS vorhanden → Open-Meteo ──────────────────────────────────────
+  if (lat != null && lon != null && !isNaN(lat) && !isNaN(lon)) {
+    const vars = [
+      'temperature_2m', 'wind_speed_10m', 'wind_gusts_10m', 'wind_direction_10m',
+      'pressure_msl', 'precipitation', 'cloud_cover', 'relative_humidity_2m',
+      'surface_temperature', 'soil_temperature_0_to_7cm',
+    ].join(',');
+    const base = `latitude=${lat.toFixed(5)}&longitude=${lon.toFixed(5)}&hourly=${vars}&wind_speed_unit=kmh&timezone=Europe%2FBerlin`;
+    const daysDiff = ageMs / (24 * 3600 * 1000);
+
+    let url;
+    if (ageMs < 30 * 60 * 1000) {
+      // < 30 Min: aktuelles Wetter reicht (Open-Meteo hat noch keinen Vorteil)
+      const wx = getVerifiedWeather();
+      wx.weatherAtCatch = 'live';
+      wx._waterTempAtCatch = null;
+      return wx;
+    } else if (daysDiff < 5) {
+      // < 5 Tage: Forecast-API mit past_days (Archive hat noch Lag)
+      const pastDays = Math.min(92, Math.ceil(daysDiff) + 1);
+      url = `https://api.open-meteo.com/v1/forecast?${base}&past_days=${pastDays}&forecast_days=1`;
+    } else {
+      // Älter: Archive-API
+      const dateStr = new Date(catchTs).toISOString().slice(0, 10);
+      url = `https://archive-api.open-meteo.com/v1/archive?${base}&start_date=${dateStr}&end_date=${dateStr}`;
+    }
+
+    try {
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const times = data.hourly?.time || [];
+      if (!times.length) throw new Error('Keine Stundendaten');
+
+      const h = data.hourly;
+      const g = (key) => closestHour(times, h[key], catchTs);
+
+      // Wassertemp-Proxy: Mittelwert surface + soil_temperature
+      const surfT = g('surface_temperature');
+      const soilT = g('soil_temperature_0_to_7cm');
+      const waterTempProxy = (surfT != null && soilT != null) ? (surfT + soilT) / 2
+                           : surfT ?? soilT ?? null;
+
+      return {
+        temperature:     g('temperature_2m')           ?? 12,
+        wind_speed:      g('wind_speed_10m')           ?? 10,
+        wind_gusts:      g('wind_gusts_10m')           ?? (g('wind_speed_10m') ?? 10) * 1.3,
+        wind_bearing:    g('wind_direction_10m')       ?? 0,
+        pressure:        g('pressure_msl')             ?? 1015,
+        precipitation:   g('precipitation')            ?? 0,
+        cloud_coverage:  g('cloud_cover')              ?? 50,
+        humidity:        g('relative_humidity_2m')     ?? 70,
+        solar_radiation: null,
+        forecast:        [],
+        sourceCount:     1,
+        confidence:      'local_only',
+        sourceLabel:     `Open-Meteo GPS (${lat.toFixed(3)}°N ${lon.toFixed(3)}°E)`,
+        localAvailable:  true,
+        onlineCount:     0,
+        weatherAtCatch:  daysDiff < 5 ? 'open_meteo_forecast_gps' : 'open_meteo_archive_gps',
+        catchTimestamp:  catchTs,
+        _waterTempAtCatch: waterTempProxy,
+        _lat: lat,
+        _lon: lon,
+      };
+    } catch (e) {
+      console.warn('fetchWeatherAtTime: Open-Meteo fehlgeschlagen, versuche DWD Recorder', e);
+      // Weiter zu Fallback 4
+    }
+  }
+
+  // ── 4: Kein GPS oder Open-Meteo fehlgeschlagen → DWD Haftenkamp Recorder ──
+  const WINDOW_MS = 90 * 60 * 1000;
+  const start = new Date(catchTs - WINDOW_MS).toISOString();
+  const end   = new Date(catchTs + 15 * 60 * 1000).toISOString();
+
+  const WEATHER_SENSORS = [
+    'sensor.haftenkamp_temperatur', 'sensor.haftenkamp_windgeschwindigkeit',
+    'sensor.haftenkamp_windboen', 'sensor.haftenkamp_windrichtung',
+    'sensor.haftenkamp_druck', 'sensor.haftenkamp_niederschlag',
+    'sensor.haftenkamp_bewolkungsgrad', 'sensor.haftenkamp_relative_luftfeuchtigkeit',
+    'sensor.haftenkamp_sonneneinstrahlung',
+    'sensor.wassertemperatur_gewaesser', 'sensor.fishing_tracker_nlwkn_water_temp',
+  ];
+
+  async function recorderMulti(entityIds, startIso, endIso) {
+    try {
+      const haEl = window.parent?.document?.querySelector('home-assistant');
+      const conn = haEl?.hass?.connection;
+      if (!conn?.sendMessagePromise) return null;
+      const resp = await conn.sendMessagePromise({
+        type: 'history/history_during_period',
+        start_time: startIso, end_time: endIso,
+        entity_ids: entityIds,
+        minimal_response: true, no_attributes: true, significant_changes_only: false,
+      });
+      if (!resp) return null;
+      const out = {};
+      for (const id of entityIds) {
+        const arr = resp[id] || [];
+        out[id] = arr.map(p => {
+          const t = (typeof p.lu === 'number') ? p.lu * 1000
+                  : (p.last_updated ? new Date(p.last_updated).getTime() : null);
+          const v = parseFloat(p.s ?? p.state);
+          return (t && !isNaN(v)) ? { t, p: v } : null;
+        }).filter(Boolean);
+      }
+      return out;
+    } catch (e) { console.warn('Recorder-Fehler', e); return null; }
+  }
+
+  function closestRec(samples, targetTs) {
+    if (!samples?.length) return null;
+    let best = null, bestDist = Infinity;
+    for (const s of samples) {
+      const d = Math.abs(s.t - targetTs);
+      if (d < bestDist) { bestDist = d; best = s.p; }
+    }
+    return best;
+  }
+
+  const hist = await recorderMulti(WEATHER_SENSORS, start, end);
+
+  // ── 5: Alles fehlgeschlagen → aktuelles Wetter ───────────────────────────
+  if (!hist) {
+    const wx = getVerifiedWeather();
+    wx.weatherAtCatch = 'fallback_current';
+    wx.weatherAtCatchWarning = 'Wetter: kein GPS, kein Recorder → aktueller Stand';
+    wx._waterTempAtCatch = null;
+    return wx;
+  }
+
+  const g2 = (id) => closestRec(hist[id], catchTs);
+  const cur = (id) => parseFloat(haStates[id]?.state);
+  const val = (id, fb) => { const v = g2(id); return (v != null && !isNaN(v)) ? v : (cur(id) || fb); };
+
+  const wtNlwkn  = g2('sensor.fishing_tracker_nlwkn_water_temp');
+  const wtSensor = g2('sensor.wassertemperatur_gewaesser');
+  const waterTemp = wtNlwkn ?? wtSensor ?? cur('sensor.wassertemperatur_gewaesser') ?? null;
+  const hasData = g2('sensor.haftenkamp_temperatur') != null || g2('sensor.haftenkamp_windgeschwindigkeit') != null;
+
+  return {
+    temperature:     val('sensor.haftenkamp_temperatur', 12),
+    wind_speed:      val('sensor.haftenkamp_windgeschwindigkeit', 10),
+    wind_gusts:      val('sensor.haftenkamp_windboen', 13),
+    wind_bearing:    val('sensor.haftenkamp_windrichtung', 0),
+    pressure:        val('sensor.haftenkamp_druck', 1015),
+    precipitation:   val('sensor.haftenkamp_niederschlag', 0),
+    cloud_coverage:  val('sensor.haftenkamp_bewolkungsgrad', 50),
+    humidity:        val('sensor.haftenkamp_relative_luftfeuchtigkeit', 70),
+    solar_radiation: g2('sensor.haftenkamp_sonneneinstrahlung'),
+    forecast: [], sourceCount: 1, onlineCount: 0,
+    confidence:     hasData ? 'local_only' : 'fallback',
+    sourceLabel:    hasData ? 'DWD Haftenkamp (Verlauf)' : 'Schätzung',
+    localAvailable: hasData,
+    weatherAtCatch: hasData ? 'dwd_recorder' : 'fallback_no_data',
+    catchTimestamp: catchTs,
+    _waterTempAtCatch: waterTemp,
+    ...(hasData ? {} : { weatherAtCatchWarning: 'Keine Messdaten für diesen Zeitpunkt' }),
+  };
 }
 
 // Konfidenz-Badge für UI
@@ -3113,13 +3345,17 @@ async function saveCatch() {
 
   const weight = parseFloat(catchFormData.weight || 0) || null;
   const notes  = (catchFormData.notes || '').trim();
-  const wx      = getVerifiedWeather();
-  const waterT  = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 0) || null;
   const person  = haStates['person.christian_rduch']?.attributes;
-  // GPS-Priorität: Karte (manuell) → Gerät → EXIF → null
-  const lat = catchFormData._manualLat ?? person?.latitude  ?? catchFormData._exifLat ?? null;
-  const lon = catchFormData._manualLon ?? person?.longitude ?? catchFormData._exifLon ?? null;
-  const awIdx   = calcAngelwetterIndex();
+  // GPS-Priorität: Karte (manuell) → EXIF → Gerät → null
+  const lat = catchFormData._manualLat ?? catchFormData._exifLat ?? person?.latitude  ?? null;
+  const lon = catchFormData._manualLon ?? catchFormData._exifLon ?? person?.longitude ?? null;
+  // Wetter IMMER vom GPS-Standort + Fangzeitpunkt via Open-Meteo
+  const wx = await fetchWeatherAtTime(catchFormData.datetime || null, lat, lon);
+  const waterT = wx._waterTempAtCatch
+              ?? parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
+              ?? parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state)
+              ?? null;
+  const awIdx = calcAngelwetterIndex();
 
   const payload = {
     fish_type:         fish,
@@ -3143,12 +3379,17 @@ async function saveCatch() {
     catchFormActive = false;
     catchPhotoData  = null;
     renderView();
-    // Kurze Erfolgsmeldung
+    // Toast: Erfolg + ggf. Wetter-Warnung wenn Recorder-Daten fehlten
     const toast = document.createElement('div');
-    toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#07391b;border:1px solid #67d33f;color:#67d33f;padding:12px 24px;border-radius:12px;font-weight:800;font-size:14px;z-index:9999;';
-    toast.textContent = '✅ Fang gespeichert!';
+    toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#07391b;border:1px solid #67d33f;color:#67d33f;padding:12px 24px;border-radius:12px;font-weight:800;font-size:14px;z-index:9999;text-align:center;max-width:80vw;';
+    const wxSrc = wx.weatherAtCatch === 'open_meteo_archive_gps'    ? `🛰 Wetter vom GPS-Spot (${lat?.toFixed(2)}°N)`
+                : wx.weatherAtCatch === 'open_meteo_forecast_gps'   ? `🛰 Wetter vom GPS-Spot (${lat?.toFixed(2)}°N)`
+                : wx.weatherAtCatch === 'live'                       ? '🌤 Aktuelles Wetter gespeichert'
+                : wx.weatherAtCatch === 'dwd_recorder'               ? '📡 DWD Haftenkamp (Verlauf)'
+                : '⚠️ Wetter: Schätzwerte (kein GPS)';
+    toast.innerHTML = `✅ Fang gespeichert!<br><span style="font-size:11px;font-weight:600;opacity:.8">${wxSrc}</span>`;
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 2500);
+    setTimeout(() => toast.remove(), 3500);
   } else {
     alert('⚠️ Fehler beim Speichern. Prüfe HA-Verbindung.');
     if (btn) { btn.textContent = '💾 Fang speichern'; btn.disabled = false; }
@@ -3499,9 +3740,13 @@ function renderView() {
   const chance   = calcAngelwetterIndex();
   const bestTime = getState('sensor.fishing_tracker_best_time', getState('sensor.beste_angelzeit','18:00–21:00'));
   const waterT   = (() => {
+    // NLWKN echte Vechte-Messung höchste Priorität
+    const nlwkn = parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state);
+    if (!isNaN(nlwkn) && nlwkn > -2 && nlwkn < 40) return nlwkn.toFixed(1);
+    // Konfigurierter Sensor (oft Schätzung)
     const v = parseFloat(getState('sensor.wassertemperatur_gewaesser', getState('sensor.water_temp', '')));
     if (!isNaN(v) && v > -2 && v < 40) return v.toFixed(1);
-    // Sensor nicht da: Open-Meteo / Schätzung als Fallback
+    // Open-Meteo / Schätzung
     if (typeof getEstimatedWaterTemp === 'function') {
       const est = getEstimatedWaterTemp();
       if (est && est.value != null) return est.value.toFixed(1);
@@ -4708,7 +4953,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.34.2'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.3'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -4855,7 +5100,12 @@ function triggerWaterTempHistoryFetch() {
   if (_waterTempHistoryInFlight) return;
   if (_waterTempHistoryAsync && (Date.now() - _waterTempHistoryAsync.t) < 600000) return;
   _waterTempHistoryInFlight = true;
-  fetchHARecorderHistory('sensor.wassertemperatur_gewaesser', 24).then(samples => {
+  // NLWKN-Sensor bevorzugt (echte Messungen alle 15min)
+  // Fallback auf wassertemperatur_gewaesser (oft Monatstabellen-Schätzung)
+  const entity = haStates['sensor.fishing_tracker_nlwkn_water_temp']
+                 ? 'sensor.fishing_tracker_nlwkn_water_temp'
+                 : 'sensor.wassertemperatur_gewaesser';
+  fetchHARecorderHistory(entity, 24).then(samples => {
     _waterTempHistoryInFlight = false;
     // Sensor-Verlauf brauchbar? min 3 Samples UND Varianz > 0.05°C (sonst Monatstabellen-Sensor)
     let useRecorder = false;
@@ -4869,19 +5119,17 @@ function triggerWaterTempHistoryFetch() {
     if (useRecorder) {
       _waterTempHistoryAsync = { t: Date.now(), samples: samples };
     } else {
-      // Fallback: Open-Meteo surface_temperature + soil_temperature_0_to_7cm der letzten 24h
+      // Fallback: Open-Meteo surface_temperature der letzten 24h
       const omSamples = buildOpenMeteoWaterTempHistory();
       _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
     }
     if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
   }).catch(() => {
     _waterTempHistoryInFlight = false;
-    // Bei Fehler trotzdem Open-Meteo versuchen
+    // WICHTIG: auch im Fehlerfall setzen, sonst endlose Retry-Schleife
     const omSamples = buildOpenMeteoWaterTempHistory();
-    if (omSamples.length >= 2) {
-      _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
-      if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
-    }
+    _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
+    if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
   });
 }
 
@@ -4889,26 +5137,40 @@ function triggerWaterTempHistoryFetch() {
 // Mittel aus surface_temperature und soil_temperature_0_to_7cm (Proxy für Gewässertemp)
 function buildOpenMeteoWaterTempHistory() {
   try {
-    const ctr = (typeof getBestCenter === 'function') ? getBestCenter() : null;
-    if (!ctr) return [];
-    const key = ctr[0].toFixed(3) + ',' + ctr[1].toFixed(3);
-    const cache = _openMeteoCache[key];
-    if (!cache || !cache.data) return [];
+    // Cache-Kandidaten in Prioritätsreihenfolge: aktueller Spot-Center, dann alle übrigen Keys
+    const keysSeen = new Set();
+    const candidates = [];
+    try {
+      const ctr = (typeof getBestCenter === 'function') ? getBestCenter() : null;
+      if (ctr) {
+        const k = ctr[0].toFixed(3) + ',' + ctr[1].toFixed(3);
+        candidates.push(k); keysSeen.add(k);
+      }
+    } catch(e) {}
+    for (const k of Object.keys(_openMeteoCache || {})) {
+      if (!keysSeen.has(k)) { candidates.push(k); keysSeen.add(k); }
+    }
     const now = Date.now();
     const cutoff = now - 24 * 3600 * 1000;
-    const samples = [];
-    for (const f of cache.data) {
-      const t = new Date(f.datetime).getTime();
-      if (t < cutoff || t > now + 1000) continue;
-      const st = parseFloat(f.surface_temperature);
-      const so = parseFloat(f.soil_temperature_0_to_7cm);
-      const vals = [st, so].filter(v => !isNaN(v) && v > -2 && v < 40);
-      if (vals.length > 0) {
-        const v = vals.reduce((a,c) => a+c, 0) / vals.length;
-        samples.push({ t: t, p: Math.round(v * 10) / 10 });
+    // Probiere jeden Key bis einer brauchbare Samples liefert
+    for (const key of candidates) {
+      const cache = _openMeteoCache[key];
+      if (!cache || !cache.data) continue;
+      const samples = [];
+      for (const f of cache.data) {
+        const t = new Date(f.datetime).getTime();
+        if (t < cutoff || t > now + 1000) continue;
+        const st = parseFloat(f.surface_temperature);
+        const so = parseFloat(f.soil_temperature_0_to_7cm);
+        const vals = [st, so].filter(v => !isNaN(v) && v > -2 && v < 40);
+        if (vals.length > 0) {
+          const v = vals.reduce((a,c) => a+c, 0) / vals.length;
+          samples.push({ t: t, p: Math.round(v * 10) / 10 });
+        }
       }
+      if (samples.length >= 2) return samples;
     }
-    return samples;
+    return [];
   } catch(e) { return []; }
 }
 
@@ -5066,9 +5328,17 @@ function drawWaterTempChart(id, samples) {
     try { inFlight = (typeof _waterTempHistoryInFlight !== 'undefined') && _waterTempHistoryInFlight; } catch(e) {}
     try { haveAsync = (typeof _waterTempHistoryAsync !== 'undefined') && !!_waterTempHistoryAsync; } catch(e) {}
     const msg = inFlight ? 'Daten laden…' : (haveAsync ? 'Kein Verlauf verfügbar (Sensor ist Schätzung)' : 'Daten laden…');
+    // Anti-Flicker: nur neu setzen wenn andere Nachricht
+    const emptyHash = 'wt-empty:' + msg;
+    if (svg.dataset.hash === emptyHash) return;
+    svg.dataset.hash = emptyHash;
     svg.innerHTML = `<text x="${w/2}" y="${h/2}" fill="rgba(255,255,255,.4)" font-size="13" text-anchor="middle">${msg}</text>`;
     return;
   }
+  // Anti-Flicker: Hash der Inputs — wenn unverändert, nicht neu zeichnen
+  const newHash = 'wt:' + samples.length + ':' + samples[0].t + ':' + samples[samples.length-1].t + ':' + samples[samples.length-1].p;
+  if (svg.dataset.hash === newHash) return;
+  svg.dataset.hash = newHash;
   const now = Date.now();
   // Auf 24h begrenzen
   const cutoff = now - 24*3600*1000;
@@ -5122,6 +5392,10 @@ function drawWaterTempChart(id, samples) {
 function drawPressureChart(id, pastPts, futurePts, base) {
   const svg = document.getElementById(id);
   if (!svg) return;
+  // Anti-Flicker: Hash der Inputs — wenn unverändert, nicht neu zeichnen
+  const newHash = 'pr:' + (pastPts || []).join(',') + '|' + (futurePts || []).join(',') + '|' + (base || 0);
+  if (svg.dataset.hash === newHash) return;
+  svg.dataset.hash = newHash;
   const w=900, h=130, padL=52, padR=16, padT=10, padB=24;
   const allPts = [...pastPts, ...futurePts];
   const minV = Math.min(...allPts)-3, maxV = Math.max(...allPts)+3;
@@ -5734,8 +6008,8 @@ function collectAllSensors() {
     windGust:    _pick(['sensor.haftenkamp_windboen', 'sensor.neuenhaus_windboen'], 0),
     rainNow:     _pick(['sensor.haftenkamp_niederschlag', 'sensor.neuenhaus_niederschlag'], 0),
     tempAir:     _pick(['sensor.haftenkamp_temperatur', 'sensor.neuenhaus_temperatur'], 15),
-    // Gewässer
-    waterTemp:   _pick(['sensor.wassertemperatur_gewaesser'], 13),
+    // Gewässer — NLWKN bevorzugt, dann Sensor, dann Default
+    waterTemp:   _pick(['sensor.fishing_tracker_nlwkn_water_temp', 'sensor.wassertemperatur_gewaesser'], 13),
     // Solunar
     sol: {
       major1: s['sensor.solunar_beisszeiten']?.attributes?.major1 || '--:--',
