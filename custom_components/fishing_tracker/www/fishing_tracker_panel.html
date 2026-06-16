@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.3 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.4 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -279,10 +279,10 @@ function smooth(pp) {
 function drawChart(id, pts, color = '#ff9d18', todayIdx = null, customLabels = null) {
   const svg = document.getElementById(id);
   if (!svg) return;
-  // Anti-Flicker: Hash der Inputs — wenn unverändert, nicht neu zeichnen
+  // Anti-Flicker: module-level Hash-Map (überlebt renderView-Neuaufbau des DOM)
   const newHash = 'dc:' + (pts || []).join(',') + '|' + color + '|' + (todayIdx == null ? '-' : todayIdx) + '|' + (Array.isArray(customLabels) ? customLabels.join(',') : '-');
-  if (svg.dataset.hash === newHash) return;
-  svg.dataset.hash = newHash;
+  if (_drawChartHashes[id] === newHash && svg.innerHTML.length > 100) return;
+  _drawChartHashes[id] = newHash;
   // Feste Dimensionen mit Y-Achse links
   const w=900, h=220, padL=38, padR=10, padT=16, padB=24;
   const step = (w - padL - padR) / (pts.length - 1);
@@ -4953,7 +4953,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.3'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.4'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -5070,6 +5070,10 @@ let _pressureHistoryAsync = null;
 let _pressureHistoryInFlight = false;
 let _waterTempHistoryAsync = null;
 let _waterTempHistoryInFlight = false;
+// Anti-Flicker: Module-level Hashes für Charts (überleben renderView-Neuaufbau)
+let _pressureChartHash = '';
+let _waterTempChartHash = '';
+let _drawChartHashes = {};
 
 // Debounced renderView: max 1 Re-Render alle 250ms, sammelt mehrere async-completions
 let _scheduleRenderTimer = null;
@@ -5328,17 +5332,17 @@ function drawWaterTempChart(id, samples) {
     try { inFlight = (typeof _waterTempHistoryInFlight !== 'undefined') && _waterTempHistoryInFlight; } catch(e) {}
     try { haveAsync = (typeof _waterTempHistoryAsync !== 'undefined') && !!_waterTempHistoryAsync; } catch(e) {}
     const msg = inFlight ? 'Daten laden…' : (haveAsync ? 'Kein Verlauf verfügbar (Sensor ist Schätzung)' : 'Daten laden…');
-    // Anti-Flicker: nur neu setzen wenn andere Nachricht
+    // Anti-Flicker: module-level Hash
     const emptyHash = 'wt-empty:' + msg;
-    if (svg.dataset.hash === emptyHash) return;
-    svg.dataset.hash = emptyHash;
+    if (_waterTempChartHash === emptyHash && svg.innerHTML.length > 10) return;
+    _waterTempChartHash = emptyHash;
     svg.innerHTML = `<text x="${w/2}" y="${h/2}" fill="rgba(255,255,255,.4)" font-size="13" text-anchor="middle">${msg}</text>`;
     return;
   }
-  // Anti-Flicker: Hash der Inputs — wenn unverändert, nicht neu zeichnen
+  // Anti-Flicker: module-level Hash (überlebt renderView-Neuaufbau des DOM)
   const newHash = 'wt:' + samples.length + ':' + samples[0].t + ':' + samples[samples.length-1].t + ':' + samples[samples.length-1].p;
-  if (svg.dataset.hash === newHash) return;
-  svg.dataset.hash = newHash;
+  if (_waterTempChartHash === newHash && svg.innerHTML.length > 100) return;
+  _waterTempChartHash = newHash;
   const now = Date.now();
   // Auf 24h begrenzen
   const cutoff = now - 24*3600*1000;
@@ -5392,10 +5396,10 @@ function drawWaterTempChart(id, samples) {
 function drawPressureChart(id, pastPts, futurePts, base) {
   const svg = document.getElementById(id);
   if (!svg) return;
-  // Anti-Flicker: Hash der Inputs — wenn unverändert, nicht neu zeichnen
+  // Anti-Flicker: module-level Hash (überlebt renderView-Neuaufbau des DOM)
   const newHash = 'pr:' + (pastPts || []).join(',') + '|' + (futurePts || []).join(',') + '|' + (base || 0);
-  if (svg.dataset.hash === newHash) return;
-  svg.dataset.hash = newHash;
+  if (_pressureChartHash === newHash && svg.innerHTML.length > 100) return;
+  _pressureChartHash = newHash;
   const w=900, h=130, padL=52, padR=16, padT=10, padB=24;
   const allPts = [...pastPts, ...futurePts];
   const minV = Math.min(...allPts)-3, maxV = Math.max(...allPts)+3;
