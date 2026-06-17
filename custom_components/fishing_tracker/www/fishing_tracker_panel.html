@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.7 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.8 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -3726,6 +3726,548 @@ function catchFormView() {
 
 // ── Views ─────────────────────────────────────────────────────────────────────
 let _riverFetchStarted = false;
+// Touch-Interaktion für Charts
+
+// ── Echter Luftdruck-Verlauf & -Prognose ──────────────────────────────────────
+// Verlauf: lokal gesnapshotter Ringpuffer (max 24h). Prognose: stündliche Wetter-
+// Forecast-Daten von HA (weather.home). Fallback: ehrliche Trend-Extrapolation.
+const PRESSURE_HISTORY_KEY = 'ft_pressure_history_v1';
+
+// HA-Recorder-History via WebSocket — Cache pro Entity (vermeidet wiederholte Calls)
+const _haHistoryCache = {};
+async function fetchHARecorderHistory(entityId, hoursBack) {
+  hoursBack = hoursBack || 24;
+  const cacheKey = entityId + '_' + hoursBack;
+  const cached = _haHistoryCache[cacheKey];
+  if (cached && (Date.now() - cached.t) < 300000) return cached.data;  // 5min cache
+  try {
+    const haEl = window.parent && window.parent.document && window.parent.document.querySelector('home-assistant');
+    const conn = haEl && haEl.hass && haEl.hass.connection;
+    if (!conn || !conn.sendMessagePromise) return null;
+    const end = new Date();
+    const start = new Date(end.getTime() - hoursBack * 3600 * 1000);
+    const resp = await conn.sendMessagePromise({
+      type: 'history/history_during_period',
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      entity_ids: [entityId],
+      minimal_response: true,
+      no_attributes: true,
+      significant_changes_only: false,
+    });
+    const arr = (resp && resp[entityId]) || [];
+    const samples = arr.map(p => {
+      const t = (typeof p.lu === 'number') ? p.lu * 1000
+              : (p.last_updated ? new Date(p.last_updated).getTime() : null);
+      const v = parseFloat(p.s != null ? p.s : p.state);
+      return (t && !isNaN(v)) ? { t: t, p: v } : null;
+    }).filter(Boolean);
+    _haHistoryCache[cacheKey] = { t: Date.now(), data: samples };
+    return samples;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Background-Fetch der echten Druck-History — bei Verfügbarkeit Chart-Refresh
+let _pressureHistoryAsync = null;
+let _pressureHistoryInFlight = false;
+let _waterTempHistoryAsync = null;
+let _waterTempHistoryInFlight = false;
+// Anti-Flicker: Module-level Hashes für Charts (überleben renderView-Neuaufbau)
+let _pressureChartHash = '';
+let _pressureChartLastDraw = 0;
+let _waterTempChartHash = '';
+let _drawChartHashes = {};
+
+// Debounced renderView: max 1 Re-Render alle 250ms, sammelt mehrere async-completions
+let _scheduleRenderTimer = null;
+function scheduleRenderView() {
+  if (_scheduleRenderTimer) return;
+  _scheduleRenderTimer = setTimeout(() => {
+    _scheduleRenderTimer = null;
+    try { if (typeof renderView === 'function') renderView(); } catch(e) {}
+  }, 250);
+}
+
+function triggerPressureHistoryFetch() {
+  if (_pressureHistoryInFlight) return;
+  if (_pressureHistoryAsync && (Date.now() - _pressureHistoryAsync.t) < 300000) return;
+  _pressureHistoryInFlight = true;
+  fetchHARecorderHistory('sensor.haftenkamp_druck', 12).then(samples => {
+    _pressureHistoryInFlight = false;
+    if (samples && samples.length >= 3) {
+      _pressureHistoryAsync = { t: Date.now(), samples: samples };
+      if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
+    } else {
+      // Auch wenn nichts kommt: Marker setzen damit wir nicht ständig retry'n
+      _pressureHistoryAsync = { t: Date.now(), samples: [] };
+    }
+  }).catch(() => { _pressureHistoryInFlight = false; });
+}
+function triggerWaterTempHistoryFetch() {
+  if (_waterTempHistoryInFlight) return;
+  if (_waterTempHistoryAsync && (Date.now() - _waterTempHistoryAsync.t) < 600000) return;
+  _waterTempHistoryInFlight = true;
+
+  // NLWKN nur wenn Sensor auch einen VALIDEN numerischen Wert hat
+  const nlwknState = haStates['sensor.fishing_tracker_nlwkn_water_temp'];
+  const nlwknValid = nlwknState && !isNaN(parseFloat(nlwknState.state)) && parseFloat(nlwknState.state) > 0;
+  const entity = nlwknValid
+               ? 'sensor.fishing_tracker_nlwkn_water_temp'
+               : 'sensor.wassertemperatur_gewaesser';
+
+  fetchHARecorderHistory(entity, 24).then(samples => {
+    _waterTempHistoryInFlight = false;
+    let useRecorder = false;
+    if (samples && samples.length >= 3) {
+      const vals = samples.map(x => x.p).filter(v => !isNaN(v));
+      if (vals.length >= 3) {
+        const range = Math.max(...vals) - Math.min(...vals);
+        if (range > 0.05) useRecorder = true;
+      }
+    }
+    if (useRecorder) {
+      _waterTempHistoryAsync = { t: Date.now(), samples };
+    } else {
+      // Recorder hat keine Varianz → Open-Meteo Proxy versuchen
+      const omSamples = buildOpenMeteoWaterTempHistory();
+      if (omSamples && omSamples.length >= 2) {
+        _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
+      } else {
+        // Letzter Ausweg: aktuellen Sensorwert als Einzelpunkt
+        const curTemp = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state)
+                     || parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
+                     || null;
+        const fallback = curTemp ? [{ t: Date.now(), p: curTemp }] : [];
+        _waterTempHistoryAsync = { t: Date.now(), samples: fallback, isFallback: true };
+      }
+    }
+    if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
+  }).catch(() => {
+    _waterTempHistoryInFlight = false;
+    const omSamples = buildOpenMeteoWaterTempHistory();
+    if (omSamples && omSamples.length >= 2) {
+      _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
+    } else {
+      const curTemp = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state)
+                   || parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
+                   || null;
+      const fallback = curTemp ? [{ t: Date.now(), p: curTemp }] : [];
+      _waterTempHistoryAsync = { t: Date.now(), samples: fallback, isFallback: true };
+    }
+    if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
+  });
+}
+
+// Baut Wassertemperatur-Verlauf der letzten 24h aus dem Open-Meteo-Cache
+// Mittel aus surface_temperature und soil_temperature_0_to_7cm (Proxy für Gewässertemp)
+function buildOpenMeteoWaterTempHistory() {
+  try {
+    // Cache-Kandidaten in Prioritätsreihenfolge: aktueller Spot-Center, dann alle übrigen Keys
+    const keysSeen = new Set();
+    const candidates = [];
+    try {
+      const ctr = (typeof getBestCenter === 'function') ? getBestCenter() : null;
+      if (ctr) {
+        const k = ctr[0].toFixed(3) + ',' + ctr[1].toFixed(3);
+        candidates.push(k); keysSeen.add(k);
+      }
+    } catch(e) {}
+    for (const k of Object.keys(_openMeteoCache || {})) {
+      if (!keysSeen.has(k)) { candidates.push(k); keysSeen.add(k); }
+    }
+    const now = Date.now();
+    const cutoff = now - 24 * 3600 * 1000;
+    // Probiere jeden Key bis einer brauchbare Samples liefert
+    for (const key of candidates) {
+      const cache = _openMeteoCache[key];
+      if (!cache || !cache.data) continue;
+      const samples = [];
+      for (const f of cache.data) {
+        const t = new Date(f.datetime).getTime();
+        if (t < cutoff || t > now + 1000) continue;
+        const st = parseFloat(f.surface_temperature);
+        const so = parseFloat(f.soil_temperature_0_to_7cm);
+        const vals = [st, so].filter(v => !isNaN(v) && v > -2 && v < 40);
+        if (vals.length > 0) {
+          const v = vals.reduce((a,c) => a+c, 0) / vals.length;
+          samples.push({ t: t, p: Math.round(v * 10) / 10 });
+        }
+      }
+      if (samples.length >= 2) return samples;
+    }
+    return [];
+  } catch(e) { return []; }
+}
+
+function recordPressureSample(pressureHpa) {
+  const p = parseFloat(pressureHpa);
+  if (!p || isNaN(p)) return;
+  try {
+    const raw = localStorage.getItem(PRESSURE_HISTORY_KEY);
+    let arr = raw ? JSON.parse(raw) : [];
+    const now = Date.now();
+    // Nicht doppelt aufzeichnen innerhalb 15 min
+    if (arr.length && now - arr[arr.length - 1].t < 15 * 60 * 1000) return;
+    arr.push({ t: now, p: Math.round(p * 10) / 10 });
+    // Älter als 24h verwerfen
+    const cutoff = now - 24 * 3600 * 1000;
+    arr = arr.filter(s => s.t >= cutoff);
+    localStorage.setItem(PRESSURE_HISTORY_KEY, JSON.stringify(arr));
+  } catch(e) {}
+}
+
+function getPressureHistory12h(currentP, trend) {
+  // Sammelt historische Druck-Anker aus mehreren Quellen:
+  // (0) HA Recorder via WebSocket — VOLLE echte History, beste Quelle
+  // (a) sensor.haftenkamp_druck-Attribute (mean_1h/3h/6h/12h von HA-Statistics)
+  // (b) localStorage-Ringpuffer
+  // Wenn alles leer: Trend-Extrapolation als ehrlicher Fallback
+  // Trigger async fetch im Hintergrund (für nächsten Render)
+  try { triggerPressureHistoryFetch(); } catch(e) {}
+
+  // (0) Recorder-History bevorzugt
+  try {
+    if (_pressureHistoryAsync && _pressureHistoryAsync.samples && _pressureHistoryAsync.samples.length >= 3) {
+      const now = Date.now();
+      const samples = _pressureHistoryAsync.samples.filter(s => (now - s.t) <= 12 * 3600 * 1000);
+      if (samples.length >= 3) {
+        // 7 Punkte gleichmäßig über 12h verteilt — nächster Sample je Zielzeit
+        return [12, 10, 8, 6, 4, 2, 0].map(hoursAgo => {
+          const target = now - hoursAgo * 3600 * 1000;
+          let best = samples[0], bestD = Math.abs(samples[0].t - target);
+          for (const s of samples) {
+            const d = Math.abs(s.t - target);
+            if (d < bestD) { best = s; bestD = d; }
+          }
+          return Math.round(best.p * 10) / 10;
+        });
+      }
+    }
+  } catch(e) {}
+
+  const anchors = []; // [{ofs: stunden_in_vergangenheit, p: hpa}]
+  // (a) Sensor-Attribute
+  try {
+    const ps = (typeof haStates !== 'undefined') ? haStates['sensor.haftenkamp_druck'] : null;
+    if (ps && ps.attributes) {
+      const a = ps.attributes;
+      const cur = parseFloat(ps.state);
+      if (!isNaN(cur)) anchors.push({ ofs: 0, p: cur });
+      const tryAttr = (keys, ofs) => {
+        for (const k of keys) {
+          const v = parseFloat(a[k]);
+          if (!isNaN(v) && v > 800 && v < 1100) { anchors.push({ ofs, p: v }); return; }
+        }
+      };
+      tryAttr(['mean_1h',  '1h'],  1);
+      tryAttr(['mean_3h',  '3h'],  3);
+      tryAttr(['mean_6h',  '6h'],  6);
+      tryAttr(['mean_12h', '12h'], 12);
+    }
+  } catch(e) {}
+  // (b) localStorage-History dazumischen
+  try {
+    const raw = localStorage.getItem(PRESSURE_HISTORY_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const now = Date.now();
+    for (const s of arr) {
+      const ofs = (now - s.t) / 3600000;
+      if (ofs >= 0 && ofs <= 12) anchors.push({ ofs, p: s.p });
+    }
+  } catch(e) {}
+
+  if (anchors.length >= 2) {
+    // 7 Punkte über die letzten 12h durch lineare Interpolation der Anker
+    anchors.sort((a, b) => b.ofs - a.ofs); // älteste zuerst (ofs=12 → 0)
+    // Falls ältester Anker nicht ganz bei 12h, mit "ältestem bekanntem Wert" auffüllen
+    const interp = (targetOfs) => {
+      // exakter Treffer?
+      for (const a of anchors) if (Math.abs(a.ofs - targetOfs) < 0.1) return a.p;
+      // zwei umliegende finden
+      for (let i = 0; i < anchors.length - 1; i++) {
+        if (anchors[i].ofs >= targetOfs && anchors[i+1].ofs <= targetOfs) {
+          const r = anchors[i].ofs - anchors[i+1].ofs;
+          const f = r > 0 ? (anchors[i].ofs - targetOfs) / r : 0;
+          return anchors[i].p + (anchors[i+1].p - anchors[i].p) * f;
+        }
+      }
+      // außerhalb → nächster Rand
+      return targetOfs > anchors[0].ofs ? anchors[0].p : anchors[anchors.length-1].p;
+    };
+    return [12, 10, 8, 6, 4, 2, 0].map(o => Math.round(interp(o) * 10) / 10);
+  }
+
+  // Fallback: Trend-Extrapolation
+  const t = Math.max(-1.5, Math.min(1.5, trend || 0));
+  const pastDelta = Math.max(-8, Math.min(8, t * 12));
+  const start = currentP - pastDelta;
+  return Array.from({length: 7}, (_, i) => Math.round((start + (currentP - start) * (i / 6)) * 10) / 10);
+}
+
+function getPressureForecast12h(currentP, trend) {
+  // Versucht stündliche HA-Wettervorhersage (verschiedene Provider nutzen andere Feldnamen)
+  try {
+    const fc = (typeof getConsolidatedForecast === 'function') ? getConsolidatedForecast() : [];
+    const now = Date.now();
+    const hours = [];
+    for (const f of fc) {
+      try {
+        const dt = new Date(f.datetime).getTime();
+        if (dt > now && dt < now + 13 * 3600 * 1000) {
+          const p = (f.pressure != null) ? f.pressure
+                  : (f.pressure_msl != null) ? f.pressure_msl
+                  : (f.air_pressure != null) ? f.air_pressure
+                  : null;
+          if (p != null && !isNaN(parseFloat(p))) hours.push({ t: dt, p: parseFloat(p) });
+        }
+      } catch(e) {}
+    }
+    if (hours.length >= 3) {
+      hours.sort((a,b) => a.t - b.t);
+      const pts = [currentP];
+      for (let i = 1; i <= 4; i++) {
+        const tTarget = now + (i / 4) * 12 * 3600 * 1000;
+        let best = hours[0], bestD = Math.abs(hours[0].t - tTarget);
+        for (const h of hours) {
+          const d = Math.abs(h.t - tTarget);
+          if (d < bestD) { best = h; bestD = d; }
+        }
+        pts.push(Math.round(best.p * 10) / 10);
+      }
+      return pts;
+    }
+  } catch(e) {}
+  // Fallback: lineare Trend-Extrapolation (Trend = hPa/h)
+  const t = Math.max(-1.5, Math.min(1.5, trend || 0));
+  return Array.from({length: 5}, (_, i) => Math.round((currentP + t * (i * 3)) * 10) / 10);
+}
+
+function drawWaterTempChart(id, samples) {
+  // samples: [{t: ts_ms, p: tempC}]   (key 'p' wegen Wiederverwendung der pressure-history-Struktur)
+  const svg = document.getElementById(id);
+  if (!svg) return;
+  const w=900, h=130, padL=52, padR=16, padT=10, padB=24;
+  // Wenn Fetch noch läuft: "Daten laden", sonst "Keine Daten" als finaler Zustand
+  if (!samples || samples.length < 2) {
+    let inFlight = false, haveAsync = false;
+    try { inFlight = (typeof _waterTempHistoryInFlight !== 'undefined') && _waterTempHistoryInFlight; } catch(e) {}
+    try { haveAsync = (typeof _waterTempHistoryAsync !== 'undefined') && !!_waterTempHistoryAsync; } catch(e) {}
+    const isFallback = _waterTempHistoryAsync?.isFallback;
+    const msg = inFlight    ? 'Daten laden…'
+              : isFallback  ? 'Kein Verlauf verfügbar'
+              : haveAsync   ? 'Kein Verlauf verfügbar (Sensor ist Schätzung)'
+                            : 'Daten laden…';
+    // Anti-Flicker: module-level Hash
+    const emptyHash = 'wt-empty:' + msg;
+    if (_waterTempChartHash === emptyHash && svg.innerHTML.length > 10) return;
+    _waterTempChartHash = emptyHash;
+    svg.innerHTML = `<text x="${w/2}" y="${h/2}" fill="rgba(255,255,255,.4)" font-size="13" text-anchor="middle">${msg}</text>`;
+    return;
+  }
+  // Anti-Flicker: module-level Hash (überlebt renderView-Neuaufbau des DOM)
+  const newHash = 'wt:' + samples.length + ':' + samples[0].t + ':' + samples[samples.length-1].t + ':' + samples[samples.length-1].p;
+  if (_waterTempChartHash === newHash && svg.innerHTML.length > 100) return;
+  _waterTempChartHash = newHash;
+  const now = Date.now();
+  // Auf 24h begrenzen
+  const cutoff = now - 24*3600*1000;
+  const pts = samples.filter(s => s.t >= cutoff).sort((a,b)=>a.t-b.t);
+  if (pts.length < 2) {
+    svg.innerHTML = `<text x="${w/2}" y="${h/2}" fill="rgba(255,255,255,.4)" font-size="13" text-anchor="middle">Zu wenig Daten</text>`;
+    return;
+  }
+  const vals = pts.map(p=>p.p);
+  const minV = Math.min(...vals) - 0.5;
+  const maxV = Math.max(...vals) + 0.5;
+  const range = maxV - minV || 1;
+  const tMin = pts[0].t, tMax = pts[pts.length-1].t;
+  const tRange = tMax - tMin || 1;
+  function xy(p) {
+    return [
+      padL + ((p.t - tMin) / tRange) * (w - padL - padR),
+      padT + (1 - (p.p - minV) / range) * (h - padT - padB)
+    ];
+  }
+  const coords = pts.map(xy);
+  let path = 'M' + coords[0][0] + ',' + coords[0][1];
+  for (let i=1; i<coords.length; i++) path += ' L' + coords[i][0] + ',' + coords[i][1];
+  const areaPath = path + ' L' + coords[coords.length-1][0] + ',' + (h-padB) + ' L' + coords[0][0] + ',' + (h-padB) + ' Z';
+  const yLabels = [maxV.toFixed(1), ((maxV+minV)/2).toFixed(1), minV.toFixed(1)];
+  // X-Achse: 0/6/12/18/24h Marker
+  const xTicks = [];
+  for (let h_ago=0; h_ago<=24; h_ago+=6) {
+    const t = now - h_ago * 3600 * 1000;
+    if (t >= tMin && t <= tMax) {
+      const x = padL + ((t - tMin) / tRange) * (w - padL - padR);
+      xTicks.push({x, label: h_ago === 0 ? 'jetzt' : ('-' + h_ago + 'h')});
+    }
+  }
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="wtGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#67d3f0" stop-opacity=".3"/>
+        <stop offset="100%" stop-color="#67d3f0" stop-opacity=".02"/>
+      </linearGradient>
+    </defs>
+    ${yLabels.map((lbl,i)=>`<text x="${padL-6}" y="${padT + (i/2)*(h-padT-padB) + 4}" fill="rgba(255,255,255,.4)" font-size="10" text-anchor="end">${lbl}</text>`).join('')}
+    <text x="${padL-4}" y="${padT-2}" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="end">°C</text>
+    ${[0,0.5,1].map(f=>`<line x1="${padL}" y1="${padT + f*(h-padT-padB)}" x2="${w-padR}" y2="${padT + f*(h-padT-padB)}" stroke="rgba(255,255,255,.06)" stroke-width="1"/>`).join('')}
+    <path d="${areaPath}" fill="url(#wtGrad)"/>
+    <path d="${path}" stroke="#67d3f0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    ${xTicks.map(t=>`<text x="${t.x}" y="${h-6}" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="middle">${t.label}</text>`).join('')}
+  `;
+}
+
+function drawPressureChart(id, pastPts, futurePts, base) {
+  const svg = document.getElementById(id);
+  if (!svg) return;
+  // Hash aus gerundeten Werten (auf 0.5 hPa) — absorbiert winzige Float-Unterschiede
+  const roundHalf = v => Math.round(v * 2) / 2;
+  const hashPast   = (pastPts  || []).map(roundHalf).join(',');
+  const hashFuture = (futurePts|| []).map(roundHalf).join(',');
+  const newHash = 'pr:' + hashPast + '|' + hashFuture + '|' + roundHalf(base || 0);
+  const now = Date.now();
+  const isEmpty = svg.innerHTML.length < 100;
+  const hashSame = newHash === _pressureChartHash;
+  const tooSoon  = (now - _pressureChartLastDraw) < 8000;  // max 1 Redraw alle 8s
+  // Skip wenn: SVG hat Inhalt UND (Hash gleich ODER zu früh für Redraw)
+  if (!isEmpty && (hashSame || tooSoon)) return;
+  _pressureChartHash = newHash;
+  _pressureChartLastDraw = now;
+  const w=900, h=130, padL=52, padR=16, padT=10, padB=24;
+  const allPts = [...pastPts, ...futurePts];
+  const minV = Math.min(...allPts)-3, maxV = Math.max(...allPts)+3;
+  const range = maxV - minV || 10;
+  const totalPts = pastPts.length + futurePts.length;
+  const step = (w-padL-padR)/(totalPts-1);
+  
+  function toXY(val, idx) {
+    return [
+      padL + idx*step,
+      padT + (1-(val-minV)/range)*(h-padT-padB)
+    ];
+  }
+  
+  const pastCoords = pastPts.map((v,i) => toXY(v,i));
+  const futureCoords = futurePts.map((v,i) => toXY(v, pastPts.length-1+i));
+  
+  // Bezier smooth
+  function bezier(coords) {
+    if (!coords.length) return '';
+    let d = 'M'+coords[0][0]+','+coords[0][1];
+    for (let i=0; i<coords.length-1; i++) {
+      const cp1x = coords[i][0]+(coords[i+1][0]-coords[i][0])*0.4;
+      const cp2x = coords[i+1][0]-(coords[i+1][0]-coords[i][0])*0.4;
+      d += ' C'+cp1x+','+coords[i][1]+' '+cp2x+','+coords[i+1][1]+' '+coords[i+1][0]+','+coords[i+1][1];
+    }
+    return d;
+  }
+  
+  // Y-Achse Werte (3 Labels)
+  const yLabels = [Math.ceil(minV), Math.round((minV+maxV)/2), Math.floor(maxV)];
+  
+  // Trenn-X (Jetzt)
+  const nowX = padL + (pastPts.length-1)*step;
+  
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="pgPast" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#2ea8ff" stop-opacity=".25"/>
+        <stop offset="100%" stop-color="#2ea8ff" stop-opacity=".03"/>
+      </linearGradient>
+      <linearGradient id="pgFuture" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#ffd23f" stop-opacity=".15"/>
+        <stop offset="100%" stop-color="#ffd23f" stop-opacity=".02"/>
+      </linearGradient>
+    </defs>
+    <!-- Y-Achse -->
+    ${yLabels.map(v => {
+      const y = padT + (1-(v-minV)/range)*(h-padT-padB);
+      return `<line x1="${padL}" y1="${y}" x2="${w-padR}" y2="${y}" stroke="rgba(255,255,255,.06)"/>
+              <text x="${padL-4}" y="${y+4}" fill="rgba(255,255,255,.4)" font-size="9" text-anchor="end" font-family="system-ui">${v}</text>`;
+    }).join('')}
+    <!-- Trennlinie Jetzt -->
+    <line x1="${nowX}" y1="${padT}" x2="${nowX}" y2="${h-padB}" stroke="rgba(255,215,0,.4)" stroke-width="1" stroke-dasharray="3 2"/>
+    <text x="${nowX+3}" y="${padT+10}" fill="rgba(255,215,0,.7)" font-size="9" font-family="system-ui">Jetzt</text>
+    <text x="${padL-4}" y="${h-padB+14}" fill="rgba(255,255,255,.3)" font-size="9" text-anchor="end" font-family="system-ui">hPa</text>
+    <!-- Labels -->
+    <text x="${padL+20}" y="${h-4}" fill="rgba(255,255,255,.3)" font-size="9" font-family="system-ui">12h ago</text>
+    <text x="${w-padR-10}" y="${h-4}" fill="rgba(255,215,0,.5)" font-size="9" text-anchor="end" font-family="system-ui">+12h</text>
+    <!-- Vergangenheit Fläche -->
+    <path d="M${pastCoords[0][0]},${h-padB} ${bezier(pastCoords).slice(1)} L${pastCoords[pastCoords.length-1][0]},${h-padB} Z" fill="url(#pgPast)"/>
+    <!-- Zukunft Fläche -->
+    <path d="M${futureCoords[0][0]},${h-padB} ${bezier(futureCoords).slice(1)} L${futureCoords[futureCoords.length-1][0]},${h-padB} Z" fill="url(#pgFuture)"/>
+    <!-- Vergangenheit Linie (solide) -->
+    <path d="${bezier(pastCoords)}" fill="none" stroke="#2ea8ff" stroke-width="2" stroke-linecap="round"/>
+    <!-- Zukunft Linie (gestrichelt) -->
+    <path d="${bezier(futureCoords)}" fill="none" stroke="#ffd23f" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 4"/>
+    <!-- Jetzt-Punkt -->
+    <circle cx="${nowX}" cy="${pastCoords[pastCoords.length-1][1]}" r="5" fill="#ffd23f" stroke="#fff" stroke-width="1.5"/>
+  `;
+}
+
+function addChartTouch(svgId, pts, color) {
+  const svg = document.getElementById(svgId);
+  if (!svg) return;
+  // Exakt gleiche Koordinaten wie drawChart!
+  const w=900, h=220, padL=38, padR=10, padT=16, padB=24;
+  const step = (w - padL - padR) / (pts.length - 1);
+
+  function showTooltip(clientX) {
+    const rect = svg.getBoundingClientRect();
+    const relX = (clientX - rect.left) / rect.width * w;
+    const idx = Math.max(0, Math.min(pts.length-1, Math.round((relX - padL) / step)));
+    const val = pts[idx];
+    const px = padL + idx * step;
+    const py = padT + (1 - val / 100) * (h - padT - padB);
+    const label = pts.length > 8
+      ? `${String(idx).padStart(2,'0')}:00 Uhr – ${val}%`
+      : `${['Mo','Di','Mi','Do','Fr','Sa','So'][idx]||'Tag '+(idx+1)} – ${val}%`;
+
+    let tip = svg.querySelector('#chartTip');
+    if (!tip) {
+      tip = document.createElementNS('http://www.w3.org/2000/svg','g');
+      tip.id = 'chartTip';
+      svg.appendChild(tip);
+    }
+    const bw = Math.max(124, label.length * 8 + 30);
+    const bh = 44;
+    const bx = Math.min(w - padR - bw - 4, Math.max(padL, px - bw/2));
+    const by = py > h/2 ? py - bh - 14 : py + 14;
+    // Kräftiger, blickdichter Hintergrund + heller Text für maximale Lesbarkeit
+    const bgCol  = 'rgba(10,16,26,0.98)';   // fast schwarz, blickdicht
+    const timeCol = '#e8eef5';              // helles Grau für die Zeit-Zeile
+    // Eindeutige Schatten-ID je SVG, damit mehrere Charts sich nicht stören
+    const shId = svgId + '_tipShadow';
+    tip.innerHTML = `
+      <defs>
+        <filter id="${shId}" x="-30%" y="-30%" width="160%" height="190%">
+          <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.55"/>
+        </filter>
+      </defs>
+      <line x1="${px}" y1="${padT}" x2="${px}" y2="${h-padB}" stroke="${color}" stroke-width="1.5" stroke-dasharray="4 3" opacity=".6"/>
+      <circle cx="${px}" cy="${py}" r="7" fill="${color}" opacity=".25"/>
+      <circle cx="${px}" cy="${py}" r="4.5" fill="${color}" stroke="#fff" stroke-width="1.5"/>
+      <rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="10" fill="${bgCol}" stroke="${color}" stroke-width="2" filter="url(#${shId})"/>
+      <text x="${bx+bw/2}" y="${by+18}" fill="${timeCol}" font-size="12.5" font-weight="700" text-anchor="middle" font-family="system-ui" letter-spacing="0.3">${label.split(' – ')[0]}</text>
+      <text x="${bx+bw/2}" y="${by+36}" fill="${color}" font-size="17" font-weight="900" text-anchor="middle" font-family="system-ui">${label.split(' – ')[1]}</text>`;
+  }
+  
+  function removeTooltip() {
+    const tip = svg.querySelector('#chartTip');
+    if (tip) tip.innerHTML = '';
+  }
+  
+  svg.addEventListener('mousemove', e => showTooltip(e.clientX));
+  svg.addEventListener('mouseleave', removeTooltip);
+  svg.addEventListener('touchstart', e => { e.preventDefault(); showTooltip(e.touches[0].clientX); }, {passive:false});
+  svg.addEventListener('touchmove', e => { e.preventDefault(); showTooltip(e.touches[0].clientX); }, {passive:false});
+  svg.addEventListener('touchend', () => setTimeout(removeTooltip, 1500));
+  svg.style.cursor = 'crosshair';
+}
+
 function renderView() {
   // Fluss-Abfluss einmalig im Hintergrund laden (kein Auto-Re-Render → kein Interferieren mit Tab-Wechsel)
   try {
@@ -5032,7 +5574,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.7'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.8'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -5101,567 +5643,40 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
     t.onclick = () => { document.querySelectorAll('.fc-tab').forEach(x => x.classList.remove('active')); t.classList.add('active'); };
   });
 
-// Touch-Interaktion für Charts
-
-// ── Echter Luftdruck-Verlauf & -Prognose ──────────────────────────────────────
-// Verlauf: lokal gesnapshotter Ringpuffer (max 24h). Prognose: stündliche Wetter-
-// Forecast-Daten von HA (weather.home). Fallback: ehrliche Trend-Extrapolation.
-const PRESSURE_HISTORY_KEY = 'ft_pressure_history_v1';
-
-// HA-Recorder-History via WebSocket — Cache pro Entity (vermeidet wiederholte Calls)
-const _haHistoryCache = {};
-async function fetchHARecorderHistory(entityId, hoursBack) {
-  hoursBack = hoursBack || 24;
-  const cacheKey = entityId + '_' + hoursBack;
-  const cached = _haHistoryCache[cacheKey];
-  if (cached && (Date.now() - cached.t) < 300000) return cached.data;  // 5min cache
-  try {
-    const haEl = window.parent && window.parent.document && window.parent.document.querySelector('home-assistant');
-    const conn = haEl && haEl.hass && haEl.hass.connection;
-    if (!conn || !conn.sendMessagePromise) return null;
-    const end = new Date();
-    const start = new Date(end.getTime() - hoursBack * 3600 * 1000);
-    const resp = await conn.sendMessagePromise({
-      type: 'history/history_during_period',
-      start_time: start.toISOString(),
-      end_time: end.toISOString(),
-      entity_ids: [entityId],
-      minimal_response: true,
-      no_attributes: true,
-      significant_changes_only: false,
-    });
-    const arr = (resp && resp[entityId]) || [];
-    const samples = arr.map(p => {
-      const t = (typeof p.lu === 'number') ? p.lu * 1000
-              : (p.last_updated ? new Date(p.last_updated).getTime() : null);
-      const v = parseFloat(p.s != null ? p.s : p.state);
-      return (t && !isNaN(v)) ? { t: t, p: v } : null;
-    }).filter(Boolean);
-    _haHistoryCache[cacheKey] = { t: Date.now(), data: samples };
-    return samples;
-  } catch (e) {
-    return null;
-  }
-}
-
-// Background-Fetch der echten Druck-History — bei Verfügbarkeit Chart-Refresh
-let _pressureHistoryAsync = null;
-let _pressureHistoryInFlight = false;
-let _waterTempHistoryAsync = null;
-let _waterTempHistoryInFlight = false;
-// Anti-Flicker: Module-level Hashes für Charts (überleben renderView-Neuaufbau)
-let _pressureChartHash = '';
-let _pressureChartLastDraw = 0;
-let _waterTempChartHash = '';
-let _drawChartHashes = {};
-
-// Debounced renderView: max 1 Re-Render alle 250ms, sammelt mehrere async-completions
-let _scheduleRenderTimer = null;
-function scheduleRenderView() {
-  if (_scheduleRenderTimer) return;
-  _scheduleRenderTimer = setTimeout(() => {
-    _scheduleRenderTimer = null;
-    try { if (typeof renderView === 'function') renderView(); } catch(e) {}
-  }, 250);
-}
-
-function triggerPressureHistoryFetch() {
-  if (_pressureHistoryInFlight) return;
-  if (_pressureHistoryAsync && (Date.now() - _pressureHistoryAsync.t) < 300000) return;
-  _pressureHistoryInFlight = true;
-  fetchHARecorderHistory('sensor.haftenkamp_druck', 12).then(samples => {
-    _pressureHistoryInFlight = false;
-    if (samples && samples.length >= 3) {
-      _pressureHistoryAsync = { t: Date.now(), samples: samples };
-      if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
-    } else {
-      // Auch wenn nichts kommt: Marker setzen damit wir nicht ständig retry'n
-      _pressureHistoryAsync = { t: Date.now(), samples: [] };
-    }
-  }).catch(() => { _pressureHistoryInFlight = false; });
-}
-function triggerWaterTempHistoryFetch() {
-  if (_waterTempHistoryInFlight) return;
-  if (_waterTempHistoryAsync && (Date.now() - _waterTempHistoryAsync.t) < 600000) return;
-  _waterTempHistoryInFlight = true;
-
-  // NLWKN nur wenn Sensor auch einen VALIDEN numerischen Wert hat
-  const nlwknState = haStates['sensor.fishing_tracker_nlwkn_water_temp'];
-  const nlwknValid = nlwknState && !isNaN(parseFloat(nlwknState.state)) && parseFloat(nlwknState.state) > 0;
-  const entity = nlwknValid
-               ? 'sensor.fishing_tracker_nlwkn_water_temp'
-               : 'sensor.wassertemperatur_gewaesser';
-
-  fetchHARecorderHistory(entity, 24).then(samples => {
-    _waterTempHistoryInFlight = false;
-    let useRecorder = false;
-    if (samples && samples.length >= 3) {
-      const vals = samples.map(x => x.p).filter(v => !isNaN(v));
-      if (vals.length >= 3) {
-        const range = Math.max(...vals) - Math.min(...vals);
-        if (range > 0.05) useRecorder = true;
-      }
-    }
-    if (useRecorder) {
-      _waterTempHistoryAsync = { t: Date.now(), samples };
-    } else {
-      // Recorder hat keine Varianz → Open-Meteo Proxy versuchen
-      const omSamples = buildOpenMeteoWaterTempHistory();
-      if (omSamples && omSamples.length >= 2) {
-        _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
-      } else {
-        // Letzter Ausweg: aktuellen Sensorwert als Einzelpunkt
-        const curTemp = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state)
-                     || parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
-                     || null;
-        const fallback = curTemp ? [{ t: Date.now(), p: curTemp }] : [];
-        _waterTempHistoryAsync = { t: Date.now(), samples: fallback, isFallback: true };
-      }
-    }
-    if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
-  }).catch(() => {
-    _waterTempHistoryInFlight = false;
-    const omSamples = buildOpenMeteoWaterTempHistory();
-    if (omSamples && omSamples.length >= 2) {
-      _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
-    } else {
-      const curTemp = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state)
-                   || parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
-                   || null;
-      const fallback = curTemp ? [{ t: Date.now(), p: curTemp }] : [];
-      _waterTempHistoryAsync = { t: Date.now(), samples: fallback, isFallback: true };
-    }
-    if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
-  });
-}
-
-// Baut Wassertemperatur-Verlauf der letzten 24h aus dem Open-Meteo-Cache
-// Mittel aus surface_temperature und soil_temperature_0_to_7cm (Proxy für Gewässertemp)
-function buildOpenMeteoWaterTempHistory() {
-  try {
-    // Cache-Kandidaten in Prioritätsreihenfolge: aktueller Spot-Center, dann alle übrigen Keys
-    const keysSeen = new Set();
-    const candidates = [];
-    try {
-      const ctr = (typeof getBestCenter === 'function') ? getBestCenter() : null;
-      if (ctr) {
-        const k = ctr[0].toFixed(3) + ',' + ctr[1].toFixed(3);
-        candidates.push(k); keysSeen.add(k);
-      }
-    } catch(e) {}
-    for (const k of Object.keys(_openMeteoCache || {})) {
-      if (!keysSeen.has(k)) { candidates.push(k); keysSeen.add(k); }
-    }
-    const now = Date.now();
-    const cutoff = now - 24 * 3600 * 1000;
-    // Probiere jeden Key bis einer brauchbare Samples liefert
-    for (const key of candidates) {
-      const cache = _openMeteoCache[key];
-      if (!cache || !cache.data) continue;
-      const samples = [];
-      for (const f of cache.data) {
-        const t = new Date(f.datetime).getTime();
-        if (t < cutoff || t > now + 1000) continue;
-        const st = parseFloat(f.surface_temperature);
-        const so = parseFloat(f.soil_temperature_0_to_7cm);
-        const vals = [st, so].filter(v => !isNaN(v) && v > -2 && v < 40);
-        if (vals.length > 0) {
-          const v = vals.reduce((a,c) => a+c, 0) / vals.length;
-          samples.push({ t: t, p: Math.round(v * 10) / 10 });
-        }
-      }
-      if (samples.length >= 2) return samples;
-    }
-    return [];
-  } catch(e) { return []; }
-}
-
-function recordPressureSample(pressureHpa) {
-  const p = parseFloat(pressureHpa);
-  if (!p || isNaN(p)) return;
-  try {
-    const raw = localStorage.getItem(PRESSURE_HISTORY_KEY);
-    let arr = raw ? JSON.parse(raw) : [];
-    const now = Date.now();
-    // Nicht doppelt aufzeichnen innerhalb 15 min
-    if (arr.length && now - arr[arr.length - 1].t < 15 * 60 * 1000) return;
-    arr.push({ t: now, p: Math.round(p * 10) / 10 });
-    // Älter als 24h verwerfen
-    const cutoff = now - 24 * 3600 * 1000;
-    arr = arr.filter(s => s.t >= cutoff);
-    localStorage.setItem(PRESSURE_HISTORY_KEY, JSON.stringify(arr));
-  } catch(e) {}
-}
-
-function getPressureHistory12h(currentP, trend) {
-  // Sammelt historische Druck-Anker aus mehreren Quellen:
-  // (0) HA Recorder via WebSocket — VOLLE echte History, beste Quelle
-  // (a) sensor.haftenkamp_druck-Attribute (mean_1h/3h/6h/12h von HA-Statistics)
-  // (b) localStorage-Ringpuffer
-  // Wenn alles leer: Trend-Extrapolation als ehrlicher Fallback
-  // Trigger async fetch im Hintergrund (für nächsten Render)
-  try { triggerPressureHistoryFetch(); } catch(e) {}
-
-  // (0) Recorder-History bevorzugt
-  try {
-    if (_pressureHistoryAsync && _pressureHistoryAsync.samples && _pressureHistoryAsync.samples.length >= 3) {
-      const now = Date.now();
-      const samples = _pressureHistoryAsync.samples.filter(s => (now - s.t) <= 12 * 3600 * 1000);
-      if (samples.length >= 3) {
-        // 7 Punkte gleichmäßig über 12h verteilt — nächster Sample je Zielzeit
-        return [12, 10, 8, 6, 4, 2, 0].map(hoursAgo => {
-          const target = now - hoursAgo * 3600 * 1000;
-          let best = samples[0], bestD = Math.abs(samples[0].t - target);
-          for (const s of samples) {
-            const d = Math.abs(s.t - target);
-            if (d < bestD) { best = s; bestD = d; }
-          }
-          return Math.round(best.p * 10) / 10;
-        });
-      }
-    }
-  } catch(e) {}
-
-  const anchors = []; // [{ofs: stunden_in_vergangenheit, p: hpa}]
-  // (a) Sensor-Attribute
-  try {
-    const ps = (typeof haStates !== 'undefined') ? haStates['sensor.haftenkamp_druck'] : null;
-    if (ps && ps.attributes) {
-      const a = ps.attributes;
-      const cur = parseFloat(ps.state);
-      if (!isNaN(cur)) anchors.push({ ofs: 0, p: cur });
-      const tryAttr = (keys, ofs) => {
-        for (const k of keys) {
-          const v = parseFloat(a[k]);
-          if (!isNaN(v) && v > 800 && v < 1100) { anchors.push({ ofs, p: v }); return; }
-        }
-      };
-      tryAttr(['mean_1h',  '1h'],  1);
-      tryAttr(['mean_3h',  '3h'],  3);
-      tryAttr(['mean_6h',  '6h'],  6);
-      tryAttr(['mean_12h', '12h'], 12);
-    }
-  } catch(e) {}
-  // (b) localStorage-History dazumischen
-  try {
-    const raw = localStorage.getItem(PRESSURE_HISTORY_KEY);
-    const arr = raw ? JSON.parse(raw) : [];
-    const now = Date.now();
-    for (const s of arr) {
-      const ofs = (now - s.t) / 3600000;
-      if (ofs >= 0 && ofs <= 12) anchors.push({ ofs, p: s.p });
-    }
-  } catch(e) {}
-
-  if (anchors.length >= 2) {
-    // 7 Punkte über die letzten 12h durch lineare Interpolation der Anker
-    anchors.sort((a, b) => b.ofs - a.ofs); // älteste zuerst (ofs=12 → 0)
-    // Falls ältester Anker nicht ganz bei 12h, mit "ältestem bekanntem Wert" auffüllen
-    const interp = (targetOfs) => {
-      // exakter Treffer?
-      for (const a of anchors) if (Math.abs(a.ofs - targetOfs) < 0.1) return a.p;
-      // zwei umliegende finden
-      for (let i = 0; i < anchors.length - 1; i++) {
-        if (anchors[i].ofs >= targetOfs && anchors[i+1].ofs <= targetOfs) {
-          const r = anchors[i].ofs - anchors[i+1].ofs;
-          const f = r > 0 ? (anchors[i].ofs - targetOfs) / r : 0;
-          return anchors[i].p + (anchors[i+1].p - anchors[i].p) * f;
-        }
-      }
-      // außerhalb → nächster Rand
-      return targetOfs > anchors[0].ofs ? anchors[0].p : anchors[anchors.length-1].p;
-    };
-    return [12, 10, 8, 6, 4, 2, 0].map(o => Math.round(interp(o) * 10) / 10);
-  }
-
-  // Fallback: Trend-Extrapolation
-  const t = Math.max(-1.5, Math.min(1.5, trend || 0));
-  const pastDelta = Math.max(-8, Math.min(8, t * 12));
-  const start = currentP - pastDelta;
-  return Array.from({length: 7}, (_, i) => Math.round((start + (currentP - start) * (i / 6)) * 10) / 10);
-}
-
-function getPressureForecast12h(currentP, trend) {
-  // Versucht stündliche HA-Wettervorhersage (verschiedene Provider nutzen andere Feldnamen)
-  try {
-    const fc = (typeof getConsolidatedForecast === 'function') ? getConsolidatedForecast() : [];
-    const now = Date.now();
-    const hours = [];
-    for (const f of fc) {
-      try {
-        const dt = new Date(f.datetime).getTime();
-        if (dt > now && dt < now + 13 * 3600 * 1000) {
-          const p = (f.pressure != null) ? f.pressure
-                  : (f.pressure_msl != null) ? f.pressure_msl
-                  : (f.air_pressure != null) ? f.air_pressure
-                  : null;
-          if (p != null && !isNaN(parseFloat(p))) hours.push({ t: dt, p: parseFloat(p) });
-        }
-      } catch(e) {}
-    }
-    if (hours.length >= 3) {
-      hours.sort((a,b) => a.t - b.t);
-      const pts = [currentP];
-      for (let i = 1; i <= 4; i++) {
-        const tTarget = now + (i / 4) * 12 * 3600 * 1000;
-        let best = hours[0], bestD = Math.abs(hours[0].t - tTarget);
-        for (const h of hours) {
-          const d = Math.abs(h.t - tTarget);
-          if (d < bestD) { best = h; bestD = d; }
-        }
-        pts.push(Math.round(best.p * 10) / 10);
-      }
-      return pts;
-    }
-  } catch(e) {}
-  // Fallback: lineare Trend-Extrapolation (Trend = hPa/h)
-  const t = Math.max(-1.5, Math.min(1.5, trend || 0));
-  return Array.from({length: 5}, (_, i) => Math.round((currentP + t * (i * 3)) * 10) / 10);
-}
-
-function drawWaterTempChart(id, samples) {
-  // samples: [{t: ts_ms, p: tempC}]   (key 'p' wegen Wiederverwendung der pressure-history-Struktur)
-  const svg = document.getElementById(id);
-  if (!svg) return;
-  const w=900, h=130, padL=52, padR=16, padT=10, padB=24;
-  // Wenn Fetch noch läuft: "Daten laden", sonst "Keine Daten" als finaler Zustand
-  if (!samples || samples.length < 2) {
-    let inFlight = false, haveAsync = false;
-    try { inFlight = (typeof _waterTempHistoryInFlight !== 'undefined') && _waterTempHistoryInFlight; } catch(e) {}
-    try { haveAsync = (typeof _waterTempHistoryAsync !== 'undefined') && !!_waterTempHistoryAsync; } catch(e) {}
-    const isFallback = _waterTempHistoryAsync?.isFallback;
-    const msg = inFlight    ? 'Daten laden…'
-              : isFallback  ? 'Kein Verlauf verfügbar'
-              : haveAsync   ? 'Kein Verlauf verfügbar (Sensor ist Schätzung)'
-                            : 'Daten laden…';
-    // Anti-Flicker: module-level Hash
-    const emptyHash = 'wt-empty:' + msg;
-    if (_waterTempChartHash === emptyHash && svg.innerHTML.length > 10) return;
-    _waterTempChartHash = emptyHash;
-    svg.innerHTML = `<text x="${w/2}" y="${h/2}" fill="rgba(255,255,255,.4)" font-size="13" text-anchor="middle">${msg}</text>`;
-    return;
-  }
-  // Anti-Flicker: module-level Hash (überlebt renderView-Neuaufbau des DOM)
-  const newHash = 'wt:' + samples.length + ':' + samples[0].t + ':' + samples[samples.length-1].t + ':' + samples[samples.length-1].p;
-  if (_waterTempChartHash === newHash && svg.innerHTML.length > 100) return;
-  _waterTempChartHash = newHash;
-  const now = Date.now();
-  // Auf 24h begrenzen
-  const cutoff = now - 24*3600*1000;
-  const pts = samples.filter(s => s.t >= cutoff).sort((a,b)=>a.t-b.t);
-  if (pts.length < 2) {
-    svg.innerHTML = `<text x="${w/2}" y="${h/2}" fill="rgba(255,255,255,.4)" font-size="13" text-anchor="middle">Zu wenig Daten</text>`;
-    return;
-  }
-  const vals = pts.map(p=>p.p);
-  const minV = Math.min(...vals) - 0.5;
-  const maxV = Math.max(...vals) + 0.5;
-  const range = maxV - minV || 1;
-  const tMin = pts[0].t, tMax = pts[pts.length-1].t;
-  const tRange = tMax - tMin || 1;
-  function xy(p) {
-    return [
-      padL + ((p.t - tMin) / tRange) * (w - padL - padR),
-      padT + (1 - (p.p - minV) / range) * (h - padT - padB)
-    ];
-  }
-  const coords = pts.map(xy);
-  let path = 'M' + coords[0][0] + ',' + coords[0][1];
-  for (let i=1; i<coords.length; i++) path += ' L' + coords[i][0] + ',' + coords[i][1];
-  const areaPath = path + ' L' + coords[coords.length-1][0] + ',' + (h-padB) + ' L' + coords[0][0] + ',' + (h-padB) + ' Z';
-  const yLabels = [maxV.toFixed(1), ((maxV+minV)/2).toFixed(1), minV.toFixed(1)];
-  // X-Achse: 0/6/12/18/24h Marker
-  const xTicks = [];
-  for (let h_ago=0; h_ago<=24; h_ago+=6) {
-    const t = now - h_ago * 3600 * 1000;
-    if (t >= tMin && t <= tMax) {
-      const x = padL + ((t - tMin) / tRange) * (w - padL - padR);
-      xTicks.push({x, label: h_ago === 0 ? 'jetzt' : ('-' + h_ago + 'h')});
-    }
-  }
-  svg.innerHTML = `
-    <defs>
-      <linearGradient id="wtGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#67d3f0" stop-opacity=".3"/>
-        <stop offset="100%" stop-color="#67d3f0" stop-opacity=".02"/>
-      </linearGradient>
-    </defs>
-    ${yLabels.map((lbl,i)=>`<text x="${padL-6}" y="${padT + (i/2)*(h-padT-padB) + 4}" fill="rgba(255,255,255,.4)" font-size="10" text-anchor="end">${lbl}</text>`).join('')}
-    <text x="${padL-4}" y="${padT-2}" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="end">°C</text>
-    ${[0,0.5,1].map(f=>`<line x1="${padL}" y1="${padT + f*(h-padT-padB)}" x2="${w-padR}" y2="${padT + f*(h-padT-padB)}" stroke="rgba(255,255,255,.06)" stroke-width="1"/>`).join('')}
-    <path d="${areaPath}" fill="url(#wtGrad)"/>
-    <path d="${path}" stroke="#67d3f0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    ${xTicks.map(t=>`<text x="${t.x}" y="${h-6}" fill="rgba(255,255,255,.5)" font-size="10" text-anchor="middle">${t.label}</text>`).join('')}
-  `;
-}
-
-function drawPressureChart(id, pastPts, futurePts, base) {
-  const svg = document.getElementById(id);
-  if (!svg) return;
-  // Hash aus gerundeten Werten (auf 0.5 hPa) — absorbiert winzige Float-Unterschiede
-  const roundHalf = v => Math.round(v * 2) / 2;
-  const hashPast   = (pastPts  || []).map(roundHalf).join(',');
-  const hashFuture = (futurePts|| []).map(roundHalf).join(',');
-  const newHash = 'pr:' + hashPast + '|' + hashFuture + '|' + roundHalf(base || 0);
-  const now = Date.now();
-  const isEmpty = svg.innerHTML.length < 100;
-  const hashSame = newHash === _pressureChartHash;
-  const tooSoon  = (now - _pressureChartLastDraw) < 8000;  // max 1 Redraw alle 8s
-  // Skip wenn: SVG hat Inhalt UND (Hash gleich ODER zu früh für Redraw)
-  if (!isEmpty && (hashSame || tooSoon)) return;
-  _pressureChartHash = newHash;
-  _pressureChartLastDraw = now;
-  const w=900, h=130, padL=52, padR=16, padT=10, padB=24;
-  const allPts = [...pastPts, ...futurePts];
-  const minV = Math.min(...allPts)-3, maxV = Math.max(...allPts)+3;
-  const range = maxV - minV || 10;
-  const totalPts = pastPts.length + futurePts.length;
-  const step = (w-padL-padR)/(totalPts-1);
-  
-  function toXY(val, idx) {
-    return [
-      padL + idx*step,
-      padT + (1-(val-minV)/range)*(h-padT-padB)
-    ];
-  }
-  
-  const pastCoords = pastPts.map((v,i) => toXY(v,i));
-  const futureCoords = futurePts.map((v,i) => toXY(v, pastPts.length-1+i));
-  
-  // Bezier smooth
-  function bezier(coords) {
-    if (!coords.length) return '';
-    let d = 'M'+coords[0][0]+','+coords[0][1];
-    for (let i=0; i<coords.length-1; i++) {
-      const cp1x = coords[i][0]+(coords[i+1][0]-coords[i][0])*0.4;
-      const cp2x = coords[i+1][0]-(coords[i+1][0]-coords[i][0])*0.4;
-      d += ' C'+cp1x+','+coords[i][1]+' '+cp2x+','+coords[i+1][1]+' '+coords[i+1][0]+','+coords[i+1][1];
-    }
-    return d;
-  }
-  
-  // Y-Achse Werte (3 Labels)
-  const yLabels = [Math.ceil(minV), Math.round((minV+maxV)/2), Math.floor(maxV)];
-  
-  // Trenn-X (Jetzt)
-  const nowX = padL + (pastPts.length-1)*step;
-  
-  svg.innerHTML = `
-    <defs>
-      <linearGradient id="pgPast" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#2ea8ff" stop-opacity=".25"/>
-        <stop offset="100%" stop-color="#2ea8ff" stop-opacity=".03"/>
-      </linearGradient>
-      <linearGradient id="pgFuture" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#ffd23f" stop-opacity=".15"/>
-        <stop offset="100%" stop-color="#ffd23f" stop-opacity=".02"/>
-      </linearGradient>
-    </defs>
-    <!-- Y-Achse -->
-    ${yLabels.map(v => {
-      const y = padT + (1-(v-minV)/range)*(h-padT-padB);
-      return `<line x1="${padL}" y1="${y}" x2="${w-padR}" y2="${y}" stroke="rgba(255,255,255,.06)"/>
-              <text x="${padL-4}" y="${y+4}" fill="rgba(255,255,255,.4)" font-size="9" text-anchor="end" font-family="system-ui">${v}</text>`;
-    }).join('')}
-    <!-- Trennlinie Jetzt -->
-    <line x1="${nowX}" y1="${padT}" x2="${nowX}" y2="${h-padB}" stroke="rgba(255,215,0,.4)" stroke-width="1" stroke-dasharray="3 2"/>
-    <text x="${nowX+3}" y="${padT+10}" fill="rgba(255,215,0,.7)" font-size="9" font-family="system-ui">Jetzt</text>
-    <text x="${padL-4}" y="${h-padB+14}" fill="rgba(255,255,255,.3)" font-size="9" text-anchor="end" font-family="system-ui">hPa</text>
-    <!-- Labels -->
-    <text x="${padL+20}" y="${h-4}" fill="rgba(255,255,255,.3)" font-size="9" font-family="system-ui">12h ago</text>
-    <text x="${w-padR-10}" y="${h-4}" fill="rgba(255,215,0,.5)" font-size="9" text-anchor="end" font-family="system-ui">+12h</text>
-    <!-- Vergangenheit Fläche -->
-    <path d="M${pastCoords[0][0]},${h-padB} ${bezier(pastCoords).slice(1)} L${pastCoords[pastCoords.length-1][0]},${h-padB} Z" fill="url(#pgPast)"/>
-    <!-- Zukunft Fläche -->
-    <path d="M${futureCoords[0][0]},${h-padB} ${bezier(futureCoords).slice(1)} L${futureCoords[futureCoords.length-1][0]},${h-padB} Z" fill="url(#pgFuture)"/>
-    <!-- Vergangenheit Linie (solide) -->
-    <path d="${bezier(pastCoords)}" fill="none" stroke="#2ea8ff" stroke-width="2" stroke-linecap="round"/>
-    <!-- Zukunft Linie (gestrichelt) -->
-    <path d="${bezier(futureCoords)}" fill="none" stroke="#ffd23f" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 4"/>
-    <!-- Jetzt-Punkt -->
-    <circle cx="${nowX}" cy="${pastCoords[pastCoords.length-1][1]}" r="5" fill="#ffd23f" stroke="#fff" stroke-width="1.5"/>
-  `;
-}
-
-function addChartTouch(svgId, pts, color) {
-  const svg = document.getElementById(svgId);
-  if (!svg) return;
-  // Exakt gleiche Koordinaten wie drawChart!
-  const w=900, h=220, padL=38, padR=10, padT=16, padB=24;
-  const step = (w - padL - padR) / (pts.length - 1);
-
-  function showTooltip(clientX) {
-    const rect = svg.getBoundingClientRect();
-    const relX = (clientX - rect.left) / rect.width * w;
-    const idx = Math.max(0, Math.min(pts.length-1, Math.round((relX - padL) / step)));
-    const val = pts[idx];
-    const px = padL + idx * step;
-    const py = padT + (1 - val / 100) * (h - padT - padB);
-    const label = pts.length > 8
-      ? `${String(idx).padStart(2,'0')}:00 Uhr – ${val}%`
-      : `${['Mo','Di','Mi','Do','Fr','Sa','So'][idx]||'Tag '+(idx+1)} – ${val}%`;
-
-    let tip = svg.querySelector('#chartTip');
-    if (!tip) {
-      tip = document.createElementNS('http://www.w3.org/2000/svg','g');
-      tip.id = 'chartTip';
-      svg.appendChild(tip);
-    }
-    const bw = Math.max(124, label.length * 8 + 30);
-    const bh = 44;
-    const bx = Math.min(w - padR - bw - 4, Math.max(padL, px - bw/2));
-    const by = py > h/2 ? py - bh - 14 : py + 14;
-    // Kräftiger, blickdichter Hintergrund + heller Text für maximale Lesbarkeit
-    const bgCol  = 'rgba(10,16,26,0.98)';   // fast schwarz, blickdicht
-    const timeCol = '#e8eef5';              // helles Grau für die Zeit-Zeile
-    // Eindeutige Schatten-ID je SVG, damit mehrere Charts sich nicht stören
-    const shId = svgId + '_tipShadow';
-    tip.innerHTML = `
-      <defs>
-        <filter id="${shId}" x="-30%" y="-30%" width="160%" height="190%">
-          <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.55"/>
-        </filter>
-      </defs>
-      <line x1="${px}" y1="${padT}" x2="${px}" y2="${h-padB}" stroke="${color}" stroke-width="1.5" stroke-dasharray="4 3" opacity=".6"/>
-      <circle cx="${px}" cy="${py}" r="7" fill="${color}" opacity=".25"/>
-      <circle cx="${px}" cy="${py}" r="4.5" fill="${color}" stroke="#fff" stroke-width="1.5"/>
-      <rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="10" fill="${bgCol}" stroke="${color}" stroke-width="2" filter="url(#${shId})"/>
-      <text x="${bx+bw/2}" y="${by+18}" fill="${timeCol}" font-size="12.5" font-weight="700" text-anchor="middle" font-family="system-ui" letter-spacing="0.3">${label.split(' – ')[0]}</text>
-      <text x="${bx+bw/2}" y="${by+36}" fill="${color}" font-size="17" font-weight="900" text-anchor="middle" font-family="system-ui">${label.split(' – ')[1]}</text>`;
-  }
-  
-  function removeTooltip() {
-    const tip = svg.querySelector('#chartTip');
-    if (tip) tip.innerHTML = '';
-  }
-  
-  svg.addEventListener('mousemove', e => showTooltip(e.clientX));
-  svg.addEventListener('mouseleave', removeTooltip);
-  svg.addEventListener('touchstart', e => { e.preventDefault(); showTooltip(e.touches[0].clientX); }, {passive:false});
-  svg.addEventListener('touchmove', e => { e.preventDefault(); showTooltip(e.touches[0].clientX); }, {passive:false});
-  svg.addEventListener('touchend', () => setTimeout(removeTooltip, 1500));
-  svg.style.cursor = 'crosshair';
-}
-
   // Draw charts after render
   setTimeout(() => {
-    drawChart('dayChart', generalDayCurve(), '#ff9d18');
-    addChartTouch('dayChart', generalDayCurve(), '#ff9d18');
-    // overviewMap entfernt (doppelt)
-    const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
-        drawChart('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff', 0);
-        addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
-    // Fischart-spezifischer Score (FANGFAKTOR-Balken werden jetzt direkt im HTML
-    // der Species-View berechnet/gerendert, kein SVG-Chart mehr nötig hier)
-    // Luftdruck-Chart: echter Verlauf (lokaler Ringpuffer) + HA-Wettervorhersage
-    const basePressure = parseFloat(pressure) || 1015;
-    const _sensorsForP = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
-    const _trend = (_sensorsForP && _sensorsForP.pressureTrend != null) ? _sensorsForP.pressureTrend : 0;
-    recordPressureSample(basePressure);
-    const pastData   = getPressureHistory12h(basePressure, _trend);
-    const futureData = getPressureForecast12h(basePressure, _trend);
-    drawPressureChart('pressureChart', pastData, futureData, basePressure);
-    // Wassertemperatur-History via HA Recorder
+    // Jeder Block isoliert in eigenem try/catch — ein Fehler in einem Chart
+    // darf NIEMALS die nachfolgenden blockieren (kaskadierender Fehler-Bug,
+    // der z.B. die Wassertemperatur dauerhaft auf "Daten laden…" hängen ließ)
+    try {
+      drawChart('dayChart', generalDayCurve(), '#ff9d18');
+      addChartTouch('dayChart', generalDayCurve(), '#ff9d18');
+    } catch(e) { console.warn('dayChart Fehler:', e); }
+
+    try {
+      const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
+      drawChart('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff', 0);
+      addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
+    } catch(e) { console.warn('weekChart Fehler:', e); }
+
+    // Luftdruck-Chart — eigener try/catch
+    try {
+      const basePressure = parseFloat(pressure) || 1015;
+      const _sensorsForP = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
+      const _trend = (_sensorsForP && _sensorsForP.pressureTrend != null) ? _sensorsForP.pressureTrend : 0;
+      recordPressureSample(basePressure);
+      let pastData   = getPressureHistory12h(basePressure, _trend) || [];
+      let futureData = getPressureForecast12h(basePressure, _trend) || [];
+      // NaN-Schutz: ungültige Werte durch Basisdruck ersetzen statt Chart zu zerstören
+      pastData   = pastData.map(v => (isFinite(v) ? v : basePressure));
+      futureData = futureData.map(v => (isFinite(v) ? v : basePressure));
+      if (pastData.length >= 2 && futureData.length >= 1) {
+        drawPressureChart('pressureChart', pastData, futureData, basePressure);
+      }
+    } catch(e) { console.warn('pressureChart Fehler:', e); }
+
+    // Wassertemperatur-History via HA Recorder — läuft jetzt UNABHÄNGIG
+    // davon ob die Charts oben erfolgreich waren
     try {
       triggerWaterTempHistoryFetch();
       if (_waterTempHistoryAsync && _waterTempHistoryAsync.samples) {
@@ -5669,7 +5684,7 @@ function addChartTouch(svgId, pts, color) {
       } else {
         drawWaterTempChart('waterTempChart', []);  // zeigt "Daten laden…"
       }
-    } catch(e) {}
+    } catch(e) { console.warn('waterTempChart Fehler:', e); }
   }, 50);
 }
 
