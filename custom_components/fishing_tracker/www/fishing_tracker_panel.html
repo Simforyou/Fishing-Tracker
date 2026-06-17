@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.4 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.7 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -4318,8 +4318,61 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         </table>
       </div>
       <div class="panel blue">
-        <div class="sec">📈 Aktivitätskurve – Tageskurve (00:00–24:00 Uhr)</div>
-        <div class="chart-box" style="height:200px"><svg id="specChart" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
+        <div class="sec">📊 FANGFAKTOR™ – Tagesverlauf ${selFish}</div>
+        ${(() => {
+          try {
+            const _sens = collectAllSensors();
+            const _now = new Date();
+            const curH = _now.getHours();
+            const hours24 = Array.from({length: 24}, (_, h) => {
+              try { return calcUnifiedDayScore(selFish, _now, h, _sens, null); }
+              catch(e) { return 50; }
+            });
+            const curScore = hours24[curH] || 50;
+            const score10 = (curScore / 10).toFixed(1);
+            let topH, topVal, topIsPast = false;
+            const futureScores = hours24.map((v, h) => ({ h, v })).filter(x => x.h >= curH);
+            if (futureScores.length > 0) {
+              const peak = futureScores.reduce((a,b) => b.v > a.v ? b : a);
+              topH = peak.h; topVal = peak.v;
+            } else {
+              const peak = hours24.map((v, h) => ({ h, v })).reduce((a,b) => b.v > a.v ? b : a);
+              topH = peak.h; topVal = peak.v;
+            }
+            const dayPeak = Math.max(...hours24);
+            const dayPeakH = hours24.indexOf(dayPeak);
+            if (dayPeakH < curH && dayPeak > topVal + 5) topIsPast = true;
+            const colorFor = v => v >= 75 ? '#4ade80' : v >= 60 ? '#a3e635' : v >= 45 ? '#fde047' : v >= 30 ? '#fb923c' : '#ef4444';
+            const qualText = curScore >= 75 ? 'sehr gute Fangchancen' : curScore >= 60 ? 'gute Fangchancen' : curScore >= 45 ? 'mittlere Fangchancen' : curScore >= 30 ? 'schlechte Fangchancen' : 'sehr schlechte Fangchancen';
+            const BAR_AREA_PX = 76;
+            const barsHtml = hours24.map((v, h) => {
+              const heightPx = Math.max(3, Math.round((Math.max(0, Math.min(100, v)) / 100) * BAR_AREA_PX));
+              const isCur = h === curH;
+              const isTop = h === topH;
+              const clr = colorFor(v);
+              const op = isCur ? 1 : (isTop ? 0.95 : 0.7);
+              const border = isCur ? 'box-shadow:0 0 0 1.5px #fff inset;' : '';
+              return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0;height:96px">
+                <div style="width:78%;height:${heightPx}px;background:${clr};border-radius:3px 3px 1px 1px;opacity:${op};${border}"></div>
+                <div style="font-size:9px;color:${isCur?'#fff':'rgba(255,255,255,.4)'};margin-top:3px;${isCur?'font-weight:850':''};line-height:1">${h}</div>
+              </div>`;
+            }).join('');
+            return `
+              <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+                <div style="font-size:46px;font-weight:950;color:${colorFor(curScore)};line-height:1;letter-spacing:-1px">${score10}</div>
+                <div style="flex:1">
+                  <div style="font-size:13px;font-weight:850;color:#fff">${qualText}</div>
+                  <div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:4px">Beste Zeit: ${String(topH).padStart(2,'0')}:00 · ${(topVal/10).toFixed(1)}${topIsPast ? ' <span style="opacity:.55">(Tages-Peak war vor '+(curH-dayPeakH)+'h)</span>' : ''}</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:flex-end;gap:1px;padding:0 2px">
+                ${barsHtml}
+              </div>
+            `;
+          } catch(e) {
+            return `<div style="padding:20px;text-align:center;color:rgba(255,255,255,.4);font-size:12px">Fehler bei der Berechnung: ${e.message}</div>`;
+          }
+        })()}
       </div>
       ${fishBaitMethodHTML(selFish)}
       <div class="panel" style="margin-top:0">${sightBox}</div>
@@ -4882,30 +4935,53 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
               isNow:  bi <= nowH && bi + 1 >= nowH,
             });
           }
-          const bMaxMm = Math.max(...blocks.map(function(b){return b.mm;}), 0.5);
           const bAllDry = blocks.every(function(b){return b.mm < 0.05;});
 
+          // Feste Skala 0–20mm (statt relativ zum Tages-Max) — macht Balken
+          // über verschiedene Tage hinweg vergleichbar und vermeidet dass
+          // ein einzelner Nieselschauer wie ein Wolkenbruch aussieht.
+          const PRECIP_MAX = 20;
+          // Intensitäts-Farbverlauf: hellblau (wenig) → blau → dunkelblau (viel) → lila (stark)
+          function precipColor(mm) {
+            const stops = [
+              { mm: 0,    c: [173, 216, 255] },  // sehr hell — gerade einsetzender Niederschlag
+              { mm: 1.5,  c: [110, 180, 255] },  // hellblau
+              { mm: 5,    c: [56, 130, 240] },   // blau
+              { mm: 10,   c: [37, 80, 210] },    // dunkelblau
+              { mm: 15,   c: [110, 50, 200] },   // blau-lila Übergang
+              { mm: 20,   c: [180, 50, 220] },   // lila — stark
+            ];
+            const v = Math.max(0, Math.min(PRECIP_MAX, mm));
+            for (let i = 0; i < stops.length - 1; i++) {
+              if (v >= stops[i].mm && v <= stops[i+1].mm) {
+                const range = stops[i+1].mm - stops[i].mm || 1;
+                const t = (v - stops[i].mm) / range;
+                const c = stops[i].c.map((c0, idx) => Math.round(c0 + (stops[i+1].c[idx] - c0) * t));
+                return `rgb(${c[0]},${c[1]},${c[2]})`;
+              }
+            }
+            const last = stops[stops.length - 1].c;
+            return `rgb(${last[0]},${last[1]},${last[2]})`;
+          }
+
           const barHtml = blocks.map(function(b, idx) {
-            const pct = bAllDry ? 30 : Math.max(b.mm > 0 ? 10 : 3, Math.round(b.mm / bMaxMm * 100));
-            const bg = b.isNow
-              ? (b.mm > 0 ? '#67d33f' : 'rgba(103,211,63,.35)')
-              : b.isPast
-                ? (b.mm > 0 ? 'rgba(100,180,255,.4)' : 'rgba(255,255,255,.05)')
-                : (b.mm > 0.3 ? '#2ea8ff' : b.mm > 0 ? '#7ec8ff' : 'rgba(100,180,255,.12)');
-            const shadow = b.isNow ? 'box-shadow:0 0 10px rgba(103,211,63,.5);' : '';
-            const lCol = b.isNow ? '#67d33f' : b.isPast ? 'rgba(100,180,255,.7)' : '#7ec8ff';
-            // mm-Label nur bei Regen
-            const mmLbl = b.mm > 0
-              ? '<div style="position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:900;color:' + lCol + ';white-space:nowrap">' + b.mm.toFixed(1) + '</div>'
+            const pct = Math.min(100, Math.max(b.mm > 0.05 ? 6 : 3, Math.round((b.mm / PRECIP_MAX) * 100)));
+            const bg  = b.mm > 0.05 ? precipColor(b.mm) : 'rgba(255,255,255,.06)';
+            const op  = b.isPast ? 0.5 : 1;
+            const shadow = b.isNow ? `box-shadow:0 0 9px ${bg};` : '';
+            const ring   = b.isNow ? 'outline:1.5px solid rgba(255,255,255,.85);outline-offset:-1px;' : '';
+            // mm-Label nur bei Regen — neutral weiß für Lesbarkeit über jede Verlauf-Farbe
+            const mmLbl = b.mm > 0.05
+              ? '<div style="position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:900;color:rgba(255,255,255,.92);white-space:nowrap">' + b.mm.toFixed(1) + '</div>'
               : '';
             // Zeit: jede 2. Spalte + Jetzt
             const showT = b.isNow || idx % 2 === 0;
-            const tCol  = b.isNow ? '#67d33f' : 'rgba(255,255,255,.38)';
+            const tCol  = b.isNow ? '#fff' : 'rgba(255,255,255,.38)';
             const tTxt  = b.isNow ? 'Jetzt' : showT ? b.label : '';
             return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;position:relative">'
               + mmLbl
               + '<div style="flex:1;width:100%;display:flex;align-items:flex-end">'
-              + '<div style="width:100%;border-radius:3px 3px 0 0;height:' + pct + '%;background:' + bg + ';' + shadow + 'min-height:' + (b.mm>0?8:3) + 'px"></div>'
+              + '<div style="width:100%;border-radius:3px 3px 0 0;height:' + pct + '%;background:' + bg + ';opacity:' + op + ';' + shadow + ring + 'min-height:' + (b.mm>0.05?8:3) + 'px"></div>'
               + '</div>'
               + '<div style="font-size:8.5px;color:' + tCol + ';margin-top:4px;text-align:center;white-space:nowrap;font-weight:' + (b.isNow?'800':'400') + '">' + tTxt + '</div>'
               + '</div>';
@@ -4915,11 +4991,14 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
             ? '<div style="text-align:center;padding:14px 0;font-size:13px;color:rgba(255,255,255,.4)">☀️ Kein Regen heute</div>'
             : '';
 
-          const legend = '<div style="display:flex;gap:12px;margin-top:10px">'
-            + '<div style="display:flex;align-items:center;gap:4px;font-size:10px;color:rgba(255,255,255,.35)"><div style="width:10px;height:10px;border-radius:2px;background:rgba(100,180,255,.4)"></div>Vergangen</div>'
-            + '<div style="display:flex;align-items:center;gap:4px;font-size:10px;color:rgba(255,255,255,.35)"><div style="width:10px;height:10px;border-radius:2px;background:#67d33f"></div>Jetzt</div>'
-            + '<div style="display:flex;align-items:center;gap:4px;font-size:10px;color:rgba(255,255,255,.35)"><div style="width:10px;height:10px;border-radius:2px;background:#2ea8ff"></div>Prognose</div>'
-            + '</div>';
+          // Intensitäts-Legende: Farbverlauf-Balken 0–20mm statt Vergangen/Jetzt/Prognose
+          const legend = '<div style="margin-top:10px">'
+            + '<div style="height:7px;border-radius:4px;background:linear-gradient(90deg, rgba(255,255,255,.08) 0%, '
+            + precipColor(0.3) + ' 8%, ' + precipColor(2) + ' 22%, ' + precipColor(6) + ' 45%, '
+            + precipColor(12) + ' 70%, ' + precipColor(20) + ' 100%);"></div>'
+            + '<div style="display:flex;justify-content:space-between;font-size:9px;color:rgba(255,255,255,.4);margin-top:4px">'
+            + '<span>0 mm</span><span>10 mm</span><span>20+ mm</span>'
+            + '</div></div>';
 
           const barsWrap = '<div style="display:flex;align-items:flex-end;gap:5px;height:120px;padding-top:20px;position:relative">' + barHtml + '</div>';
 
@@ -4953,7 +5032,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.4'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.7'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -5072,6 +5151,7 @@ let _waterTempHistoryAsync = null;
 let _waterTempHistoryInFlight = false;
 // Anti-Flicker: Module-level Hashes für Charts (überleben renderView-Neuaufbau)
 let _pressureChartHash = '';
+let _pressureChartLastDraw = 0;
 let _waterTempChartHash = '';
 let _drawChartHashes = {};
 
@@ -5104,14 +5184,16 @@ function triggerWaterTempHistoryFetch() {
   if (_waterTempHistoryInFlight) return;
   if (_waterTempHistoryAsync && (Date.now() - _waterTempHistoryAsync.t) < 600000) return;
   _waterTempHistoryInFlight = true;
-  // NLWKN-Sensor bevorzugt (echte Messungen alle 15min)
-  // Fallback auf wassertemperatur_gewaesser (oft Monatstabellen-Schätzung)
-  const entity = haStates['sensor.fishing_tracker_nlwkn_water_temp']
-                 ? 'sensor.fishing_tracker_nlwkn_water_temp'
-                 : 'sensor.wassertemperatur_gewaesser';
+
+  // NLWKN nur wenn Sensor auch einen VALIDEN numerischen Wert hat
+  const nlwknState = haStates['sensor.fishing_tracker_nlwkn_water_temp'];
+  const nlwknValid = nlwknState && !isNaN(parseFloat(nlwknState.state)) && parseFloat(nlwknState.state) > 0;
+  const entity = nlwknValid
+               ? 'sensor.fishing_tracker_nlwkn_water_temp'
+               : 'sensor.wassertemperatur_gewaesser';
+
   fetchHARecorderHistory(entity, 24).then(samples => {
     _waterTempHistoryInFlight = false;
-    // Sensor-Verlauf brauchbar? min 3 Samples UND Varianz > 0.05°C (sonst Monatstabellen-Sensor)
     let useRecorder = false;
     if (samples && samples.length >= 3) {
       const vals = samples.map(x => x.p).filter(v => !isNaN(v));
@@ -5121,18 +5203,34 @@ function triggerWaterTempHistoryFetch() {
       }
     }
     if (useRecorder) {
-      _waterTempHistoryAsync = { t: Date.now(), samples: samples };
+      _waterTempHistoryAsync = { t: Date.now(), samples };
     } else {
-      // Fallback: Open-Meteo surface_temperature der letzten 24h
+      // Recorder hat keine Varianz → Open-Meteo Proxy versuchen
       const omSamples = buildOpenMeteoWaterTempHistory();
-      _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
+      if (omSamples && omSamples.length >= 2) {
+        _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
+      } else {
+        // Letzter Ausweg: aktuellen Sensorwert als Einzelpunkt
+        const curTemp = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state)
+                     || parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
+                     || null;
+        const fallback = curTemp ? [{ t: Date.now(), p: curTemp }] : [];
+        _waterTempHistoryAsync = { t: Date.now(), samples: fallback, isFallback: true };
+      }
     }
     if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
   }).catch(() => {
     _waterTempHistoryInFlight = false;
-    // WICHTIG: auch im Fehlerfall setzen, sonst endlose Retry-Schleife
     const omSamples = buildOpenMeteoWaterTempHistory();
-    _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
+    if (omSamples && omSamples.length >= 2) {
+      _waterTempHistoryAsync = { t: Date.now(), samples: omSamples };
+    } else {
+      const curTemp = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state)
+                   || parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
+                   || null;
+      const fallback = curTemp ? [{ t: Date.now(), p: curTemp }] : [];
+      _waterTempHistoryAsync = { t: Date.now(), samples: fallback, isFallback: true };
+    }
     if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
   });
 }
@@ -5331,7 +5429,11 @@ function drawWaterTempChart(id, samples) {
     let inFlight = false, haveAsync = false;
     try { inFlight = (typeof _waterTempHistoryInFlight !== 'undefined') && _waterTempHistoryInFlight; } catch(e) {}
     try { haveAsync = (typeof _waterTempHistoryAsync !== 'undefined') && !!_waterTempHistoryAsync; } catch(e) {}
-    const msg = inFlight ? 'Daten laden…' : (haveAsync ? 'Kein Verlauf verfügbar (Sensor ist Schätzung)' : 'Daten laden…');
+    const isFallback = _waterTempHistoryAsync?.isFallback;
+    const msg = inFlight    ? 'Daten laden…'
+              : isFallback  ? 'Kein Verlauf verfügbar'
+              : haveAsync   ? 'Kein Verlauf verfügbar (Sensor ist Schätzung)'
+                            : 'Daten laden…';
     // Anti-Flicker: module-level Hash
     const emptyHash = 'wt-empty:' + msg;
     if (_waterTempChartHash === emptyHash && svg.innerHTML.length > 10) return;
@@ -5396,10 +5498,19 @@ function drawWaterTempChart(id, samples) {
 function drawPressureChart(id, pastPts, futurePts, base) {
   const svg = document.getElementById(id);
   if (!svg) return;
-  // Anti-Flicker: module-level Hash (überlebt renderView-Neuaufbau des DOM)
-  const newHash = 'pr:' + (pastPts || []).join(',') + '|' + (futurePts || []).join(',') + '|' + (base || 0);
-  if (_pressureChartHash === newHash && svg.innerHTML.length > 100) return;
+  // Hash aus gerundeten Werten (auf 0.5 hPa) — absorbiert winzige Float-Unterschiede
+  const roundHalf = v => Math.round(v * 2) / 2;
+  const hashPast   = (pastPts  || []).map(roundHalf).join(',');
+  const hashFuture = (futurePts|| []).map(roundHalf).join(',');
+  const newHash = 'pr:' + hashPast + '|' + hashFuture + '|' + roundHalf(base || 0);
+  const now = Date.now();
+  const isEmpty = svg.innerHTML.length < 100;
+  const hashSame = newHash === _pressureChartHash;
+  const tooSoon  = (now - _pressureChartLastDraw) < 8000;  // max 1 Redraw alle 8s
+  // Skip wenn: SVG hat Inhalt UND (Hash gleich ODER zu früh für Redraw)
+  if (!isEmpty && (hashSame || tooSoon)) return;
   _pressureChartHash = newHash;
+  _pressureChartLastDraw = now;
   const w=900, h=130, padL=52, padR=16, padT=10, padB=24;
   const allPts = [...pastPts, ...futurePts];
   const minV = Math.min(...allPts)-3, maxV = Math.max(...allPts)+3;
@@ -5540,15 +5651,8 @@ function addChartTouch(svgId, pts, color) {
     const _todayIdx = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
         drawChart('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff', 0);
         addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
-    // Fischart-spezifischer Score: Biologie dominiert über Wetter
-const fishCurve = (() => {
-  // Einheitliche Engine: stündlich exakt wie Beißfenster (bestWindowToday) & "jetzt"
-  const sensors = collectAllSensors();
-  const now = new Date();
-  return Array.from({length: 24}, (_, h) => calcUnifiedDayScore(selFish, now, h, sensors, null));
-})();
-drawChart('specChart', fishCurve, '#67d33f');
-    addChartTouch('specChart', fishCurve, '#67d33f');
+    // Fischart-spezifischer Score (FANGFAKTOR-Balken werden jetzt direkt im HTML
+    // der Species-View berechnet/gerendert, kein SVG-Chart mehr nötig hier)
     // Luftdruck-Chart: echter Verlauf (lokaler Ringpuffer) + HA-Wettervorhersage
     const basePressure = parseFloat(pressure) || 1015;
     const _sensorsForP = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
