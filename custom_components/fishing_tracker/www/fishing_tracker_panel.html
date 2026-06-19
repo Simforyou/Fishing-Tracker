@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.20 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.21 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1578,8 +1578,9 @@ function calcAngelwetterIndex() {
   else if (moonPh.includes('sichel') || moonPh.includes('crescent')) moonScore = 55;
 
   // ── 5% Luftdrucktrend (artspezifisch) ────────────────────────────────────
-  const _pStableAW = computeStabilityHours(parseFloat(haStates[findFTSensor('pressure')?.entity_id]?.state || pressure));
-  const pressureScore = pressureBiteFavorability(pressure, trend, _pStableAW, fishName);
+  const _curPressure = parseFloat(findFTSensor('pressure')?.state || wx.pressure || 1013);
+  const _pStableAW = computeStabilityHours(_curPressure);
+  const pressureScore = pressureBiteFavorability(_curPressure, trend, _pStableAW, fishName);
 
   // ══════════════════════════════════════════════════════════════════════
   // WISSENSCHAFTLICHER TIEFEN-FAKTOR
@@ -6046,7 +6047,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.20'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.21'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
