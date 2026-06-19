@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.14 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.16 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1577,17 +1577,9 @@ function calcAngelwetterIndex() {
   else if (moonPh.includes('viertel') || moonPh.includes('quarter')) moonScore = 60;
   else if (moonPh.includes('sichel') || moonPh.includes('crescent')) moonScore = 55;
 
-  // ── 5% Luftdrucktrend (volle 0-100 Skala) ───────────────────────────────
-  // Fallender Druck = Fressfenster vor Front
-  let pressureScore;
-  if (trend >= -2 && trend < -1)          pressureScore = 100;  // Ideal: leicht fallend
-  else if (trend >= -3 && trend < -2)     pressureScore = 90;
-  else if (trend >= -1 && trend < -0.3)   pressureScore = 75;
-  else if (trend >= -0.3 && trend <= 0.5) pressureScore = 55;   // Stabil
-  else if (trend > 0.5 && trend <= 1.5)   pressureScore = 40;
-  else if (trend > 1.5 && trend <= 3)     pressureScore = 25;
-  else if (trend > 3)                      pressureScore = 12;   // Stark steigend
-  else                                     pressureScore = 70;   // Stark fallend (Sturm)
+  // ── 5% Luftdrucktrend (artspezifisch) ────────────────────────────────────
+  const _pStableAW = computeStabilityHours(parseFloat(haStates[findFTSensor('pressure')?.entity_id]?.state || pressure));
+  const pressureScore = pressureBiteFavorability(pressure, trend, _pStableAW, fishName);
 
   // ══════════════════════════════════════════════════════════════════════
   // WISSENSCHAFTLICHER TIEFEN-FAKTOR
@@ -3769,6 +3761,79 @@ async function fetchHARecorderHistory(entityId, hoursBack) {
   }
 }
 
+// ── Open-Meteo Druck-Cache (48h zurück + 48h voraus, stündlich) ───────────────
+let _omPressureCache = null;       // { t: timestamp, times: [], pressures: [], nowIdx: int }
+let _omPressureInFlight = false;
+
+async function fetchOMPressureData(lat, lon) {
+  if (_omPressureInFlight) return;
+  if (_omPressureCache && (Date.now() - _omPressureCache.t) < 30 * 60 * 1000) return; // 30min Cache
+  _omPressureInFlight = true;
+  try {
+    const now = new Date();
+    const start = new Date(now); start.setDate(start.getDate() - 3);
+    const end   = new Date(now); end.setDate(end.getDate() + 5);
+    const fmt = d => d.toISOString().slice(0, 10);
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
+      + `&hourly=pressure_msl&start_date=${fmt(start)}&end_date=${fmt(end)}&timezone=Europe%2FBerlin`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const times = data.hourly.time;
+    const pressures = data.hourly.pressure_msl;
+    const nowHour = now.toISOString().slice(0, 13);
+    let nowIdx = times.findIndex(t => t.startsWith(nowHour));
+    if (nowIdx < 0) nowIdx = times.findIndex(t => new Date(t) > now) - 1;
+    if (nowIdx < 0) nowIdx = 0;
+    _omPressureCache = { t: Date.now(), times, pressures, nowIdx };
+    _omPressureInFlight = false;
+    // Re-render wenn Wetter-Tab aktiv
+    if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
+  } catch(e) {
+    _omPressureInFlight = false;
+  }
+}
+
+function getOMPressureMain(currentP) {
+  // Hauptchart: 48h zurück + 48h voraus, alle 2h = ~49 Punkte
+  if (!_omPressureCache || !_omPressureCache.pressures) return null;
+  const { times, pressures, nowIdx } = _omPressureCache;
+  const step = 2;
+  const hoursBack = 48, hoursAhead = 48;
+  const startIdx = Math.max(0, nowIdx - hoursBack);
+  const endIdx   = Math.min(times.length - 1, nowIdx + hoursAhead);
+  const pts = [];
+  for (let i = startIdx; i <= endIdx; i += step) {
+    const v = pressures[i];
+    pts.push({ i, v: (v != null && isFinite(v)) ? Math.round(v * 10) / 10 : currentP });
+  }
+  const relNowIdx = pts.findIndex(p => p.i >= nowIdx);
+  const past   = pts.slice(0, relNowIdx + 1).map(p => p.v);
+  const future = pts.slice(relNowIdx + 1).map(p => p.v);
+  return { past, future };
+}
+
+function getOMPressureShort(currentP) {
+  // Kurzfristig: 6h zurück + 6h voraus, stündlich
+  if (!_omPressureCache || !_omPressureCache.pressures) return null;
+  const { times, pressures, nowIdx } = _omPressureCache;
+  const startIdx = Math.max(0, nowIdx - 6);
+  const endIdx   = Math.min(times.length - 1, nowIdx + 6);
+  const pts = [];
+  for (let i = startIdx; i <= endIdx; i++) {
+    const v = pressures[i];
+    pts.push({ i, v: (v != null && isFinite(v)) ? Math.round(v * 10) / 10 : currentP });
+  }
+  const relNowIdx = pts.findIndex(p => p.i >= nowIdx);
+  const past   = pts.slice(0, relNowIdx + 1).map(p => p.v);
+  const future = pts.slice(relNowIdx + 1).map(p => p.v);
+  // X-Labels für Kurzfristig
+  const labels = pts.map((p, idx) => {
+    const diff = idx - relNowIdx;
+    return diff === 0 ? 'Jetzt' : (diff > 0 ? `+${diff}h` : `${diff}h`);
+  });
+  return { past, future, labels };
+}
+
 // Background-Fetch der echten Druck-History — bei Verfügbarkeit Chart-Refresh
 let _pressureHistoryAsync = null;
 let _pressureHistoryInFlight = false;
@@ -3856,31 +3921,96 @@ function computeStabilityHours(currentP) {
 }
 
 /**
- * pressureBiteFavorability(p, trendRate, stableHours)
- * Kombinierter 0–100 Score wie günstig der Druck fürs Beißen ist.
+ * pressureBiteFavorability(p, trendRate, stableHours, species)
+ * Artspezifischer 0–100 Score wie günstig der Luftdruck fürs Beißen ist.
  *
- * - Glockenkurve um die ideale Zone 1010–1025 hPa (Zentrum 1017)
- * - Trend-Bonus: Fallend vor Schlechtwetter ist günstig, schnelle Sprünge
- *   verunsichern Fische kurzzeitig, stetig steigend ist günstig
- * - Stabilitäts-Bonus: bei tagelang stabilem Druck (≥48-72h) fressen Fische
- *   wieder normal — auch außerhalb der Idealzone
+ * Biologische Grundlage — Schwimmblase:
+ *   PHYSOCLISTEN (geschlossene Blase, Ausgleich nur über Blut — langsam):
+ *     Zander, Barsch → sehr empfindlich auf Trendänderungen, 6–15h Anpassung
+ *   PHYSOSTOMEN (offene Blase mit Darmverbindung — schnell):
+ *     Hecht, Karpfen, Schleie, Brasse, Rotauge, Rotfeder, Döbel, Forelle, Aal
+ *     → deutlich robuster, artspezifische Idealzonen
+ *
+ * Quellen: Anglerpraxis-Konsens (Barsch-Alarm, Fisch&Fang, Blinker),
+ *   fischapp.com/luftdruck, netzwerk-angeln.de Zander-Luftdruck-Artikel
  */
-function pressureBiteFavorability(p, trendRate, stableHours) {
-  const idealCenter = 1017, idealWidth = 13;
-  let levelScore = 100 * Math.exp(-Math.pow((p - idealCenter) / idealWidth, 2));
+function pressureBiteFavorability(p, trendRate, stableHours, species) {
+  // ── Schwimmblase-Typ & Druckempfindlichkeit je Art ──────────────────────
+  // trendSensitivity: wie stark bestraft Trendänderung den Score (1.0 = Standard)
+  // idealCenter:      optimaler absoluter Druck
+  // stabilityWeight:  wie stark wirkt Mehrtage-Stabilität (1.0 = Standard)
+  // lowPressurePref:  true = Art bevorzugt Tiefdruck/fallend (Hecht, Aal, Forelle)
+  const SPECIES_PROFILE = {
+    // PHYSOCLISTEN — hohe Trendempfindlichkeit
+    Zander:   { trendSens: 2.2, ideal: 1015, stabW: 2.0, lowPref: false, physo: false },
+    Barsch:   { trendSens: 1.8, ideal: 1015, stabW: 1.8, lowPref: false, physo: false },
+    // PHYSOSTOMEN Raubfische — mittlere Empfindlichkeit, Tiefdruck/fallend bevorzugt
+    Hecht:    { trendSens: 0.7, ideal: 1008, stabW: 0.8, lowPref: true,  physo: true  },
+    Forelle:  { trendSens: 0.7, ideal: 1008, stabW: 0.7, lowPref: true,  physo: true  },
+    Aal:      { trendSens: 0.6, ideal: 1005, stabW: 0.6, lowPref: true,  physo: true  },
+    Rapfen:   { trendSens: 0.8, ideal: 1010, stabW: 0.8, lowPref: false, physo: true  },
+    // PHYSOSTOMEN Friedfische — gering empfindlich, eher Hochdruck/stabil
+    Karpfen:  { trendSens: 0.9, ideal: 1013, stabW: 1.0, lowPref: false, physo: true  },
+    Schleie:  { trendSens: 0.8, ideal: 1013, stabW: 1.0, lowPref: false, physo: true  },
+    Brasse:   { trendSens: 0.8, ideal: 1013, stabW: 1.0, lowPref: false, physo: true  },
+    Rotauge:  { trendSens: 0.7, ideal: 1017, stabW: 0.9, lowPref: false, physo: true  },
+    Rotfeder: { trendSens: 0.7, ideal: 1017, stabW: 0.9, lowPref: false, physo: true  },
+    Döbel:    { trendSens: 0.8, ideal: 1013, stabW: 0.8, lowPref: false, physo: true  },
+    Güster:   { trendSens: 0.8, ideal: 1013, stabW: 1.0, lowPref: false, physo: true  },
+    Ukelei:   { trendSens: 0.7, ideal: 1015, stabW: 0.8, lowPref: false, physo: true  },
+    Wels:     { trendSens: 0.5, ideal: 1010, stabW: 0.5, lowPref: true,  physo: true  },
+    Grundel:  { trendSens: 0.4, ideal: 1010, stabW: 0.4, lowPref: false, physo: true  },
+  };
+  const prof = SPECIES_PROFILE[species] || { trendSens: 1.0, ideal: 1013, stabW: 1.0, lowPref: false, physo: true };
 
+  // ── 1. Absolutdruck-Score (Gaußkurve um Idealzone) ───────────────────────
+  const idealWidth = prof.physo ? 16 : 12; // Physoclisten reagieren enger
+  let levelScore = 100 * Math.exp(-Math.pow((p - prof.ideal) / idealWidth, 2));
+
+  // ── 2. Trend-Score (artspezifisch gewichtet) ─────────────────────────────
   let trendBonus = 0;
-  if (trendRate > 2.0)        trendBonus = 5;    // schnell steigend — leicht unruhig
-  else if (trendRate > 0.3)   trendBonus = 15;   // stetig steigend — günstig
-  else if (trendRate < -2.0)  trendBonus = 8;    // schnell fallend — kurzzeitig unruhig
-  else if (trendRate < -0.3)  trendBonus = 18;   // stetig fallend vor Schlechtwetter — sehr günstig
+  const ts = prof.trendSens;
+  if (prof.lowPref) {
+    // Hecht/Aal/Forelle: fallend bevorzugt, steigend leicht negativ
+    if      (trendRate < -2.5)               trendBonus =  5 * ts;   // zu schnell fallend — kurz negativ
+    else if (trendRate >= -2.5 && trendRate < -0.5) trendBonus = 22 * ts;  // ideal fallend
+    else if (trendRate >= -0.5 && trendRate <= 0.5) trendBonus = 10 * ts;  // stabil — ok
+    else if (trendRate > 0.5  && trendRate <= 2.0)  trendBonus = -5 * ts;  // steigend — leicht negativ
+    else if (trendRate > 2.0)                trendBonus = -15 * ts;  // schnell steigend — ungünstig
+  } else if (!prof.physo) {
+    // Zander/Barsch (Physoclisten): jede Änderung bestraft, Stabilität entscheidend
+    if      (Math.abs(trendRate) <= 0.3)     trendBonus =  20 * ts;  // stabil — sehr gut
+    else if (Math.abs(trendRate) <= 0.8)     trendBonus =   5 * ts;  // leichte Änderung
+    else if (Math.abs(trendRate) <= 1.5)     trendBonus = -15 * ts;  // merkliche Änderung — schlecht
+    else if (Math.abs(trendRate) <= 2.5)     trendBonus = -28 * ts;  // starke Änderung — sehr schlecht
+    else                                      trendBonus = -40 * ts;  // extremer Wechsel — Beißflaute
+  } else {
+    // Physostomen Friedfische: steigendes Hochdruck leicht bevorzugt
+    if      (trendRate < -2.5)               trendBonus = -5 * ts;   // schnell fallend — leicht neg
+    else if (trendRate >= -2.5 && trendRate < -0.5) trendBonus =  8 * ts;  // leicht fallend — ok
+    else if (Math.abs(trendRate) <= 0.5)     trendBonus = 15 * ts;   // stabil — gut
+    else if (trendRate > 0.5  && trendRate <= 2.0)  trendBonus = 18 * ts;  // steigend — sehr gut
+    else if (trendRate > 2.0)                trendBonus =  5 * ts;   // schnell steigend — kurz ok
+  }
 
+  // ── 3. Mehrtage-Stabilität (artspezifisch gewichtet) ─────────────────────
+  // Physoclisten profitieren enorm von Mehrtage-Stabilität (Anpassungszeit!)
   let stabilityBonus = 0;
-  if (stableHours >= 72)      stabilityBonus = 20;
-  else if (stableHours >= 48) stabilityBonus = 12;
-  else if (stableHours >= 24) stabilityBonus = 5;
+  const sw = prof.stabW;
+  if      (stableHours >= 72) stabilityBonus = 22 * sw;
+  else if (stableHours >= 48) stabilityBonus = 14 * sw;
+  else if (stableHours >= 24) stabilityBonus =  6 * sw;
+  else if (stableHours >= 12) stabilityBonus =  2 * sw;
 
-  return Math.max(0, Math.min(100, levelScore + trendBonus + stabilityBonus));
+  // ── 4. Flachgewässer-Malus für Physoclisten ───────────────────────────────
+  // Dinkel/Vechte sind flach → Zander/Barsch können Druck nicht durch
+  // Tiefenwechsel ausgleichen → Effekt stärker als in tiefen Seen
+  let shallowMalus = 0;
+  if (!prof.physo && Math.abs(trendRate) > 0.5) {
+    shallowMalus = -8; // Flachgewässer-Verstärkung
+  }
+
+  return Math.max(0, Math.min(100, levelScore + trendBonus + stabilityBonus + shallowMalus));
 }
 
 /**
@@ -4343,6 +4473,23 @@ function drawPressureChart(id, pastPts, futurePts, base) {
     xLabelsEl.innerHTML = labels.map(l => `<span>${l}</span>`).join('');
   }
 
+  // X-Achse im SVG (Tages-Marker) — für Hauptchart mit vielen Punkten
+  const totalPoints = allPts.length;
+  const xAxisLabels = (() => {
+    // Alle 8 Punkte (= alle 16h bei step=2h) ein Datums-Label
+    const result = [];
+    const now2 = new Date();
+    for (let i = 0; i < totalPoints; i++) {
+      const hoursOffset = (i - nowIdx) * 2; // step=2h angenommen
+      const d = new Date(now2.getTime() + hoursOffset * 3600000);
+      const isNewDay = d.getHours() < 2; // um Mitternacht herum
+      if (i === 0 || i === nowIdx || isNewDay || i === totalPoints - 1) {
+        result.push({ i, label: i === nowIdx ? 'Jetzt' : `${d.getDate()}.${d.getMonth()+1}` });
+      }
+    }
+    return result;
+  })();
+
   const nowIdx = pastPts.length - 1;
   const stableHours = computeStabilityHours(base);
 
@@ -4364,7 +4511,8 @@ function drawPressureChart(id, pastPts, futurePts, base) {
     const trendRate = i === 0
       ? (futurePts[1] != null ? futurePts[1] - v : 0)
       : (futurePts[i] - futurePts[i-1]);
-    const score = pressureBiteFavorability(clamp(v), trendRate / 2, stableHours);
+    const _chartSpecies = (typeof selFish !== 'undefined' && selFish) ? selFish : null;
+    const score = pressureBiteFavorability(clamp(v), trendRate / 2, stableHours, _chartSpecies);
     const col = pressureBiteColor(score);
     return `<circle cx="${cx}" cy="${cy}" r="6" fill="${col}" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>`;
   }).join('');
@@ -4438,6 +4586,14 @@ function drawPressureChart(id, pastPts, futurePts, base) {
     <text x="${nowX}" y="${Math.max(padT - 2, nowY - 12)}"
           fill="#ffffff" font-size="19" font-weight="800" text-anchor="middle"
           style="text-shadow:0 1px 4px rgba(0,0,0,0.7)">${nowVal}</text>
+
+    <!-- X-Achse: Datums-Marker -->
+    ${xAxisLabels.map(({i, label}) => {
+      const lx = xOf(i);
+      const isNow = label === 'Jetzt';
+      return `<text x="${lx}" y="${h - 4}" fill="${isNow ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.35)'}"
+              font-size="${isNow ? 16 : 14}" font-weight="${isNow ? '800' : '500'}" text-anchor="middle">${label}</text>`;
+    }).join('')}
   `;
 }
 
@@ -5842,7 +5998,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.14'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.16'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -5927,30 +6083,60 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
     } catch(e) { console.warn('weekChart Fehler:', e); }
 
-    // Luftdruck-Chart — eigener try/catch
+    // Luftdruck-Chart — Open-Meteo Echtdaten (48h zurück + 48h voraus)
     try {
       const basePressure = parseFloat(pressure) || 1015;
       const _sensorsForP = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
       const _trend = (_sensorsForP && _sensorsForP.pressureTrend != null) ? _sensorsForP.pressureTrend : 0;
       recordPressureSample(basePressure);
-      let pastData   = getPressureHistory12h(basePressure, _trend) || [];
-      let futureData = getPressureForecast12h(basePressure, _trend) || [];
-      // NaN-Schutz: ungültige Werte durch Basisdruck ersetzen statt Chart zu zerstören
-      pastData   = pastData.map(v => (isFinite(v) ? v : basePressure));
-      futureData = futureData.map(v => (isFinite(v) ? v : basePressure));
+
+      // Open-Meteo fetch im Hintergrund anstoßen
+      try {
+        const _lat = (typeof HAConfig !== 'undefined' && HAConfig.latitude) ? HAConfig.latitude : 52.435;
+        const _lon = (typeof HAConfig !== 'undefined' && HAConfig.longitude) ? HAConfig.longitude : 7.065;
+        fetchOMPressureData(_lat, _lon);
+      } catch(e) {}
+
+      // Open-Meteo Daten nutzen falls verfügbar, sonst alter Fallback
+      const omMain = getOMPressureMain(basePressure);
+      let pastData, futureData;
+      if (omMain && omMain.past.length >= 2 && omMain.future.length >= 1) {
+        pastData   = omMain.past;
+        futureData = omMain.future;
+      } else {
+        pastData   = (getPressureHistory12h(basePressure, _trend) || []).map(v => isFinite(v) ? v : basePressure);
+        futureData = (getPressureForecast12h(basePressure, _trend) || []).map(v => isFinite(v) ? v : basePressure);
+      }
       if (pastData.length >= 2 && futureData.length >= 1) {
         drawPressureChart('pressureChart', pastData, futureData, basePressure);
       }
     } catch(e) { console.warn('pressureChart Fehler:', e); }
 
-    // Kurzfristig-Chart (±3h, Stundenauflösung) — eigener try/catch, unabhängig vom 24h-Chart
+    // Kurzfristig-Chart (±6h, Stundenauflösung) — Open-Meteo
     try {
       const basePressureShort = parseFloat(pressure) || 1015;
       const _sensorsForPS = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
       const _trendShort = (_sensorsForPS && _sensorsForPS.pressureTrend != null) ? _sensorsForPS.pressureTrend : 0;
-      const short = getPressureShortTerm6h(basePressureShort, _trendShort) || { past: [], future: [] };
-      const pastShort   = (short.past   || []).map(v => (isFinite(v) ? v : basePressureShort));
-      const futureShort = (short.future || []).map(v => (isFinite(v) ? v : basePressureShort));
+
+      const omShort = getOMPressureShort(basePressureShort);
+      let pastShort, futureShort, xLabelsShort;
+      if (omShort && omShort.past.length >= 2 && omShort.future.length >= 1) {
+        pastShort    = omShort.past;
+        futureShort  = omShort.future;
+        xLabelsShort = omShort.labels;
+      } else {
+        const short = getPressureShortTerm6h(basePressureShort, _trendShort) || { past: [], future: [] };
+        pastShort   = (short.past   || []).map(v => isFinite(v) ? v : basePressureShort);
+        futureShort = (short.future || []).map(v => isFinite(v) ? v : basePressureShort);
+        xLabelsShort = null;
+      }
+
+      // X-Labels in Container schreiben falls vorhanden
+      if (xLabelsShort) {
+        const xEl = document.getElementById('pressureChartShortXLabels');
+        if (xEl) xEl.innerHTML = xLabelsShort.map(l => `<span>${l}</span>`).join('');
+      }
+
       if (pastShort.length >= 2 && futureShort.length >= 1) {
         drawPressureChart('pressureChartShort', pastShort, futureShort, basePressureShort);
       }
@@ -6552,15 +6738,11 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     }
   }
 
-  // ── 5. Luftdruck & Trend ──────────────────────────────────────────────────
-  let pressureBonus = 0;
-  if (pressureTrend >= -2 && pressureTrend < -0.5) pressureBonus = 12;
-  else if (pressureTrend >= -3 && pressureTrend < -2) pressureBonus = 8;
-  else if (pressureTrend > 1.5 && pressureTrend <= 3) pressureBonus = -8;
-  else if (pressureTrend > 3) pressureBonus = -15;
-  if (['Karpfen','Brasse','Schleie'].includes(fishName)) pressureBonus *= 1.3;
-  // Absoluter Druck: Hochdrucklage stabil gut
-  if (pressure > 1020 && Math.abs(pressureTrend) < 0.5) pressureBonus += 5;
+  // ── 5. Luftdruck & Trend (artspezifisch) ─────────────────────────────────
+  const _pStable = computeStabilityHours(pressure);
+  const _pScore  = pressureBiteFavorability(pressure, pressureTrend, _pStable, fishName);
+  // Score 0–100 → Bonus -20…+20 (zentriert bei Score=50 → 0)
+  const pressureBonus = (_pScore - 50) * 0.4;
 
   // ── 6. Sonneneinstrahlung & Sonnenstand ──────────────────────────────────
   let lightBonus = 0;
