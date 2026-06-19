@@ -4304,7 +4304,6 @@ function drawWaterTempChart(id, samples) {
 function drawPressureChart(id, pastPts, futurePts, base) {
   const svg = document.getElementById(id);
   if (!svg) return;
-  // Hash aus gerundeten Werten (auf 0.5 hPa) — absorbiert winzige Float-Unterschiede
   const roundHalf = v => Math.round(v * 2) / 2;
   const hashPast   = (pastPts  || []).map(roundHalf).join(',');
   const hashFuture = (futurePts|| []).map(roundHalf).join(',');
@@ -4312,23 +4311,29 @@ function drawPressureChart(id, pastPts, futurePts, base) {
   const now = Date.now();
   const isEmpty = svg.innerHTML.length < 100;
   const state = _pressureChartState[id] || { hash: '', lastDraw: 0 };
-  const hashSame = newHash === state.hash;
-  const tooSoon  = (now - state.lastDraw) < 8000;  // max 1 Redraw alle 8s
-  // Skip wenn: SVG hat Inhalt UND (Hash gleich ODER zu früh für Redraw)
-  if (!isEmpty && (hashSame || tooSoon)) return;
+  if (!isEmpty && (newHash === state.hash || (now - state.lastDraw) < 8000)) return;
   _pressureChartState[id] = { hash: newHash, lastDraw: now };
-  const w=900, h=130, padL=10, padR=10, padT=14, padB=10;
-  // Feste Skala 950–1050 hPa — macht Charts über verschiedene Tage/Wetterlagen vergleichbar
-  const P_MIN = 950, P_MAX = 1050;
-  const minV = P_MIN, maxV = P_MAX, range = maxV - minV;
-  const clamp = v => Math.max(minV, Math.min(maxV, v));
 
-  // Y-Achse als echtes HTML außerhalb des SVG — kein Stauch-Effekt durch viewBox-Skalierung
+  const w=900, h=160, padL=10, padR=10, padT=18, padB=28;
+  const P_MIN = 1000, P_MAX = 1030;
+  // Auto-fit: falls Werte außerhalb 1000–1030, auf feste 950–1050 erweitern
+  const allPts = [...pastPts, ...futurePts];
+  const dataMin = Math.min(...allPts), dataMax = Math.max(...allPts);
+  const useMin = dataMin < P_MIN ? 950 : P_MIN;
+  const useMax = dataMax > P_MAX ? 1050 : P_MAX;
+  const range = useMax - useMin;
+  const clamp = v => Math.max(useMin, Math.min(useMax, v));
+  const px = (v) => padL + allPts.indexOf(v) * 0; // unused, just for reference
+  const xOf = i => padL + i * (w - padL - padR) / (allPts.length - 1);
+  const yOf = v => padT + (1 - (clamp(v) - useMin) / range) * (h - padT - padB);
+
+  // Y-Achse HTML-Labels
   const yLabelsEl = document.getElementById(id + 'YLabels');
   if (yLabelsEl) {
-    yLabelsEl.innerHTML = `<span>${P_MAX}</span><span>${(P_MIN+P_MAX)/2}</span><span>${P_MIN}</span>`;
+    yLabelsEl.innerHTML = `<span>${useMax}</span><span>${Math.round((useMin+useMax)/2)}</span><span>${useMin}</span>`;
   }
-  // X-Achse (optional) — nur falls Container existiert (z.B. Kurzfristig-Chart mit Stundenlabels)
+
+  // X-Achse Labels (Stunden oder Datum)
   const xLabelsEl = document.getElementById(id + 'XLabels');
   if (xLabelsEl) {
     const labels = [];
@@ -4338,44 +4343,101 @@ function drawPressureChart(id, pastPts, futurePts, base) {
     xLabelsEl.innerHTML = labels.map(l => `<span>${l}</span>`).join('');
   }
 
-  const allPts = [...pastPts, ...futurePts];
-  const totalPts = allPts.length;
-  const slotW = (w - padL - padR) / totalPts;
-  const barW = slotW * 0.62;
+  const nowIdx = pastPts.length - 1;
   const stableHours = computeStabilityHours(base);
 
-  // Trend pro Punkt: Differenz zum Nachbarn (hPa pro Schritt, Schritte sind ~2h)
-  function trendAt(i) {
-    const prev = allPts[Math.max(0, i-1)];
-    const next = allPts[Math.min(allPts.length-1, i+1)];
-    return (next - prev) / 2; // ~hPa pro 2h-Schritt → grob vergleichbar mit hPa/3h Schwellen
-  }
+  // Polyline-Punkte für Vergangenheit und Zukunft
+  const pastCoords  = pastPts.map((v, i) => `${xOf(i)},${yOf(v)}`).join(' ');
+  const futureCoords = futurePts.map((v, i) => `${xOf(nowIdx + i)},${yOf(v)}`).join(' ');
+  const allCoords   = allPts.map((v, i) => `${xOf(i)},${yOf(v)}`).join(' ');
 
-  const barsHtml = allPts.map((v, i) => {
-    const isPast = i < pastPts.length - 1; // letzter "past"-Punkt ist quasi "jetzt"
-    const isNow  = i === pastPts.length - 1;
-    const trendRate = trendAt(i);
-    const score = pressureBiteFavorability(clamp(v), trendRate, stableHours);
-    const color = pressureBiteColor(score);
-    const barH = ((clamp(v) - minV) / range) * (h - padT - padB);
-    const x = padL + i*slotW + (slotW - barW)/2;
-    const y = padT + (h - padT - padB) - barH;
-    const op = isPast ? 0.55 : 1;
-    const ring = isNow ? 'stroke="rgba(255,255,255,.85)" stroke-width="1.5"' : '';
-    return `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(2,barH)}" rx="2" fill="${color}" opacity="${op}" ${ring}/>`;
+  // Punkte (dots)
+  const pastDots = pastPts.map((v, i) => {
+    if (i === nowIdx) return ''; // "Jetzt"-Punkt separat
+    const cx = xOf(i), cy = yOf(v);
+    return `<circle cx="${cx}" cy="${cy}" r="5" fill="#9ca3af" opacity="0.7"/>`;
   }).join('');
 
-  // Wert-Label auf dem aktuellen ("Jetzt") Balken
-  const nowIdx = pastPts.length - 1;
-  const nowX = padL + nowIdx*slotW + slotW/2;
-  const nowBarH = ((clamp(allPts[nowIdx]) - minV) / range) * (h - padT - padB);
-  const nowY = padT + (h - padT - padB) - nowBarH;
+  const futureDots = futurePts.map((v, i) => {
+    const cx = xOf(nowIdx + i), cy = yOf(v);
+    // Farbe je nach Beißgünstigkeit
+    const trendRate = i === 0
+      ? (futurePts[1] != null ? futurePts[1] - v : 0)
+      : (futurePts[i] - futurePts[i-1]);
+    const score = pressureBiteFavorability(clamp(v), trendRate / 2, stableHours);
+    const col = pressureBiteColor(score);
+    return `<circle cx="${cx}" cy="${cy}" r="6" fill="${col}" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>`;
+  }).join('');
 
+  // "Jetzt"-Punkt — groß, weiß
+  const nowX = xOf(nowIdx), nowY = yOf(pastPts[nowIdx]);
+  const nowVal = Math.round(pastPts[nowIdx]);
+
+  // Gridlinien horizontal (4 Stufen)
+  const gridLines = [0, 1/3, 2/3, 1].map(f => {
+    const gy = padT + f * (h - padT - padB);
+    const gv = Math.round(useMax - f * range);
+    return `<line x1="${padL}" y1="${gy}" x2="${w - padR}" y2="${gy}" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>`;
+  }).join('');
+
+  // Vertikale Trennlinie "Jetzt"
+  const nowLineX = xOf(nowIdx);
+
+  // Gefüllter Bereich unter der Kurve (Gradient-Fläche)
+  // Past: grau, Future: leicht farbig
+  const pastAreaPts = pastPts.map((v,i) => `${xOf(i)},${yOf(v)}`).join(' ');
+  const futureAreaPts = futurePts.map((v,i) => `${xOf(nowIdx+i)},${yOf(v)}`).join(' ');
+  const pastAreaBottom = `${xOf(nowIdx)},${h-padB} ${xOf(0)},${h-padB}`;
+  const futureAreaBottom = `${xOf(allPts.length-1)},${h-padB} ${xOf(nowIdx)},${h-padB}`;
+
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   svg.innerHTML = `
-    <!-- Gitterlinien (3 fixe Stufen) -->
-    ${[0,0.5,1].map(f => `<line x1="${padL}" y1="${padT + f*(h-padT-padB)}" x2="${w-padR}" y2="${padT + f*(h-padT-padB)}" stroke="rgba(255,255,255,.06)"/>`).join('')}
-    ${barsHtml}
-    <text x="${nowX}" y="${Math.max(12, nowY-6)}" fill="#fff" font-size="20" font-weight="700" text-anchor="middle">${Math.round(base)}</text>
+    <defs>
+      <linearGradient id="pastGrad_${id}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="rgba(156,163,175,0.18)"/>
+        <stop offset="100%" stop-color="rgba(156,163,175,0.01)"/>
+      </linearGradient>
+      <linearGradient id="futureGrad_${id}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="rgba(251,146,60,0.22)"/>
+        <stop offset="100%" stop-color="rgba(251,146,60,0.01)"/>
+      </linearGradient>
+    </defs>
+
+    ${gridLines}
+
+    <!-- Vertikale "Jetzt"-Linie -->
+    <line x1="${nowLineX}" y1="${padT}" x2="${nowLineX}" y2="${h-padB}"
+          stroke="rgba(255,255,255,0.18)" stroke-width="1.5" stroke-dasharray="4,3"/>
+
+    <!-- Flächen unter den Kurven -->
+    <polygon points="${pastAreaPts} ${pastAreaBottom}"
+             fill="url(#pastGrad_${id})"/>
+    <polygon points="${pastAreaPts.split(' ').pop()} ${futureAreaPts} ${futureAreaBottom} ${xOf(nowIdx)},${h-padB}"
+             fill="url(#futureGrad_${id})"/>
+
+    <!-- Linie Vergangenheit (grau) -->
+    <polyline points="${pastCoords}"
+              fill="none" stroke="#9ca3af" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round" opacity="0.75"/>
+
+    <!-- Linie Zukunft (weiß/warm) -->
+    <polyline points="${xOf(nowIdx)},${yOf(pastPts[nowIdx])} ${futureCoords}"
+              fill="none" stroke="#f9a84d" stroke-width="2.8"
+              stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Punkte Vergangenheit -->
+    ${pastDots}
+
+    <!-- Punkte Zukunft -->
+    ${futureDots}
+
+    <!-- "Jetzt"-Punkt (groß, weiß) -->
+    <circle cx="${nowX}" cy="${nowY}" r="8" fill="#ffffff" stroke="rgba(255,255,255,0.3)" stroke-width="3"/>
+
+    <!-- Wert-Label beim Jetzt-Punkt -->
+    <text x="${nowX}" y="${Math.max(padT - 2, nowY - 12)}"
+          fill="#ffffff" font-size="19" font-weight="800" text-anchor="middle"
+          style="text-shadow:0 1px 4px rgba(0,0,0,0.7)">${nowVal}</text>
   `;
 }
 
@@ -5518,10 +5580,10 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel">
         <div class="sec">📊 Luftdruck-Verlauf & Prognose</div>
-        <div style="display:flex;gap:6px;height:130px">
-          <div id="pressureChartYLabels" style="display:flex;flex-direction:column;justify-content:space-between;width:38px;flex-shrink:0;text-align:right;font-size:12px;font-weight:700;color:rgba(255,255,255,.65);padding:2px 2px 22px 0"></div>
+        <div style="display:flex;gap:6px;height:160px">
+          <div id="pressureChartYLabels" style="display:flex;flex-direction:column;justify-content:space-between;width:38px;flex-shrink:0;text-align:right;font-size:12px;font-weight:700;color:rgba(255,255,255,.65);padding:2px 2px 28px 0"></div>
           <div style="flex:1;min-width:0">
-            <svg id="pressureChart" viewBox="0 0 900 130" preserveAspectRatio="none" style="width:100%;height:100%"></svg>
+            <svg id="pressureChart" viewBox="0 0 900 160" preserveAspectRatio="none" style="width:100%;height:100%"></svg>
           </div>
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:rgba(255,255,255,.5)">
@@ -5545,10 +5607,10 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel">
         <div class="sec">⏱️ Kurzfristig (Stundenauflösung, ±3h)</div>
-        <div style="display:flex;gap:6px;height:130px">
-          <div id="pressureChartShortYLabels" style="display:flex;flex-direction:column;justify-content:space-between;width:38px;flex-shrink:0;text-align:right;font-size:12px;font-weight:700;color:rgba(255,255,255,.65);padding:2px 2px 22px 0"></div>
+        <div style="display:flex;gap:6px;height:160px">
+          <div id="pressureChartShortYLabels" style="display:flex;flex-direction:column;justify-content:space-between;width:38px;flex-shrink:0;text-align:right;font-size:12px;font-weight:700;color:rgba(255,255,255,.65);padding:2px 2px 28px 0"></div>
           <div style="flex:1;min-width:0">
-            <svg id="pressureChartShort" viewBox="0 0 900 130" preserveAspectRatio="none" style="width:100%;height:100%"></svg>
+            <svg id="pressureChartShort" viewBox="0 0 900 160" preserveAspectRatio="none" style="width:100%;height:100%"></svg>
           </div>
         </div>
         <div id="pressureChartShortXLabels" style="display:flex;justify-content:space-between;margin-top:6px;padding-left:44px;font-size:11px;color:rgba(255,255,255,.45)"></div>
