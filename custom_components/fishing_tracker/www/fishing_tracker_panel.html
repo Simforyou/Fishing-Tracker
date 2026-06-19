@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.23 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.24 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -6047,7 +6047,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.23'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.24'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -6933,6 +6933,31 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   const pressureMult = 0.5 + (_pScore / 100) * 0.7;
 
   // Additive Situationsboni (kleinere Gewichtung)
+  // ── 13. Photoperiode ──────────────────────────────────────────────────────
+  let photoBonus = 0;
+  try {
+    const ctr2 = getBestCenter();
+    const photo = photoperiodFactor(date, ctr2[0], ctr2[1]);
+    if (photo.trend < -0.15) {
+      if (['Hecht','Zander','Barsch','Wels'].includes(fishName)) photoBonus += 6;
+    }
+    if (photo.trend > 0.15) {
+      if (['Rotauge','Brasse','Karpfen','Schleie','Rotfeder'].includes(fishName)) photoBonus += 5;
+    }
+  } catch(e) {}
+
+  // ── 14. Persönlicher Lern-Bonus ───────────────────────────────────────────
+  let personalBonus = 0;
+  try {
+    const pat = findFTSensor('map_data')?.attributes?.personal_full?.[fishName];
+    if (pat && pat.total_attempts >= 3) {
+      personalBonus = calcPersonalBonus(pat, {
+        hour, pressure, pressureTrend, solar, temperature: waterTemp,
+        waterTemp, cloudCover, windSpeed
+      }, date);
+    }
+  } catch(e) {}
+
   const bonus = solunarBonus + windBonus + moonBonus + seasonBonus +
                 wxBonus + depthBonus + riverBonus + frontBonus +
                 photoBonus + personalBonus;
