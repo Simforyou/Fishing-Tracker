@@ -117,6 +117,7 @@ class WaterTemperatureEngine:
 
             lo, mid, hi = self._monthly_table.get(month, (10.0, 14.0, 18.0))
             forecast = self._extract_forecast(html)
+            daily_history = self._extract_daily_history(html)
 
             return {
                 "temp": round(current, 1),
@@ -125,6 +126,7 @@ class WaterTemperatureEngine:
                 "monthly_min": lo,
                 "monthly_max": hi,
                 "forecast": forecast,
+                "daily_history": daily_history,
                 "trend": _trend_label(current, mid),
                 "oxygen_mg_l": estimate_oxygen(current),
                 "oxygen_level": oxygen_level_label(current),
@@ -164,6 +166,49 @@ class WaterTemperatureEngine:
             except Exception:
                 continue
         return table if len(table) >= 6 else None
+
+    def _extract_daily_history(self, html: str) -> list[dict]:
+        """Extrahiert tägliche Wassertemperaturen der letzten ~30 Tage aus der Tabelle."""
+        history = []
+        try:
+            rows = re.findall(r"<tr[^>]*>.*?</tr>", html, re.DOTALL | re.IGNORECASE)
+            month_map = {
+                "jan": 1, "feb": 2, "mär": 3, "mar": 3, "apr": 4,
+                "mai": 5, "may": 5, "jun": 6, "jul": 7, "aug": 8,
+                "sep": 9, "okt": 10, "oct": 10, "nov": 11, "dez": 12, "dec": 12,
+            }
+            current_year = datetime.now().year
+            current_month = datetime.now().month
+            for row in rows:
+                cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.DOTALL | re.IGNORECASE)
+                cells = [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
+                if len(cells) < 2:
+                    continue
+                # Format: "JUN 3" oder "JUN 3" → Datum parsen
+                date_match = re.match(r"([A-Za-zÄÖÜäöü]+)\s+(\d{1,2})", cells[0])
+                if not date_match:
+                    continue
+                mon_str = date_match.group(1)[:3].lower()
+                day = int(date_match.group(2))
+                mon_num = month_map.get(mon_str)
+                if not mon_num:
+                    continue
+                # Jahr bestimmen (könnte Vorjahr sein)
+                year = current_year
+                if mon_num > current_month + 1:
+                    year = current_year - 1
+                # Temperaturwert aus zweiter Spalte (Aktuell)
+                temp_str = cells[1].replace("°C", "").replace(",", ".").strip()
+                try:
+                    temp = float(temp_str)
+                    if 0.0 < temp < 35.0:
+                        date_str = f"{year}-{mon_num:02d}-{day:02d}"
+                        history.append({"date": date_str, "temp": round(temp, 1)})
+                except (ValueError, TypeError):
+                    continue
+        except Exception as err:
+            _LOGGER.debug("WaterTemp: daily_history Parse-Fehler: %s", err)
+        return history
 
     def _extract_forecast(self, html: str) -> list[float]:
         lower = html.lower()

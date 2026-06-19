@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.16 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.18 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -4044,7 +4044,27 @@ function triggerWaterTempHistoryFetch() {
   if (_waterTempHistoryAsync && (Date.now() - _waterTempHistoryAsync.t) < 600000) return;
   _waterTempHistoryInFlight = true;
 
-  // NLWKN nur wenn Sensor auch einen VALIDEN numerischen Wert hat
+  // ── Quelle 1: wassertemperatur.site daily_history (echte Messwerte, beste Quelle) ──
+  try {
+    const wtSensor = haStates['sensor.wassertemperatur_gewaesser'];
+    const dailyHistory = wtSensor?.attributes?.daily_history;
+    if (dailyHistory && Array.isArray(dailyHistory) && dailyHistory.length >= 3) {
+      // Format: [{date: "2026-06-18", temp: 16.7}, ...]
+      const samples = dailyHistory
+        .filter(d => d.date && d.temp != null)
+        .map(d => ({ t: new Date(d.date).getTime() + 12 * 3600 * 1000, p: parseFloat(d.temp) }))
+        .filter(s => !isNaN(s.t) && !isNaN(s.p) && s.p > 0)
+        .sort((a, b) => a.t - b.t);
+      if (samples.length >= 3) {
+        _waterTempHistoryInFlight = false;
+        _waterTempHistoryAsync = { t: Date.now(), samples, source: 'wassertemperatur.site' };
+        if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
+        return;
+      }
+    }
+  } catch(e) {}
+
+  // ── Quelle 2: NLWKN / HA Recorder ───────────────────────────────────────
   const nlwknState = haStates['sensor.fishing_tracker_nlwkn_water_temp'];
   const nlwknValid = nlwknState && !isNaN(parseFloat(nlwknState.state)) && parseFloat(nlwknState.state) > 0;
   const entity = nlwknValid
@@ -4097,8 +4117,11 @@ function triggerWaterTempHistoryFetch() {
 // Baut Wassertemperatur-Verlauf der letzten 24h aus dem Open-Meteo-Cache
 // Mittel aus surface_temperature und soil_temperature_0_to_7cm (Proxy für Gewässertemp)
 function buildOpenMeteoWaterTempHistory() {
+  // Wassertemperatur-Proxy aus Lufttemperatur mit thermischer Trägheit
+  // Flüsse/Bäche folgen der Lufttemperatur mit ~2-3 Tage Verzögerung und Dämpfung.
+  // Formel: T_wasser(t) ≈ gleitender Mittelwert T_luft(t-0..t-48h) × 0.85 + Offset
+  // Deutlich realistischer als surface_temperature (Bodenoberfläche, bis 30°C im Sommer!)
   try {
-    // Cache-Kandidaten in Prioritätsreihenfolge: aktueller Spot-Center, dann alle übrigen Keys
     const keysSeen = new Set();
     const candidates = [];
     try {
@@ -4113,21 +4136,45 @@ function buildOpenMeteoWaterTempHistory() {
     }
     const now = Date.now();
     const cutoff = now - 24 * 3600 * 1000;
-    // Probiere jeden Key bis einer brauchbare Samples liefert
+
     for (const key of candidates) {
       const cache = _openMeteoCache[key];
       if (!cache || !cache.data) continue;
+
+      // Alle Stundenwerte der letzten 48h sammeln für gleitenden Mittelwert
+      const allRecent = cache.data.filter(f => {
+        const t = new Date(f.datetime).getTime();
+        return t >= now - 48 * 3600 * 1000 && t <= now + 1000;
+      });
+      if (allRecent.length < 6) continue;
+
+      // Gleitender 24h-Mittelwert der Lufttemperatur → Wassertemp-Proxy
+      // + Dämpfungsfaktor 0.72 (Wasser speichert Wärme besser)
+      // + saisonaler Offset (Grundwasser kälter als Luft im Sommer, wärmer im Winter)
+      const month = new Date().getMonth() + 1;
+      const seasonOffset = month >= 5 && month <= 9 ? -3.5 : (month >= 11 || month <= 2 ? 2.0 : -1.5);
+
       const samples = [];
       for (const f of cache.data) {
         const t = new Date(f.datetime).getTime();
         if (t < cutoff || t > now + 1000) continue;
-        const st = parseFloat(f.surface_temperature);
-        const so = parseFloat(f.soil_temperature_0_to_7cm);
-        const vals = [st, so].filter(v => !isNaN(v) && v > -2 && v < 40);
-        if (vals.length > 0) {
-          const v = vals.reduce((a,c) => a+c, 0) / vals.length;
-          samples.push({ t: t, p: Math.round(v * 10) / 10 });
-        }
+        const airT = parseFloat(f.temperature);
+        if (isNaN(airT)) continue;
+
+        // Gleitender Mittelwert der vorherigen 12 Stunden Lufttemperatur
+        const windowStart = t - 12 * 3600 * 1000;
+        const windowPts = allRecent.filter(x => {
+          const xt = new Date(x.datetime).getTime();
+          return xt >= windowStart && xt <= t;
+        });
+        const avgAir = windowPts.length > 0
+          ? windowPts.reduce((s, x) => s + parseFloat(x.temperature || airT), 0) / windowPts.length
+          : airT;
+
+        const waterT = Math.round((avgAir * 0.72 + seasonOffset) * 10) / 10;
+        // Plausibilitätscheck: Wassertemp zwischen 0°C und 30°C
+        if (waterT < 0 || waterT > 30) continue;
+        samples.push({ t, p: waterT });
       }
       if (samples.length >= 2) return samples;
     }
@@ -5777,14 +5824,15 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
           let wha = null;
           try { wha = (typeof _waterTempHistoryAsync !== 'undefined') ? _waterTempHistoryAsync : null; } catch(e) {}
           if (wha && wha.samples && wha.samples.length >= 2) {
+            if (wha.source === 'wassertemperatur.site') return 'letzte 30 Tage · wassertemperatur.site';
             const isOM = (() => {
               try {
                 const om = (typeof buildOpenMeteoWaterTempHistory === 'function') ? buildOpenMeteoWaterTempHistory() : [];
                 if (om.length === 0) return false;
                 return JSON.stringify(wha.samples.slice(0,2)) === JSON.stringify(om.slice(0,2));
-              } catch(e) { return false; }
+              } catch(e) { return false; }\
             })();
-            return isOM ? 'letzte 24h · Open-Meteo Modell' : 'letzte 24h aus HA Recorder';
+            return isOM ? 'letzte 24h · Lufttemp-Proxy' : 'letzte 24h aus HA Recorder';
           }
           return 'letzte 24h';
         })()}</span></div>
@@ -5998,7 +6046,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.16'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.18'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
