@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.22 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.23 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -6047,7 +6047,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.22'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.23'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -6751,13 +6751,50 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   const curve    = d.curve || Array(24).fill(50);
   const bioNow   = curve[hour] || 50;
 
-  // ── 2. Wassertemperatur (Gaußverteilung um Optimum) ──────────────────────
-  const tempOpt  = DEPTH[fishName] ? waterTemp : 15; // Näherung
-  const tempMap  = { Zander:14, Hecht:12, Barsch:16, Karpfen:22, Schleie:20,
-                     Aal:18, Brasse:17, Rotauge:18, Rotfeder:20, Döbel:16,
-                     Rapfen:14, Wels:22, Güster:16, Grundel:14, Ukelei:20, Forelle:12 };
-  const tOpt     = tempMap[fishName] || 15;
-  const tempFactor = Math.exp(-0.5 * Math.pow((waterTemp - tOpt) / 5, 2));
+  // ── 2. Wassertemperatur — artspezifischer Multiplikator ─────────────────
+  // Quelle: alpenforelle.ch/wassertemperatur-beim-fischen (wissenschaftliche Tabelle)
+  // Unterhalb Min oder über krit. Max = starke Reduktion; im Perfektbereich = 1.0
+  const TEMP_RANGES = {
+    // [min_aktiv, opt_von, opt_bis, perf_von, perf_bis, krit_max]
+    Zander:   [6,  12, 31, 20, 28, 33],
+    Barsch:   [4,   6, 28, 20, 25, 30],
+    Hecht:    [4,   9, 28, 20, 26, 30],  // Hecht: perfekt 20-26, über 28 Stress
+    Karpfen:  [8,  15, 32, 26, 31, 34],
+    Schleie:  [8,  15, 26, 20, 26, 28],
+    Brasse:   [4,   8, 28, 20, 26, 30],
+    Rotauge:  [6,  12, 25, 18, 24, 27],
+    Rotfeder: [8,  14, 30, 20, 28, 32],
+    Döbel:    [4,   8, 28, 18, 26, 30],
+    Aal:      [4,   8, 30, 20, 25, 32],
+    Forelle:  [2,   4, 19, 13, 17, 21],
+    Rapfen:   [4,   8, 26, 16, 22, 28],
+    Wels:     [8,  12, 28, 22, 28, 30],
+    Güster:   [4,   8, 28, 20, 26, 30],
+    Grundel:  [4,   8, 24, 16, 22, 26],
+    Ukelei:   [6,  12, 28, 18, 24, 30],
+  };
+  const tr = TEMP_RANGES[fishName] || [4, 8, 28, 16, 24, 30];
+  const [tMin, tOptLo, tOptHi, tPerfLo, tPerfHi, tKritMax] = tr;
+  let tempFactor;
+  if (waterTemp >= tPerfLo && waterTemp <= tPerfHi) {
+    tempFactor = 1.0;           // Perfektbereich: volle Aktivität
+  } else if (waterTemp >= tOptLo && waterTemp < tPerfLo) {
+    // Unterhalb Perfekt aber im Optimum: linear von 0.6 auf 1.0
+    tempFactor = 0.6 + 0.4 * (waterTemp - tOptLo) / (tPerfLo - tOptLo);
+  } else if (waterTemp > tPerfHi && waterTemp <= tOptHi) {
+    // Über Perfekt aber noch im Optimum: linear von 1.0 auf 0.6
+    tempFactor = 0.6 + 0.4 * (tOptHi - waterTemp) / (tOptHi - tPerfHi);
+  } else if (waterTemp > tOptHi && waterTemp <= tKritMax) {
+    // Kritischer Bereich: stark reduziert (0.6 → 0.15)
+    tempFactor = 0.6 - 0.45 * (waterTemp - tOptHi) / (tKritMax - tOptHi);
+  } else if (waterTemp > tKritMax) {
+    tempFactor = 0.05;          // Über kritischem Max: Hitzestarre
+  } else if (waterTemp >= tMin && waterTemp < tOptLo) {
+    // Unter Optimum: linear von 0.2 auf 0.6
+    tempFactor = 0.2 + 0.4 * (waterTemp - tMin) / (tOptLo - tMin);
+  } else {
+    tempFactor = 0.1;           // Unter Minimum: fast inaktiv
+  }
 
   // ── 3. Laichzeit ──────────────────────────────────────────────────────────
   let spawnMod = 1.0;
@@ -6787,44 +6824,10 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     }
   }
 
-  // ── 5. Luftdruck & Trend (artspezifisch) ─────────────────────────────────
-  const _pStable = computeStabilityHours(pressure);
-  const _pScore  = pressureBiteFavorability(pressure, pressureTrend, _pStable, fishName);
-  // Score 0–100 → Bonus -20…+20 (zentriert bei Score=50 → 0)
-  const pressureBonus = (_pScore - 50) * 0.4;
-
-  // ── 6. Sonneneinstrahlung & Sonnenstand ──────────────────────────────────
-  let lightBonus = 0;
+  // ── 5. Sonnenstand-Variablen (für Licht-Multiplikator unten) ─────────────
   const isDawn   = sunElevation > -5  && sunElevation < 10;
-  const isDusk   = isDawn; // Schätzen – am Abend gleiches Muster
   const isNight  = sunElevation < 0;
   const highSun  = sunElevation > 40;
-
-  // Dämmerung: vorteilhaft – aber an biologische Aktivität gekoppelt, damit
-  // Tagfische (z.B. Rotauge) keine künstliche Morgendämmerungs-Spitze bekommen.
-  // Raubfische (Bio-Peak bei Dämmerung) behalten den vollen Bonus.
-  if (isDawn) lightBonus += 12 * (0.35 + 0.65 * Math.min(1, bioNow / 70));
-
-  if (['Zander','Aal'].includes(fishName)) {
-    if (isNight || solar < 30)   lightBonus += 15;
-    else if (solar < 150)        lightBonus += 8;
-    else if (solar > 500)        lightBonus -= 10;
-    else if (solar > 800)        lightBonus -= 18;
-  } else if (['Wels','Grundel'].includes(fishName)) {
-    if (isNight || solar < 50)   lightBonus += 12;
-    else if (solar > 600)        lightBonus -= 8;
-  } else if (['Hecht','Barsch','Rapfen'].includes(fishName)) {
-    if (isDawn)                  lightBonus += 5;
-    else if (solar > 200 && solar < 500) lightBonus += 3;
-    else if (solar > 800)        lightBonus -= 6;
-  } else if (['Karpfen','Schleie','Brasse'].includes(fishName)) {
-    if (solar > 100 && solar < 500) lightBonus += 5;
-    else if (highSun && solar > 700) lightBonus -= 4;
-    else if (isNight)               lightBonus -= 8;
-  } else { // Weißfische (Rotauge, Ukelei etc.)
-    if (solar > 50 && solar < 300)  lightBonus += 5;
-    else if (highSun && solar > 600) lightBonus -= 6;
-  }
 
   // ── 7. Windrichtung ───────────────────────────────────────────────────────
   let windBonus = 0;
@@ -6878,63 +6881,68 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     else if (fcData._frontInfo.type === 'mild') frontBonus = -5;
   }
 
-  // ── 14. Sauerstoff-Modell (kritisch im Sommer) ───────────────────────────
-  let oxygenBonus = 0;
-  // Gelöster Sauerstoff sinkt mit steigender Wassertemp (Henry'sches Gesetz)
-  // O2-Sättigung bei 4°C ~13mg/l, bei 20°C ~9mg/l, bei 28°C ~7.8mg/l
-  const o2sat = 14.6 - 0.41*waterTemp + 0.008*waterTemp*waterTemp; // mg/l Näherung
-  // Niedriger Abfluss + hohe Temp = O2-Mangel (Strömung bringt Sauerstoff)
+
+
+  // ── Finale Berechnung (Multiplikator-Modell) ──────────────────────────────
+  // Basis: biologische Aktivitätskurve × Temperatur × Laich
+  // Dann: additive Boni/Mali für Situationsfaktoren
+  // Kritische negative Faktoren (Licht für Zander, O2-Mangel) als Multiplikator
+  // damit sie auch bei maximalem Basisscore effektiv nach unten ziehen
+
+  // Licht-Multiplikator (artspezifisch — stärkster situativer Faktor)
+  let lightMult = 1.0;
+  if (['Zander', 'Aal', 'Wels'].includes(fishName)) {
+    // Lichtscheue Nachtjäger: Hochsonne = starke Reduktion
+    if (solar > 700 || (sunElevation > 35 && cloudCover < 30)) lightMult = 0.45;
+    else if (solar > 400) lightMult = 0.65;
+    else if (solar > 150) lightMult = 0.80;
+    else if (isNight || solar < 50) lightMult = 1.25;      // Nacht: Bonus
+    else if (isDawn) lightMult = 1.15;
+  } else if (['Hecht', 'Barsch', 'Rapfen'].includes(fishName)) {
+    // Dämmerungsjäger: Hochsonne leicht ungünstig
+    if (solar > 800 && cloudCover < 20) lightMult = 0.75;
+    else if (solar > 500) lightMult = 0.88;
+    else if (isDawn || (solar > 50 && solar < 300)) lightMult = 1.10;
+  } else if (['Karpfen', 'Schleie', 'Brasse', 'Rotauge', 'Rotfeder'].includes(fishName)) {
+    // Friedfische: etwas Licht ok, Knallsonne im Sommer ungünstig
+    if (sunElevation > 45 && cloudCover < 20 && waterTemp > 20) lightMult = 0.80;
+    else if (isNight) lightMult = 0.75;
+    else if (solar > 100 && solar < 500) lightMult = 1.05;
+  }
+
+  // Sauerstoff-Multiplikator (kritisch bei warmem Wasser)
+  let o2Mult = 1.0;
+  const o2sat = 14.6 - 0.41*waterTemp + 0.008*waterTemp*waterTemp;
   let o2effective = o2sat;
   if (_riverData && _riverData.isLow) o2effective -= 1.5;
   if (_riverData && (_riverData.status === 'rising' || _riverData.status === 'falling')) o2effective += 0.5;
-
-  if (o2effective < 6) {
-    // Kritischer O2-Mangel: fast alle Fische träge
-    oxygenBonus = -15;
-    if (['Hecht','Forelle','Rapfen','Döbel'].includes(fishName)) oxygenBonus = -22; // sauerstoffliebend
+  if (o2effective < 5) {
+    o2Mult = ['Forelle','Rapfen','Döbel'].includes(fishName) ? 0.30 : 0.50;
+  } else if (o2effective < 6.5) {
+    o2Mult = ['Karpfen','Schleie','Aal','Wels'].includes(fishName) ? 0.80 : 0.65;
   } else if (o2effective < 7.5) {
-    oxygenBonus = -7;
-    if (['Karpfen','Schleie','Aal','Wels'].includes(fishName)) oxygenBonus = -2; // tolerant
+    o2Mult = 0.90;
   } else if (o2effective > 10) {
-    oxygenBonus = 4; // sauerstoffreich = aktiv
+    o2Mult = 1.08; // sauerstoffreich: leicht positiv
   }
 
-  // ── 15. Photoperiode (Tageslicht-Trend) ──────────────────────────────────
-  let photoBonus = 0;
-  try {
-    const ctr2 = getBestCenter();
-    const photo = photoperiodFactor(date, ctr2[0], ctr2[1]);
-    // Herbst (abnehmende Tageslänge): triggert Fressphase bei Raubfisch
-    if (photo.trend < -0.15) { // Tage werden kürzer (Herbst)
-      if (['Hecht','Zander','Barsch','Wels'].includes(fishName)) photoBonus += 6; // Herbstfraß
-    }
-    // Frühjahr (zunehmende Tageslänge): Laichvorbereitung, hohe Aktivität
-    if (photo.trend > 0.15) {
-      if (['Rotauge','Brasse','Karpfen','Schleie','Rotfeder'].includes(fishName)) photoBonus += 5;
-    }
-  } catch(e) {}
+  // Druck-Multiplikator (Physoclisten empfindlicher)
+  const _pStable = computeStabilityHours(pressure);
+  const _pScore  = pressureBiteFavorability(pressure, pressureTrend, _pStable, fishName);
+  // _pScore 0–100 → Mult 0.5–1.2
+  const pressureMult = 0.5 + (_pScore / 100) * 0.7;
 
-  // ── 16. Persönlicher Lern-Bonus aus Fangbuch ─────────────────────────────
-  let personalBonus = 0;
-  try {
-    const pat = findFTSensor('map_data')?.attributes?.personal_full?.[fishName];
-    if (pat && pat.total_attempts >= 3) {
-      personalBonus = calcPersonalBonus(pat, {
-        hour, pressure, pressureTrend, solar, temperature: waterTemp,
-        waterTemp, cloudCover, windSpeed
-      }, date);
-    }
-  } catch(e) {}
+  // Additive Situationsboni (kleinere Gewichtung)
+  const bonus = solunarBonus + windBonus + moonBonus + seasonBonus +
+                wxBonus + depthBonus + riverBonus + frontBonus +
+                photoBonus + personalBonus;
 
-  // ── Finale Berechnung ─────────────────────────────────────────────────────
-  const base  = bioNow * tempFactor * spawnMod;
-  const bonus = solunarBonus + pressureBonus + lightBonus + windBonus +
-                moonBonus + seasonBonus + wxBonus + depthBonus +
-                riverBonus + frontBonus + oxygenBonus + photoBonus + personalBonus;
-  // NaN-Schutz: bei fehlenden Sensorwerten (alle null) niemals "NaN%" anzeigen
-  const _raw = Math.round(base + bonus);
-  if (isNaN(_raw)) { const _b = Math.round(base); return isNaN(_b) ? 50 : Math.min(97, Math.max(5, _b)); }
-  // raw-Modus: ungekapptes Total für Vergleich/Ranking zwischen Tagen (kann >97 sein)
+  // Gesamtscore
+  const _raw = Math.round(
+    bioNow * tempFactor * spawnMod * lightMult * o2Mult * pressureMult + bonus
+  );
+
+  if (isNaN(_raw)) { const _b = Math.round(bioNow * tempFactor); return isNaN(_b) ? 50 : Math.min(97, Math.max(5, _b)); }
   if (options && options.raw) return _raw;
   return Math.min(97, Math.max(5, _raw));
 }
