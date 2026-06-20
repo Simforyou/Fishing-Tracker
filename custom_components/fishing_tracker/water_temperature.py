@@ -122,6 +122,7 @@ class WaterTemperatureEngine:
             return {
                 "temp": round(current, 1),
                 "source": "wassertemperatur.site",
+                "source_url": url,
                 "monthly_avg": mid,
                 "monthly_min": lo,
                 "monthly_max": hi,

@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.34 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.36 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -551,6 +551,124 @@ async function fetchOpenMeteoForecast(lat, lon) {
 
 // Wassertemperatur-Schätzung aus Internetquellen, wenn Sensor fehlt oder als Vergleichswert
 // Fallback-Kette: Sensor → Open-Meteo surface_temperature → 5-Tage gleitendes Luft-Temp-Mittel
+// ══════════════════════════════════════════════════════════════════════════
+// GEWÄSSER-AUSWAHL (wassertemperatur.site)
+// ══════════════════════════════════════════════════════════════════════════
+// Kuratierte Liste für die Region Grafschaft Bentheim / Niedergrafschaft (30km)
+// + grenznahe NL-Flüsse. Slug = letzter URL-Teil von wassertemperatur.site.
+const FT_REGIONAL_WATERS = [
+  { name: 'Vechte',        slug: 'vechte',        region: 'Grafschaft Bentheim' },
+  { name: 'Dinkel',        slug: 'dinkel',        region: 'Grafschaft Bentheim' },
+  { name: 'Ems',           slug: 'ems',           region: 'Emsland' },
+  { name: 'Berkel',        slug: 'berkel',        region: 'NRW / NL Grenze' },
+  { name: 'Bocholter Aa',  slug: 'bocholter-aa',  region: 'NRW / NL Grenze' },
+  { name: 'Issel (Oude IJssel)', slug: 'oude-ijssel', region: 'NL Grenze' },
+];
+
+// Beliebte überregionale Flüsse für die Suche (kann erweitert werden)
+const FT_MORE_WATERS = [
+  { name: 'Rhein', slug: 'rhine' }, { name: 'Weser', slug: 'weser' },
+  { name: 'Elbe', slug: 'elbe' }, { name: 'Donau', slug: 'danube' },
+  { name: 'Main', slug: 'main' }, { name: 'Mosel', slug: 'moselle' },
+  { name: 'Aller', slug: 'aller' }, { name: 'Leine', slug: 'leine' },
+  { name: 'Hase', slug: 'hase' }, { name: 'Hunte', slug: 'hunte' },
+  { name: 'Aa', slug: 'aa' }, { name: 'Lippe', slug: 'lippe' },
+  { name: 'Ruhr', slug: 'ruhr' }, { name: 'Lahn', slug: 'lahn' },
+  { name: 'Isar', slug: 'isar' }, { name: 'Lech', slug: 'lech' },
+  { name: 'Inn', slug: 'inn' }, { name: 'Neckar', slug: 'neckar' },
+  { name: 'Saale', slug: 'saale' }, { name: 'Spree', slug: 'spree' },
+  { name: 'Havel', slug: 'havel' }, { name: 'Maas', slug: 'meuse' },
+  { name: 'Niers', slug: 'niers' }, { name: 'Rur', slug: 'roer' },
+  { name: 'Schwalm', slug: 'schwalm' }, { name: 'Aare', slug: 'aare' },
+];
+
+function ftWaterUrl(slug) {
+  return 'https://wassertemperatur.site/flusse/water-temp-in-' + slug;
+}
+
+// Aktuell gewähltes Gewässer aus Sensor-Attribut ableiten
+function getCurrentWaterName() {
+  try {
+    const haEl = window.parent?.document?.querySelector('home-assistant');
+    const sensor = haEl?.hass?.states?.['sensor.wassertemperatur_gewaesser'];
+    const url = sensor?.attributes?.source_url || sensor?.attributes?.url || '';
+    if (url) {
+      const m = url.match(/water-temp-in-([a-z0-9-]+)/i);
+      if (m) {
+        const slug = m[1];
+        const found = [...FT_REGIONAL_WATERS, ...FT_MORE_WATERS].find(w => w.slug === slug);
+        return found ? found.name : slug;
+      }
+    }
+  } catch(e) {}
+  return null;
+}
+
+let _waterPickerOpen = false;
+async function selectWaterBody(slug, name) {
+  const url = ftWaterUrl(slug);
+  _waterPickerOpen = false;
+  // Service aufrufen → Backend wechselt Gewässer + scrapt neu
+  const ok = await callHAService('fishing_tracker', 'set_water_url', { url });
+  // Cache leeren damit Frontend neu lädt
+  try { _waterTempHistoryAsync = null; _waterTempHistoryInFlight = false; window._wtDebugLogged = false; } catch(e){}
+  // Kurz warten bis Backend gescrapt hat, dann neu rendern
+  if (typeof showToast === 'function') showToast('Gewässer: ' + name + ' — lädt…');
+  setTimeout(() => { scheduleRenderView(); }, 2500);
+  setTimeout(() => { scheduleRenderView(); }, 6000);
+}
+
+function waterPickerHTML() {
+  const curName = getCurrentWaterName() || 'Vechte';
+  const regionalChips = FT_REGIONAL_WATERS.map(w => {
+    const active = w.name === curName;
+    return '<button onclick="selectWaterBody(\'' + w.slug + '\',\'' + w.name + '\')" style="' +
+      'padding:7px 12px;border-radius:16px;border:1px solid ' + (active ? 'rgba(103,211,255,.6)' : 'rgba(255,255,255,.12)') + ';' +
+      'background:' + (active ? 'rgba(103,211,255,.15)' : 'rgba(255,255,255,.04)') + ';' +
+      'color:' + (active ? '#67d3ff' : 'var(--txt-main,#e6edf3)') + ';font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">' +
+      w.name + '</button>';
+  }).join('');
+
+  return '<div style="background:rgba(103,211,255,.05);border:1px solid rgba(103,211,255,.15);border-radius:12px;padding:12px;margin-bottom:12px">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+      '<span style="font-size:12px;font-weight:700;color:#67d3ff">🌊 Gewässer wählen</span>' +
+      '<span style="font-size:11px;color:var(--txt-muted,#8b949e)">aktuell: <b style="color:var(--txt-main,#e6edf3)">' + curName + '</b></span>' +
+    '</div>' +
+    '<div style="font-size:10px;color:var(--txt-muted,#8b949e);margin-bottom:8px">Deine Region:</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">' + regionalChips + '</div>' +
+    '<div style="font-size:10px;color:var(--txt-muted,#8b949e);margin-bottom:6px">Anderes Gewässer suchen:</div>' +
+    '<input id="waterSearchInput" type="text" placeholder="z.B. Rhein, Weser, Hase…" ' +
+      'oninput="filterWaterSearch(this.value)" ' +
+      'style="width:100%;box-sizing:border-box;padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.12);' +
+      'background:rgba(255,255,255,.04);color:var(--txt-main,#e6edf3);font-size:13px;margin-bottom:8px">' +
+    '<div id="waterSearchResults" style="display:flex;flex-wrap:wrap;gap:6px"></div>' +
+    '<div style="font-size:9px;color:var(--txt-muted,#8b949e);margin-top:10px;opacity:.7">Daten von wassertemperatur.site · Nach Wechsel kurz warten bis geladen</div>' +
+  '</div>';
+}
+
+function filterWaterSearch(query) {
+  const results = document.getElementById('waterSearchResults');
+  if (!results) return;
+  const q = query.trim().toLowerCase();
+  if (q.length < 1) { results.innerHTML = ''; return; }
+  const matches = FT_MORE_WATERS.filter(w => w.name.toLowerCase().includes(q)).slice(0, 12);
+  if (!matches.length) {
+    results.innerHTML = '<span style="font-size:11px;color:var(--txt-muted,#8b949e)">Nichts gefunden. Tipp: Versuche den deutschen Flussnamen.</span>';
+    return;
+  }
+  results.innerHTML = matches.map(w =>
+    '<button onclick="selectWaterBody(\'' + w.slug + '\',\'' + w.name + '\')" style="' +
+    'padding:6px 11px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);' +
+    'color:var(--txt-main,#e6edf3);font-size:12px;cursor:pointer;white-space:nowrap">' + w.name + '</button>'
+  ).join('');
+}
+
+function toggleWaterPicker() {
+  _waterPickerOpen = !_waterPickerOpen;
+  const box = document.getElementById('waterPickerBox');
+  if (box) box.innerHTML = _waterPickerOpen ? waterPickerHTML() : '';
+}
+
 function getEstimatedWaterTemp() {
   // Direkt aus parent.hass.states lesen — umgeht haStates-Cache-Timing-Problem
   let wtds = null, nlwknState = null;
@@ -6221,7 +6339,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.34'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.36'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7670,6 +7788,10 @@ async function showLocationForecast(lat, lon, name) {
       '</div>' +
     '</div>' +
 
+    '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">' +
+      '<button onclick="toggleWaterPicker()" style="padding:6px 12px;border-radius:14px;border:1px solid rgba(103,211,255,.3);background:rgba(103,211,255,.08);color:#67d3ff;font-size:12px;font-weight:600;cursor:pointer">🌊 Gewässer wechseln</button>' +
+    '</div>' +
+    '<div id="waterPickerBox"></div>' +
     '<div id="locWaterBox"></div>' +
     '<div id="locRiverBox"></div>' +
     '<div style="font-size:12px;font-weight:700;color:var(--txt-muted,#8b949e);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🎣 Beißchance ' + topFish + ' · 14 Tage</div>' +
@@ -7698,20 +7820,27 @@ async function showLocationForecast(lat, lon, name) {
   // Wassertemperatur-Box anzeigen
   try {
     const wbox = document.getElementById('locWaterBox');
-    const wtNow = avgDaily[0]?.waterTemp;
+    // Echten Sensor-Wert bevorzugen (wassertemperatur.site), sonst Schätzmodell
+    const realWt = (typeof getEstimatedWaterTemp === 'function') ? getEstimatedWaterTemp() : null;
+    const isRealMeasurement = realWt && (realWt.source === 'wassertemperatur_site' || realWt.source === 'nlwkn');
+    const wtNow = isRealMeasurement ? realWt.value : avgDaily[0]?.waterTemp;
     if (wbox && wtNow != null) {
       const wt7 = avgDaily[6]?.waterTemp;
-      const trend = wt7 != null ? wt7 - wtNow : 0;
+      const trend = wt7 != null ? wt7 - (avgDaily[0]?.waterTemp ?? wtNow) : 0;
       const trIcon = trend > 0.5 ? '📈 steigend' : trend < -0.5 ? '📉 fallend' : '➡️ stabil';
       const wtCol = wtNow < 8 ? '#67d3ff' : wtNow < 15 ? '#3fb950' : wtNow < 22 ? '#ffd23f' : '#ff9d18';
+      const titleLabel = isRealMeasurement ? '🌡️ Wassertemperatur (gemessen)' : '🌡️ Wassertemperatur (geschätzt)';
+      const srcLabel = isRealMeasurement
+        ? (realWt.label || 'wassertemperatur.site')
+        : 'Modell aus 21 Tagen Lufttemperatur-Historie';
       wbox.innerHTML =
         '<div style="background:rgba(103,211,255,.08);border:1px solid rgba(103,211,255,.2);border-radius:12px;padding:12px;margin-bottom:12px">' +
-        '<div style="font-size:12px;font-weight:700;color:#67d3ff;margin-bottom:6px">🌡️ Wassertemperatur (geschätzt)</div>' +
+        '<div style="font-size:12px;font-weight:700;color:#67d3ff;margin-bottom:6px">' + titleLabel + '</div>' +
         '<div style="display:flex;justify-content:space-between;align-items:center">' +
         '<span style="font-size:22px;font-weight:900;color:' + wtCol + '">' + wtNow.toFixed(1) + '°C</span>' +
         '<span style="font-size:12px;color:var(--txt-muted,#8b949e)">' + trIcon + ' (7 Tage)</span>' +
         '</div>' +
-        '<div style="font-size:10px;color:var(--txt-muted,#8b949e);margin-top:4px;opacity:.7">Modell aus 21 Tagen Lufttemperatur-Historie</div>' +
+        '<div style="font-size:10px;color:var(--txt-muted,#8b949e);margin-top:4px;opacity:.7">' + srcLabel + '</div>' +
         '</div>';
     }
   } catch(e) {}
@@ -7850,18 +7979,22 @@ function locForecastWeatherHTML() {
   if (!_locForecast) { loadSelectedLocationData(); return locForecastLoadingPanel('Ortswetter für ' + loc.name); }
   const lf = _locForecast;
   const dn = d => ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()];
-  const wtNow = lf.avgDaily[0]?.waterTemp, wt7 = lf.avgDaily[6]?.waterTemp;
+  const realWt2 = (typeof getEstimatedWaterTemp === 'function') ? getEstimatedWaterTemp() : null;
+  const isReal2 = realWt2 && (realWt2.source === 'wassertemperatur_site' || realWt2.source === 'nlwkn');
+  const wtNow = isReal2 ? realWt2.value : lf.avgDaily[0]?.waterTemp, wt7 = lf.avgDaily[6]?.waterTemp;
   let waterBox = '';
   if (wtNow != null) {
-    const trend = wt7!=null ? wt7-wtNow : 0;
+    const trend = wt7!=null ? wt7-(lf.avgDaily[0]?.waterTemp ?? wtNow) : 0;
     const trIcon = trend>0.5?'📈 steigend':trend<-0.5?'📉 fallend':'➡️ stabil';
     const wtCol = wtNow<8?'#67d3ff':wtNow<15?'#3fb950':wtNow<22?'#ffd23f':'#ff9d18';
+    const titleLabel2 = isReal2 ? '🌡️ Wassertemperatur (gemessen)' : '🌡️ Wassertemperatur (geschätzt)';
+    const srcLabel2 = isReal2 ? (realWt2.label || 'wassertemperatur.site') : 'Modell aus 21 Tagen Lufttemperatur-Historie';
     waterBox = `<div style="background:rgba(103,211,255,.08);border:1px solid rgba(103,211,255,.2);border-radius:12px;padding:12px;margin-bottom:10px">
-      <div style="font-size:12px;font-weight:700;color:#67d3ff;margin-bottom:6px">🌡️ Wassertemperatur (geschätzt)</div>
+      <div style="font-size:12px;font-weight:700;color:#67d3ff;margin-bottom:6px">${titleLabel2}</div>
       <div style="display:flex;justify-content:space-between;align-items:center">
       <span style="font-size:22px;font-weight:900;color:${wtCol}">${wtNow.toFixed(1)}°C</span>
       <span style="font-size:12px;color:var(--txt-muted)">${trIcon} (7 Tage)</span></div>
-      <div style="font-size:10px;color:var(--txt-muted);margin-top:4px;opacity:.7">Modell aus 21 Tagen Lufttemperatur-Historie</div></div>`;
+      <div style="font-size:10px;color:var(--txt-muted);margin-top:4px;opacity:.7">${srcLabel2}</div></div>`;
   }
   let riverBox = '';
   if (lf.river) {

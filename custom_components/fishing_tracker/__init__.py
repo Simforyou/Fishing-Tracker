@@ -414,6 +414,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, SERVICE_ANALYZE_DEEPER):
         hass.services.async_register(DOMAIN, SERVICE_ANALYZE_DEEPER, handle_analyze_deeper, schema=SERVICE_ANALYZE_SCHEMA)
 
+    # Gewässer-URL wechseln (von wassertemperatur.site) — für Gewässerauswahl im Panel
+    async def handle_set_water_url(call: ServiceCall) -> None:
+        new_url = (call.data.get("url") or "").strip().rstrip("/")
+        if not new_url or "wassertemperatur.site" not in new_url:
+            return
+        eng = hass.data[DOMAIN][entry.entry_id].get("water_temp_engine")
+        if eng:
+            eng.set_url(new_url)
+            eng._cache.clear()  # Cache leeren damit sofort neu gescrapt wird
+        # In Options persistieren (überlebt Neustart)
+        new_options = dict(entry.options)
+        new_options[CONF_WATER_TEMP_URL] = new_url
+        hass.config_entries.async_update_entry(entry, options=new_options)
+        # Sofortiges Update auslösen
+        async_dispatcher_send(hass, SIGNAL_UPDATED)
+
+    if not hass.services.has_service(DOMAIN, "set_water_url"):
+        hass.services.async_register(DOMAIN, "set_water_url", handle_set_water_url,
+            schema=vol.Schema({vol.Required("url"): cv.string}))
+
     # Scan löschen
     async def handle_delete_deeper_scan(call: ServiceCall) -> None:
         scan_name = call.data.get("scan_name", "")

@@ -89,3 +89,14 @@ export_json:
 install_dashboard:
   name: Dashboard installieren
   description: Kopiert die Fishing-Tracker-Dashboard-Dateien erneut nach /config/www.
+
+
+set_water_url:
+  name: Gewässer wechseln
+  description: Wechselt das Gewässer für die Wassertemperatur (von wassertemperatur.site).
+  fields:
+    url:
+      required: true
+      description: Die wassertemperatur.site URL des Gewässers
+      selector:
+        text:
