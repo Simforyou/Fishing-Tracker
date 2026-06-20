@@ -89,9 +89,17 @@ SERVICE_LOG_SCHEMA = vol.Schema({
     vol.Optional("notes", default=""): cv.string,
     vol.Optional("photo_data"): cv.string,       # base64 JPEG
     vol.Optional("water_temp"): vol.Coerce(float),
+    vol.Optional("temperature"): vol.Coerce(float),
+    vol.Optional("wind_speed"): vol.Coerce(float),
+    vol.Optional("wind_gusts"): vol.Coerce(float),
+    vol.Optional("wind_bearing"): vol.Coerce(float),
+    vol.Optional("pressure"): vol.Coerce(float),
+    vol.Optional("cloud_coverage"): vol.Coerce(float),
+    vol.Optional("humidity"): vol.Coerce(float),
+    vol.Optional("solar_radiation"): vol.Coerce(float),
     vol.Optional("angelwetter_index"): vol.Coerce(int),
     vol.Optional("catch_datetime"): cv.string,  # ISO: "2026-05-16T11:30"
-})
+}, extra=vol.ALLOW_EXTRA)
 
 SERVICE_IMPORT_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker.csv"): cv.string})
 SERVICE_EXPORT_SCHEMA = vol.Schema({vol.Optional("path", default="/config/www/fishing_tracker_export.csv"): cv.string})
@@ -433,6 +441,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, "set_water_url"):
         hass.services.async_register(DOMAIN, "set_water_url", handle_set_water_url,
             schema=vol.Schema({vol.Required("url"): cv.string}))
+
+    # Fang aktualisieren (Bearbeiten + Wetter-Abgleich)
+    async def handle_update_catch(call: ServiceCall) -> None:
+        store: FishingStore = hass.data[DOMAIN][entry.entry_id]["store"]
+        ts = call.data.get("timestamp")
+        if not ts:
+            return
+        # Alle Felder außer timestamp als Updates übernehmen
+        updates = {k: v for k, v in call.data.items() if k != "timestamp"}
+        if await store.async_update_entry(ts, updates):
+            async_dispatcher_send(hass, SIGNAL_UPDATED)
+
+    if not hass.services.has_service(DOMAIN, "update_catch"):
+        hass.services.async_register(DOMAIN, "update_catch", handle_update_catch,
+            schema=vol.Schema({
+                vol.Required("timestamp"): cv.string,
+                vol.Optional("fish_type"): cv.string,
+                vol.Optional("length_cm"): vol.Coerce(float),
+                vol.Optional("weight_kg"): vol.Coerce(float),
+                vol.Optional("bait"): cv.string,
+                vol.Optional("spot"): cv.string,
+                vol.Optional("notes"): cv.string,
+                vol.Optional("water_temp"): vol.Coerce(float),
+                vol.Optional("temperature"): vol.Coerce(float),
+                vol.Optional("wind_speed"): vol.Coerce(float),
+                vol.Optional("wind_gusts"): vol.Coerce(float),
+                vol.Optional("wind_bearing"): vol.Coerce(float),
+                vol.Optional("pressure"): vol.Coerce(float),
+                vol.Optional("cloud_coverage"): vol.Coerce(float),
+                vol.Optional("precipitation"): vol.Coerce(float),
+                vol.Optional("humidity"): vol.Coerce(float),
+                vol.Optional("solar_radiation"): vol.Coerce(float),
+                vol.Optional("angelwetter_index"): vol.Coerce(int),
+            }, extra=vol.ALLOW_EXTRA))
 
     # Scan löschen
     async def handle_delete_deeper_scan(call: ServiceCall) -> None:

@@ -100,3 +100,20 @@ set_water_url:
       description: Die wassertemperatur.site URL des Gewässers
       selector:
         text:
+
+
+update_catch:
+  name: Fang bearbeiten
+  description: Aktualisiert Felder eines bestehenden Fangs (Bearbeiten + Wetter-Abgleich).
+  fields:
+    timestamp:
+      required: true
+      description: Zeitstempel des Fangs (zur Identifikation)
+      selector:
+        text:
+    water_temp:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 40

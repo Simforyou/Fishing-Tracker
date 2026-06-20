@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.36 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.42 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -252,6 +252,7 @@ const VIEWS = [
   ['species',  '🎯', 'Zielfische'],
   ['spots',    '📍', 'Spots'],
   ['logbook',  '📘', 'Fangbuch'],
+  ['analysis', '🔬', 'Analyse'],
   ['stats',    '📊', 'Statistiken'],
   ['bait',     '🪱', 'Köder-Wizard'],
   ['weather',  '🌦️', 'Wetter'],
@@ -1358,8 +1359,9 @@ async function fetchWeatherAtTime(isoDatetime, lat, lon) {
       // Wassertemp-Proxy: Mittelwert surface + soil_temperature
       const surfT = g('surface_temperature');
       const soilT = g('soil_temperature_0_to_7cm');
-      const waterTempProxy = (surfT != null && soilT != null) ? (surfT + soilT) / 2
+      const _wtP = (surfT != null && soilT != null) ? (surfT + soilT) / 2
                            : surfT ?? soilT ?? null;
+      const waterTempProxy = _wtP != null ? Math.round(_wtP * 10) / 10 : null;
 
       return {
         temperature:     g('temperature_2m')           ?? 12,
@@ -3333,10 +3335,21 @@ function logNoCatch() {
 
 async function doLogNoCatch(preset) {
   const awIdx  = calcAngelwetterIndex();
-  const waterT = (getEstimatedWaterTemp()?.value || null);
+  const _wtRaw = getEstimatedWaterTemp()?.value; const waterT = _wtRaw != null ? Math.round(_wtRaw * 10) / 10 : null;
+  // Volle Live-Wetterdaten mitspeichern, damit Auswertung Fang vs. Nullnummer vergleichen kann
+  const sensors = collectAllSensors();
+  const r1 = v => v != null ? Math.round(v * 10) / 10 : null;
   const data = {
     angelwetter_index: awIdx,
-    ...(waterT ? { water_temp: waterT } : {}),
+    ...(waterT != null ? { water_temp: waterT } : {}),
+    ...(sensors.temperature != null ? { temperature: r1(sensors.temperature) } : {}),
+    ...(sensors.pressure != null ? { pressure: Math.round(sensors.pressure) } : {}),
+    ...(sensors.windSpeed != null ? { wind_speed: r1(sensors.windSpeed) } : {}),
+    ...(sensors.windGust != null ? { wind_gusts: r1(sensors.windGust) } : {}),
+    ...(sensors.windDir != null ? { wind_bearing: Math.round(sensors.windDir) } : {}),
+    ...(sensors.cloudCover != null ? { cloud_coverage: Math.round(sensors.cloudCover) } : {}),
+    ...(sensors.humidity != null ? { humidity: Math.round(sensors.humidity) } : {}),
+    ...(sensors.solar != null ? { solar_radiation: Math.round(sensors.solar) } : {}),
   };
   if (preset) { data.bait = preset.bait; data.method = preset.method; data.target_fish = preset.fish; }
 
@@ -3869,7 +3882,7 @@ function catchFormView() {
   }
 
   const wx     = getVerifiedWeather();
-  const waterT = (getEstimatedWaterTemp()?.value || null);
+  const _wtRaw = getEstimatedWaterTemp()?.value; const waterT = _wtRaw != null ? Math.round(_wtRaw * 10) / 10 : null;
   const person = haStates['person.christian_rduch']?.attributes;
   // Spot: gespeicherter Wert hat Vorrang, dann GPS-Sensor
   if (!catchFormData.spot) {
@@ -5498,10 +5511,43 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
           <div style="margin-top:10px;font-size:12px;color:var(--muted)">🌔 ${sol.moon_phase_label||'Zunehmend'}</div>
         </div>
       </div>
-      <div class="panel" style="display:flex;gap:10px">
-        <button class="quickBtn catch-btn" onclick="switchView('logbook');openCatchForm()">🐟 ✓<br><small style="font-size:11px;opacity:.7">Fang erfassen</small></button>
-        <button class="quickBtn no-catch-btn" onclick="logNoCatch()">🐟 ✕<br><small style="font-size:11px;opacity:.7">Kein Fang</small></button>
-      </div>`,
+      ${(() => {
+        const sess = getActiveSession();
+        if (sess) {
+          const startT = new Date(sess.start);
+          const mins = Math.round((Date.now() - startT.getTime()) / 60000);
+          const hrs = Math.floor(mins / 60);
+          const durStr = hrs > 0 ? `${hrs}h ${mins % 60}min` : `${mins} min`;
+          const nCatch = (sess.catches || []).length;
+          return `<div class="panel" style="background:linear-gradient(145deg,rgba(7,57,27,.6),rgba(2,17,8,.4));border:1px solid rgba(103,211,63,.4)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+              <div>
+                <div style="font-size:13px;font-weight:800;color:#67d33f">🎣 Session läuft</div>
+                <div style="font-size:11px;color:var(--muted)">seit ${startT.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})} · ${durStr}${sess.water ? ' · ' + sess.water : ''}</div>
+              </div>
+              <div style="text-align:right">
+                <div style="font-size:24px;font-weight:900;color:#67d33f">${nCatch}</div>
+                <div style="font-size:10px;color:var(--muted)">Fänge</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:10px">
+              <button class="quickBtn catch-btn" onclick="openQuickCatchDialog()" style="flex:2">🐟 Fang erfassen</button>
+              <button class="quickBtn" onclick="endSession()" style="flex:1;background:linear-gradient(145deg,#3a2009,#1a0f02);border:1px solid rgba(255,157,24,.4);color:#ff9d18">⏹ Beenden</button>
+            </div>
+          </div>`;
+        } else {
+          return `<div class="panel">
+            <button class="quickBtn catch-btn" onclick="startSession()" style="width:100%;padding:18px">
+              🎣 Angel-Session starten
+              <br><small style="font-size:11px;opacity:.7;font-weight:600">Erfasst Fänge + automatisch alle 15 Min einen Datenpunkt</small>
+            </button>
+            <div style="display:flex;gap:10px;margin-top:10px">
+              <button class="quickBtn catch-btn" onclick="switchView('logbook');openCatchForm()" style="font-size:14px;padding:12px">🐟 ✓<br><small style="font-size:10px;opacity:.7">Einzelfang</small></button>
+              <button class="quickBtn no-catch-btn" onclick="logNoCatch()" style="font-size:14px;padding:12px">🐟 ✕<br><small style="font-size:10px;opacity:.7">Kein Fang</small></button>
+            </div>
+          </div>`;
+        }
+      })()}`,
 
     forecast: () => {
       const tab = currentFcTab || '7days';
@@ -5825,6 +5871,8 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
 `;
     },
+
+    analysis: () => buildAnalysisView(),
 
     stats: () => {
       const h   = findFTSensor('history')?.attributes || {};
@@ -6339,7 +6387,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.36'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.42'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7988,7 +8036,7 @@ function locForecastWeatherHTML() {
     const trIcon = trend>0.5?'📈 steigend':trend<-0.5?'📉 fallend':'➡️ stabil';
     const wtCol = wtNow<8?'#67d3ff':wtNow<15?'#3fb950':wtNow<22?'#ffd23f':'#ff9d18';
     const titleLabel2 = isReal2 ? '🌡️ Wassertemperatur (gemessen)' : '🌡️ Wassertemperatur (geschätzt)';
-    const srcLabel2 = isReal2 ? (realWt2.label || 'wassertemperatur.site') : 'Modell aus 21 Tagen Lufttemperatur-Historie';
+    const srcLabel2 = isReal2 ? (realWt2.label || 'wassertemperatur.site') : ('Modell · Sensor-Quelle: ' + (realWt2?.source || 'null') + '/' + (realWt2?.value ?? '?'));
     waterBox = `<div style="background:rgba(103,211,255,.08);border:1px solid rgba(103,211,255,.2);border-radius:12px;padding:12px;margin-bottom:10px">
       <div style="font-size:12px;font-weight:700;color:#67d3ff;margin-bottom:6px">${titleLabel2}</div>
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -8016,6 +8064,10 @@ function locForecastWeatherHTML() {
     <div style="font-size:12px;color:var(--txt-muted)">💨 ${Math.round(d.wind)}</div></div>`).join('');
   return `<div class="panel blue" style="margin-top:0">
     <div class="sec">📍 ${lf.name} · ${lf.sourceNames.length} Wetterquellen <span style="font-size:11px;color:#3fb950;font-weight:700">${lf.agreement}% Übereinstimmung</span></div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+      <button onclick="toggleWaterPicker()" style="padding:6px 12px;border-radius:14px;border:1px solid rgba(103,211,255,.3);background:rgba(103,211,255,.08);color:#67d3ff;font-size:12px;font-weight:600;cursor:pointer">🌊 Gewässer wechseln</button>
+    </div>
+    <div id="waterPickerBox"></div>
     ${waterBox}${riverBox}
     <div style="font-size:12px;font-weight:700;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin:4px 0 8px">🌤️ Wetter · 7 Tage (gemittelt)</div>
     <div style="display:flex;flex-direction:column;gap:6px">${weekRows}</div>
@@ -8089,6 +8141,599 @@ let _overlayLon    = null;
 let _detailMap = null;
 let _logEntries = [];  // Cache für klickbare Einträge
 
+// Wetter + Wassertemperatur für einen Fang automatisch nachladen/abgleichen
+async function reweatherCatch(full) {
+  const ts = full.timestamp;
+  if (!ts) return;
+  const dt = new Date(ts);
+  const center = getBestCenter();
+  const lat = full.latitude || center[0];
+  const lon = full.longitude || center[1];
+  const dStr = dt.toISOString().slice(0, 10);
+  const hour = dt.getHours();
+
+  showToast('🔄 Lade Wetterdaten…');
+
+  const updates = { timestamp: ts };
+
+  // 1. Open-Meteo Archive für Wetter zur Fangzeit
+  try {
+    const r = await fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${dStr}&end_date=${dStr}&hourly=temperature_2m,precipitation,windspeed_10m,windgusts_10m,cloudcover,relativehumidity_2m,surface_pressure,shortwave_radiation&timezone=Europe/Berlin`);
+    const data = await r.json();
+    const h = data.hourly;
+    if (h && h.temperature_2m) {
+      const round1 = v => v != null ? Math.round(v * 10) / 10 : null;
+      if (h.temperature_2m[hour] != null)     updates.temperature   = round1(h.temperature_2m[hour]);
+      if (h.windspeed_10m[hour] != null)      updates.wind_speed    = round1(h.windspeed_10m[hour]);
+      if (h.windgusts_10m[hour] != null)      updates.wind_gusts    = round1(h.windgusts_10m[hour]);
+      if (h.surface_pressure[hour] != null)   updates.pressure      = Math.round(h.surface_pressure[hour]);
+      if (h.cloudcover[hour] != null)         updates.cloud_coverage = Math.round(h.cloudcover[hour]);
+      if (h.precipitation[hour] != null)      updates.precipitation = round1(h.precipitation[hour]);
+      if (h.relativehumidity_2m[hour] != null) updates.humidity     = Math.round(h.relativehumidity_2m[hour]);
+      if (h.shortwave_radiation && h.shortwave_radiation[hour] != null) updates.solar_radiation = Math.round(h.shortwave_radiation[hour]);
+      // Windrichtung aus separater Abfrage (nicht in obigem Set)
+    }
+  } catch(e) { console.warn('Archive-Fetch:', e); }
+
+  // 2. Wassertemperatur aus daily_history (wassertemperatur.site) zuordnen
+  try {
+    const haEl = window.parent?.document?.querySelector('home-assistant');
+    const sensor = haEl?.hass?.states?.['sensor.wassertemperatur_gewaesser'];
+    const dailyHist = sensor?.attributes?.daily_history;
+    if (dailyHist && Array.isArray(dailyHist)) {
+      // Exakten Tag finden
+      const match = dailyHist.find(d => d.date === dStr);
+      if (match && match.temp != null) {
+        updates.water_temp = Math.round(parseFloat(match.temp) * 10) / 10;
+      } else {
+        // Nächstgelegenen Tag nehmen
+        let best = null, bestDiff = Infinity;
+        const catchTime = dt.getTime();
+        dailyHist.forEach(d => {
+          const diff = Math.abs(new Date(d.date).getTime() - catchTime);
+          if (diff < bestDiff && d.temp != null) { bestDiff = diff; best = d; }
+        });
+        // Nur nutzen wenn innerhalb 3 Tagen
+        if (best && bestDiff < 3 * 86400000) {
+          updates.water_temp = Math.round(parseFloat(best.temp) * 10) / 10;
+        }
+      }
+    }
+  } catch(e) { console.warn('WaterTemp-History:', e); }
+
+  // 3. Speichern via Service
+  const ok = await callHAService('fishing_tracker', 'update_catch', updates);
+  if (ok) {
+    showToast('✅ Wetterdaten aktualisiert', '#67d33f');
+    setTimeout(() => {
+      // Detail neu öffnen mit frischen Daten
+      const allAttrs = findFTSensor('history')?.attributes || {};
+      const fresh = (allAttrs.latest || []).find(e => e.timestamp === ts);
+      if (fresh) openCatchDetail(fresh);
+    }, 1500);
+  } else {
+    showToast('❌ Fehler beim Speichern', '#f85149');
+  }
+}
+
+// Bearbeiten-Formular für einen bestehenden Fang
+function openCatchEditForm(full) {
+  const overlay = document.getElementById('catchDetailOverlay');
+  const content = document.getElementById('catchDetailContent');
+  if (!content) return;
+
+  const fld = (label, id, val, unit, type) =>
+    `<div style="margin-bottom:12px">
+      <label style="display:block;font-size:12px;color:var(--txt-muted);margin-bottom:4px">${label}${unit ? ' (' + unit + ')' : ''}</label>
+      <input id="${id}" type="${type || 'text'}" value="${val != null ? val : ''}" ${type === 'number' ? 'step="0.1"' : ''}
+        style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.12);
+        background:rgba(255,255,255,.04);color:var(--txt-main);font-size:14px">
+    </div>`;
+
+  const fishOptions = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse','Rotauge','Rotfeder','Döbel','Rapfen','Forelle','Wels','Güster','Grundel','Ukelei']
+    .map(f => `<option value="${f}" ${full.fish_type === f ? 'selected' : ''}>${f}</option>`).join('');
+
+  content.innerHTML = `
+    <div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px">
+      <div style="font-size:14px;font-weight:800;color:#67d33f;margin-bottom:14px">✏️ Fang bearbeiten</div>
+
+      <div style="margin-bottom:12px">
+        <label style="display:block;font-size:12px;color:var(--txt-muted);margin-bottom:4px">Fischart</label>
+        <select id="editFishType" style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:var(--txt-main);font-size:14px">${fishOptions}</select>
+      </div>
+
+      ${fld('Länge', 'editLength', full.length_cm, 'cm', 'number')}
+      ${fld('Gewicht', 'editWeight', full.weight_kg, 'kg', 'number')}
+      ${fld('Köder', 'editBait', full.bait, '', 'text')}
+      ${fld('Spot', 'editSpot', full.spot, '', 'text')}
+      ${fld('Notizen', 'editNotes', full.notes, '', 'text')}
+
+      <div style="font-size:12px;font-weight:800;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 10px">🌤️ Wetter (manuell anpassbar)</div>
+      ${fld('Wassertemperatur', 'editWaterTemp', full.water_temp != null ? Math.round(full.water_temp*10)/10 : '', '°C', 'number')}
+      ${fld('Lufttemperatur', 'editAirTemp', full.temperature, '°C', 'number')}
+      ${fld('Luftdruck', 'editPressure', full.pressure, 'hPa', 'number')}
+      ${fld('Wind', 'editWind', full.wind_speed, 'km/h', 'number')}
+
+      <button onclick="saveCatchEdit('${full.timestamp}')"
+        style="width:100%;background:rgba(103,211,63,.15);border:1px solid rgba(103,211,63,.4);color:#67d33f;padding:13px;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;margin-top:8px">
+        💾 Speichern
+      </button>
+      <button onclick="openCatchDetail(${JSON.stringify(full).replace(/"/g, '&quot;')})"
+        style="width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:var(--txt-muted);padding:11px;border-radius:10px;font-size:14px;cursor:pointer;margin-top:8px">
+        Abbrechen
+      </button>
+    </div>`;
+
+  // Buttons unten ausblenden während Edit
+  const btnArea = document.querySelectorAll('#catchDetailReweather, #catchDetailEdit, #catchDetailDelete');
+  btnArea.forEach(b => { if (b) b.style.display = 'none'; });
+  const mapWrap = document.getElementById('catchDetailMapWrap');
+  if (mapWrap) mapWrap.style.display = 'none';
+}
+
+async function saveCatchEdit(ts) {
+  const getVal = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const getNum = (id) => { const v = getVal(id); return v === '' ? null : parseFloat(v); };
+
+  const updates = { timestamp: ts };
+  const ft = getVal('editFishType'); if (ft) updates.fish_type = ft;
+  const len = getNum('editLength'); if (len != null) updates.length_cm = len;
+  const wt = getNum('editWeight'); if (wt != null) updates.weight_kg = wt;
+  updates.bait = getVal('editBait') || null;
+  updates.spot = getVal('editSpot') || null;
+  updates.notes = getVal('editNotes') || null;
+  const watT = getNum('editWaterTemp'); if (watT != null) updates.water_temp = watT;
+  const airT = getNum('editAirTemp'); if (airT != null) updates.temperature = airT;
+  const prs = getNum('editPressure'); if (prs != null) updates.pressure = prs;
+  const wnd = getNum('editWind'); if (wnd != null) updates.wind_speed = wnd;
+
+  const ok = await callHAService('fishing_tracker', 'update_catch', updates);
+  if (ok) {
+    showToast('✅ Gespeichert', '#67d33f');
+    setTimeout(() => {
+      const allAttrs = findFTSensor('history')?.attributes || {};
+      const fresh = (allAttrs.latest || []).find(e => e.timestamp === ts);
+      if (fresh) openCatchDetail(fresh);
+      else closeCatchDetail();
+    }, 1500);
+  } else {
+    showToast('❌ Fehler beim Speichern', '#f85149');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ANALYSE-TAB: Fänge vs. Nullnummern — bei welchen Bedingungen lohnt sich Angeln?
+// ══════════════════════════════════════════════════════════════════════════
+let _analysisFishFilter = 'all'; // 'all' oder Fischart-Name
+
+function getAnalysisEntries() {
+  // Alle Einträge (Fänge + Nullnummern) aus dem history-Sensor holen
+  const h = findFTSensor('history')?.attributes || {};
+  const all = h.latest || h.entries || [];
+  return all.map(e => ({
+    ...e,
+    isCatch: parseInt(e.caught || 0) >= 1,
+    ts: e.timestamp ? new Date(e.timestamp) : null,
+  })).filter(e => e.ts);
+}
+
+function setAnalysisFilter(f) {
+  _analysisFishFilter = f;
+  scheduleRenderView();
+}
+
+function buildAnalysisView() {
+  const allEntries = getAnalysisEntries();
+
+  // Fischart-Filter anwenden (bei Fängen nach fish_type, bei Nullnummern nach target_fish)
+  let entries = allEntries;
+  if (_analysisFishFilter !== 'all') {
+    entries = allEntries.filter(e =>
+      e.fish_type === _analysisFishFilter ||
+      e.target_fish === _analysisFishFilter ||
+      (Array.isArray(e.target_fish) && e.target_fish.includes(_analysisFishFilter))
+    );
+  }
+
+  const catches = entries.filter(e => e.isCatch);
+  const blanks  = entries.filter(e => !e.isCatch);
+  const totalC = catches.length, totalB = blanks.length, total = totalC + totalB;
+
+  if (total < 2) {
+    return `<div class="panel">
+      <div class="sec">🔬 Bedingungs-Analyse</div>
+      <div style="text-align:center;padding:40px 20px;color:var(--txt-muted)">
+        <div style="font-size:42px;margin-bottom:12px">📊</div>
+        <div style="font-size:15px;font-weight:700;color:var(--txt-main);margin-bottom:6px">Noch zu wenig Daten</div>
+        <div style="font-size:13px;line-height:1.5">Erfasse Fänge <b>und</b> Nullnummern (kein Fang), damit die App erkennt bei welchen Bedingungen sich Angeln lohnt.<br><br>
+        Aktuell: ${totalC} Fänge, ${totalB} Nullnummern.<br>
+        Mindestens 2 Einträge nötig, für aussagekräftige Muster besser 10+.</div>
+      </div>
+    </div>`;
+  }
+
+  // Fischart-Filter-Chips
+  const fishTypes = [...new Set(allEntries.map(e => e.fish_type).filter(Boolean))];
+  const filterChips = ['all', ...fishTypes].map(f => {
+    const active = f === _analysisFishFilter;
+    const label = f === 'all' ? 'Alle' : f;
+    return `<button onclick="setAnalysisFilter('${f}')" style="padding:6px 13px;border-radius:15px;border:1px solid ${active ? 'rgba(103,211,63,.6)' : 'rgba(255,255,255,.12)'};background:${active ? 'rgba(103,211,63,.15)' : 'rgba(255,255,255,.04)'};color:${active ? '#67d33f' : 'var(--txt-main)'};font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">${label}</button>`;
+  }).join('');
+
+  // ── Faktor-Analyse: für jeden Faktor Fänge vs. Nullnummern vergleichen ──
+  const factors = [
+    { key: 'water_temp',     label: '🌡️ Wassertemperatur', unit: '°C', bins: [[0,12],[12,15],[15,18],[18,21],[21,24],[24,40]] },
+    { key: 'temperature',    label: '🌡️ Lufttemperatur',   unit: '°C', bins: [[0,10],[10,15],[15,20],[20,25],[25,30],[30,45]] },
+    { key: 'pressure',       label: '📊 Luftdruck',         unit: 'hPa', bins: [[980,1005],[1005,1013],[1013,1020],[1020,1028],[1028,1050]] },
+    { key: 'cloud_coverage', label: '☁️ Bewölkung',         unit: '%', bins: [[0,20],[20,40],[40,60],[60,80],[80,101]] },
+    { key: 'wind_speed',     label: '💨 Wind',              unit: 'km/h', bins: [[0,5],[5,10],[10,15],[15,20],[20,50]] },
+    { key: 'hour',           label: '🕐 Tageszeit',         unit: 'Uhr', bins: [[0,4],[4,8],[8,12],[12,16],[16,20],[20,24]] },
+  ];
+
+  const factorHTML = factors.map(f => {
+    // Werte sammeln
+    const getVal = (e) => f.key === 'hour' ? (e.ts ? e.ts.getHours() : null) : (e[f.key] != null ? parseFloat(e[f.key]) : null);
+    const binStats = f.bins.map(([lo, hi]) => {
+      const inBin = (e) => { const v = getVal(e); return v != null && v >= lo && v < hi; };
+      const c = catches.filter(inBin).length;
+      const b = blanks.filter(inBin).length;
+      const t = c + b;
+      const rate = t > 0 ? c / t : null;
+      return { lo, hi, c, b, t, rate };
+    });
+
+    // Nur Bins mit Daten zeigen
+    const activeBins = binStats.filter(b => b.t > 0);
+    if (!activeBins.length) return '';
+
+    const maxT = Math.max(...activeBins.map(b => b.t));
+    const fmtBin = (lo, hi) => {
+      if (f.key === 'hour') return `${lo}-${hi}h`;
+      if (hi >= 40 && f.key === 'water_temp') return `${lo}+`;
+      if (hi >= 45) return `${lo}+`;
+      if (hi >= 101 || hi >= 1050) return `${lo}+`;
+      return `${lo}-${hi}`;
+    };
+
+    const rows = activeBins.map(b => {
+      const rate = b.rate != null ? Math.round(b.rate * 100) : 0;
+      const rateCol = rate >= 60 ? '#3fb344' : rate >= 40 ? '#9cc02e' : rate >= 25 ? '#e0a92e' : '#d9534f';
+      const barW = maxT > 0 ? (b.t / maxT * 100) : 0;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+        <div style="width:54px;flex:none;font-size:12px;color:var(--txt-sub);text-align:right">${fmtBin(b.lo, b.hi)}</div>
+        <div style="flex:1;position:relative;height:22px;background:rgba(255,255,255,.04);border-radius:5px;overflow:hidden">
+          <div style="position:absolute;inset:0;width:${barW}%;background:linear-gradient(90deg,${rateCol}33,${rateCol}11);border-radius:5px"></div>
+          <div style="position:absolute;left:7px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--txt-sub)">
+            <span style="color:#67d33f">${b.c}🐟</span> <span style="color:var(--txt-muted)">${b.b}∅</span>
+          </div>
+        </div>
+        <div style="width:42px;flex:none;text-align:right;font-size:13px;font-weight:800;color:${rateCol}">${rate}%</div>
+      </div>`;
+    }).join('');
+
+    // Besten Bin finden (höchste Quote mit mind. 2 Einträgen)
+    const reliableBins = activeBins.filter(b => b.t >= 2);
+    let insight = '';
+    if (reliableBins.length >= 2) {
+      const best = reliableBins.reduce((a, b) => (b.rate > a.rate ? b : a));
+      const worst = reliableBins.reduce((a, b) => (b.rate < a.rate ? b : a));
+      if (best.rate - worst.rate > 0.25) {
+        insight = `<div style="font-size:11px;color:#67d33f;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06)">💡 Beste Quote bei ${fmtBin(best.lo, best.hi)}${f.unit} (${Math.round(best.rate*100)}%)</div>`;
+      }
+    }
+
+    return `<div class="panel" style="margin-bottom:12px">
+      <div style="font-size:13px;font-weight:700;color:var(--txt-main);margin-bottom:10px">${f.label}</div>
+      ${rows}
+      ${insight}
+    </div>`;
+  }).filter(Boolean).join('');
+
+  // ── Score-Abgleich: Angelwetter-Index bei Fängen vs. Nullnummern ──
+  const catchScores = catches.map(e => e.angelwetter_index).filter(v => v != null);
+  const blankScores = blanks.map(e => e.angelwetter_index).filter(v => v != null);
+  let scoreCompare = '';
+  if (catchScores.length >= 1 && blankScores.length >= 1) {
+    const avgC = Math.round(catchScores.reduce((a,b)=>a+b,0) / catchScores.length);
+    const avgB = Math.round(blankScores.reduce((a,b)=>a+b,0) / blankScores.length);
+    const diff = avgC - avgB;
+    scoreCompare = `<div class="panel" style="margin-bottom:12px">
+      <div style="font-size:13px;font-weight:700;color:var(--txt-main);margin-bottom:12px">🎯 Vorhersage-Abgleich (Angelwetter-Index)</div>
+      <div style="display:flex;gap:12px">
+        <div style="flex:1;text-align:center;background:rgba(103,211,63,.08);border-radius:10px;padding:12px">
+          <div style="font-size:26px;font-weight:900;color:#67d33f">${avgC}%</div>
+          <div style="font-size:11px;color:var(--txt-muted)">⌀ bei Fängen</div>
+          <div style="font-size:10px;color:var(--txt-muted);opacity:.7">${catchScores.length} Einträge</div>
+        </div>
+        <div style="flex:1;text-align:center;background:rgba(217,83,79,.08);border-radius:10px;padding:12px">
+          <div style="font-size:26px;font-weight:900;color:#d9534f">${avgB}%</div>
+          <div style="font-size:11px;color:var(--txt-muted)">⌀ bei Nullnummern</div>
+          <div style="font-size:10px;color:var(--txt-muted);opacity:.7">${blankScores.length} Einträge</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:${diff > 5 ? '#67d33f' : diff < -5 ? '#d9534f' : 'var(--txt-muted)'};margin-top:10px;text-align:center">
+        ${diff > 5 ? '✅ Der Index passt: Fänge bei höherem Score' : diff < -5 ? '⚠️ Index passt (noch) nicht zu deinen Fängen' : '➖ Index zeigt bisher kaum Unterschied'}
+        ${diff !== 0 ? ' (Δ ' + (diff > 0 ? '+' : '') + diff + '%)' : ''}
+      </div>
+    </div>`;
+  }
+
+  return `<div class="panel" style="margin-bottom:12px">
+      <div class="sec">🔬 Bedingungs-Analyse</div>
+      <div style="font-size:12px;color:var(--txt-muted);margin:-4px 0 12px">Wann lohnt sich Angeln? Vergleich deiner ${totalC} Fänge mit ${totalB} Nullnummern.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${filterChips}</div>
+    </div>
+    <div class="panel" style="margin-bottom:12px;background:linear-gradient(135deg,rgba(46,168,255,.06),rgba(46,168,255,.02))">
+      <div style="display:flex;justify-content:space-around;text-align:center">
+        <div><div style="font-size:24px;font-weight:900;color:#67d33f">${totalC}</div><div style="font-size:11px;color:var(--txt-muted)">Fänge</div></div>
+        <div><div style="font-size:24px;font-weight:900;color:#d9534f">${totalB}</div><div style="font-size:11px;color:var(--txt-muted)">Nullnummern</div></div>
+        <div><div style="font-size:24px;font-weight:900;color:#2ea8ff">${total > 0 ? Math.round(totalC/total*100) : 0}%</div><div style="font-size:11px;color:var(--txt-muted)">Erfolgsquote</div></div>
+      </div>
+    </div>
+    ${scoreCompare}
+    <div style="font-size:12px;font-weight:700;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin:4px 4px 10px">Erfolgsquote pro Bedingung</div>
+    <div style="font-size:11px;color:var(--txt-muted);margin:0 4px 10px">🐟 = Fänge · ∅ = Nullnummern · % = Trefferquote im Bereich</div>
+    ${factorHTML}
+    <div style="font-size:10px;color:var(--txt-muted);text-align:center;margin-top:8px;opacity:.7;padding-bottom:20px">
+      Je mehr Fänge und Nullnummern du erfasst, desto genauer werden die Muster.
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ANGEL-SESSION: Start/Stop + automatische 15-Min-Datenpunkte
+// ══════════════════════════════════════════════════════════════════════════
+// Session-State wird in localStorage gehalten (überlebt Browser-Refresh).
+// Bei Session-Ende werden 15-Min-Intervalle rückwirkend als Nullnummern erzeugt,
+// jeweils mit korrektem historischem Wetter — zuverlässiger als ein Live-Timer.
+const FT_SESSION_KEY = 'ft_active_session';
+const FT_SESSION_INTERVAL_MIN = 15;
+
+function getActiveSession() {
+  try {
+    const raw = localStorage.getItem(FT_SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
+function saveActiveSession(sess) {
+  try {
+    if (sess) localStorage.setItem(FT_SESSION_KEY, JSON.stringify(sess));
+    else localStorage.removeItem(FT_SESSION_KEY);
+  } catch(e) {}
+}
+
+async function startSession() {
+  // GPS + Gewässer erfassen
+  let lat = null, lon = null;
+  const center = (typeof getBestCenter === 'function') ? getBestCenter() : null;
+  if (center) { lat = center[0]; lon = center[1]; }
+  const waterName = (typeof getCurrentWaterName === 'function') ? getCurrentWaterName() : null;
+  const sess = {
+    start: new Date().toISOString(),
+    lat, lon,
+    water: waterName,
+    catches: [],  // {ts, fish, length}
+    track: lat ? [{ ts: new Date().toISOString(), lat, lon }] : [],  // GPS-Spur
+    lastBlankTs: null,
+  };
+  saveActiveSession(sess);
+  if (typeof showToast === 'function') showToast('🎣 Session gestartet — Petri Heil!', '#67d33f');
+  scheduleRenderView();
+}
+
+// GPS-Punkt zur Session-Spur hinzufügen (wird im Render-Zyklus aufgerufen)
+function recordSessionTrackPoint() {
+  const sess = getActiveSession();
+  if (!sess) return;
+  const center = (typeof getBestCenter === 'function') ? getBestCenter() : null;
+  if (!center || center[0] == null) return;
+  const [lat, lon] = center;
+  sess.track = sess.track || [];
+  const last = sess.track[sess.track.length - 1];
+  // Nur speichern wenn Position sich geändert hat (>20m) oder >5 Min vergangen
+  const now = Date.now();
+  if (last) {
+    const dLat = Math.abs(last.lat - lat), dLon = Math.abs(last.lon - lon);
+    const movedFar = dLat > 0.0002 || dLon > 0.0003;  // ~20-25m
+    const timeSince = now - new Date(last.ts).getTime();
+    if (!movedFar && timeSince < 5 * 60000) return;
+  }
+  sess.track.push({ ts: new Date().toISOString(), lat, lon });
+  // Spur begrenzen (max 500 Punkte)
+  if (sess.track.length > 500) sess.track = sess.track.slice(-500);
+  saveActiveSession(sess);
+}
+
+// Position aus der Spur für einen bestimmten Zeitpunkt finden (zeitlich nächste)
+function getTrackPositionAt(when, sess) {
+  const track = sess.track || [];
+  if (!track.length) return { lat: sess.lat, lon: sess.lon };
+  const targetMs = when.getTime();
+  let best = track[0], bestDiff = Infinity;
+  for (const p of track) {
+    const diff = Math.abs(new Date(p.ts).getTime() - targetMs);
+    if (diff < bestDiff) { bestDiff = diff; best = p; }
+  }
+  return { lat: best.lat, lon: best.lon };
+}
+
+async function endSession() {
+  const sess = getActiveSession();
+  if (!sess) return;
+  const startMs = new Date(sess.start).getTime();
+  const endMs = Date.now();
+  const durationMin = Math.round((endMs - startMs) / 60000);
+
+  if (typeof showToast === 'function') showToast('⏳ Session wird ausgewertet…');
+
+  // 15-Min-Raster durchgehen: jedes Intervall ohne Fang = Nullnummer
+  const catchTimes = (sess.catches || []).map(c => new Date(c.ts).getTime());
+  const intervalMs = FT_SESSION_INTERVAL_MIN * 60000;
+  let blanksCreated = 0;
+
+  for (let t = startMs; t < endMs; t += intervalMs) {
+    const winStart = t, winEnd = t + intervalMs;
+    // Hat es in diesem Fenster einen Fang gegeben?
+    const hadCatch = catchTimes.some(ct => ct >= winStart && ct < winEnd);
+    if (!hadCatch) {
+      // Nullnummer für die Mitte des Intervalls erzeugen
+      const midMs = winStart + intervalMs / 2;
+      if (midMs > endMs) break;
+      await createSessionBlank(new Date(midMs), sess);
+      blanksCreated++;
+    }
+  }
+
+  saveActiveSession(null);
+  if (typeof showToast === 'function') {
+    showToast(`✅ Session beendet · ${durationMin} Min · ${sess.catches.length} Fänge · ${blanksCreated} Leerphasen`, '#67d33f');
+  }
+  setTimeout(() => scheduleRenderView(), 1500);
+}
+
+// Erzeugt eine Nullnummer mit historischem Wetter für einen bestimmten Zeitpunkt
+async function createSessionBlank(when, sess) {
+  // Position aus der GPS-Spur für diesen Zeitpunkt (nicht Start-Position!)
+  const pos = getTrackPositionAt(when, sess);
+  const lat = pos.lat, lon = pos.lon;
+  const dStr = when.toISOString().slice(0, 10);
+  const hour = when.getHours();
+  const data = {
+    catch_datetime: when.toISOString().slice(0, 16),
+    angelwetter_index: 0,
+  };
+  if (lat && lon) { data.latitude = lat; data.longitude = lon; }
+
+  // Historisches Wetter (Open-Meteo Archive) für exakten Zeitpunkt
+  try {
+    const r = await fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${dStr}&end_date=${dStr}&hourly=temperature_2m,precipitation,windspeed_10m,windgusts_10m,cloudcover,relativehumidity_2m,surface_pressure,shortwave_radiation&timezone=Europe/Berlin`);
+    const j = await r.json();
+    const h = j.hourly;
+    if (h && h.temperature_2m) {
+      const r1 = v => v != null ? Math.round(v * 10) / 10 : null;
+      if (h.temperature_2m[hour] != null)     data.temperature    = r1(h.temperature_2m[hour]);
+      if (h.windspeed_10m[hour] != null)      data.wind_speed     = r1(h.windspeed_10m[hour]);
+      if (h.windgusts_10m[hour] != null)      data.wind_gusts     = r1(h.windgusts_10m[hour]);
+      if (h.surface_pressure[hour] != null)   data.pressure       = Math.round(h.surface_pressure[hour]);
+      if (h.cloudcover[hour] != null)         data.cloud_coverage = Math.round(h.cloudcover[hour]);
+      if (h.precipitation[hour] != null)      data.precipitation  = r1(h.precipitation[hour]);
+      if (h.relativehumidity_2m[hour] != null) data.humidity      = Math.round(h.relativehumidity_2m[hour]);
+      if (h.shortwave_radiation && h.shortwave_radiation[hour] != null) data.solar_radiation = Math.round(h.shortwave_radiation[hour]);
+    }
+  } catch(e) {}
+
+  // Wassertemperatur aus daily_history zuordnen
+  try {
+    const haEl = window.parent?.document?.querySelector('home-assistant');
+    const sensor = haEl?.hass?.states?.['sensor.wassertemperatur_gewaesser'];
+    const dh = sensor?.attributes?.daily_history;
+    if (dh && Array.isArray(dh)) {
+      const match = dh.find(d => d.date === dStr);
+      if (match && match.temp != null) data.water_temp = Math.round(parseFloat(match.temp) * 10) / 10;
+    }
+  } catch(e) {}
+
+  await callHAService('fishing_tracker', 'log_no_catch', data);
+}
+
+// Schnell-Fang während Session (oder normal)
+async function quickSessionCatch(fishType, lengthCm) {
+  const now = new Date();
+  const sess = getActiveSession();
+
+  const data = {
+    fish_type: fishType,
+    caught: 1,
+    catch_datetime: now.toISOString().slice(0, 16),
+  };
+  if (lengthCm) data.length_cm = lengthCm;
+
+  // GPS
+  let lat = null, lon = null;
+  if (sess && sess.lat) { lat = sess.lat; lon = sess.lon; }
+  else { const c = getBestCenter(); if (c) { lat = c[0]; lon = c[1]; } }
+  if (lat && lon) { data.latitude = lat; data.longitude = lon; }
+
+  // Aktuelles Live-Wetter sofort mitspeichern
+  const sensors = collectAllSensors();
+  const r1 = v => v != null ? Math.round(v * 10) / 10 : null;
+  const _wtRaw = getEstimatedWaterTemp()?.value;
+  if (_wtRaw != null) data.water_temp = Math.round(_wtRaw * 10) / 10;
+  if (sensors.temperature != null) data.temperature = r1(sensors.temperature);
+  if (sensors.pressure != null) data.pressure = Math.round(sensors.pressure);
+  if (sensors.windSpeed != null) data.wind_speed = r1(sensors.windSpeed);
+  if (sensors.windGust != null) data.wind_gusts = r1(sensors.windGust);
+  if (sensors.windDir != null) data.wind_bearing = Math.round(sensors.windDir);
+  if (sensors.cloudCover != null) data.cloud_coverage = Math.round(sensors.cloudCover);
+  if (sensors.humidity != null) data.humidity = Math.round(sensors.humidity);
+  if (sensors.solar != null) data.solar_radiation = Math.round(sensors.solar);
+  if (typeof calcAngelwetterIndex === 'function') data.angelwetter_index = calcAngelwetterIndex();
+
+  const ok = await callHAService('fishing_tracker', 'log_catch', data);
+
+  // In Session-State vermerken
+  if (sess) {
+    sess.catches.push({ ts: now.toISOString(), fish: fishType, length: lengthCm || null });
+    // Auch Track-Punkt setzen (Position des Fangs)
+    if (lat && lon) {
+      sess.track = sess.track || [];
+      sess.track.push({ ts: now.toISOString(), lat, lon });
+    }
+    saveActiveSession(sess);
+  }
+
+  if (ok && typeof showToast === 'function') showToast('🐟 ' + fishType + (lengthCm ? ' · ' + lengthCm + 'cm' : '') + ' gespeichert!', '#67d33f');
+  scheduleRenderView();
+}
+
+// Schnell-Erfassungs-Dialog (Fischart-Buttons + optionale Länge)
+function openQuickCatchDialog() {
+  const overlay = document.getElementById('quickCatchOverlay');
+  if (!overlay) return;
+  // Fisch-Grid befüllen
+  const grid = document.getElementById('quickFishGrid');
+  if (grid) {
+    const fishes = ['Zander','Hecht','Barsch','Karpfen','Schleie','Aal','Brasse','Rotauge','Rotfeder','Döbel','Rapfen','Forelle','Wels','Güster','Grundel','Ukelei'];
+    const colors = (typeof _globalFishColors !== 'undefined') ? _globalFishColors : {};
+    grid.innerHTML = fishes.map(f =>
+      `<button class="quick-fish-btn" data-fish="${f}" onclick="selectQuickFish('${f}')"
+        style="padding:12px 6px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:var(--txt-main);font-size:13px;font-weight:700;cursor:pointer">${f}</button>`
+    ).join('');
+  }
+  _quickCatchFish = null;
+  overlay.style.display = 'flex';
+}
+
+function closeQuickCatch() {
+  const overlay = document.getElementById('quickCatchOverlay');
+  if (overlay) overlay.style.display = 'none';
+  _quickCatchFish = null;
+  const lenInput = document.getElementById('quickCatchLength');
+  if (lenInput) lenInput.value = '';
+}
+
+let _quickCatchFish = null;
+function selectQuickFish(fish) {
+  _quickCatchFish = fish;
+  // Highlight setzen
+  document.querySelectorAll('.quick-fish-btn').forEach(b => {
+    const isSel = b.dataset.fish === fish;
+    b.style.background = isSel ? 'rgba(103,211,63,.25)' : 'rgba(255,255,255,.05)';
+    b.style.borderColor = isSel ? 'rgba(103,211,63,.6)' : 'rgba(255,255,255,.12)';
+  });
+}
+
+async function confirmQuickCatch() {
+  if (!_quickCatchFish) {
+    if (typeof showToast === 'function') showToast('Bitte Fischart wählen', '#ff9d18');
+    return;
+  }
+  const lenEl = document.getElementById('quickCatchLength');
+  const len = lenEl && lenEl.value ? parseFloat(lenEl.value) : null;
+  await quickSessionCatch(_quickCatchFish, len);
+  closeQuickCatch();
+}
+
 function openCatchDetail(entry) {
   const overlay = document.getElementById('catchDetailOverlay');
   const content = document.getElementById('catchDetailContent');
@@ -8149,7 +8794,7 @@ function openCatchDetail(entry) {
     <div id="catchWeatherBox" style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px">
       <div style="font-size:12px;font-weight:800;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🌤️ Wetter zur Fangzeit</div>
       ${row('🌡️','Lufttemperatur', full.temperature != null ? full.temperature + ' °C' : null)}
-      ${row('💧','Wassertemperatur', full.water_temp != null ? full.water_temp + ' °C' : null)}
+      ${row('💧','Wassertemperatur', full.water_temp != null ? (Math.round(full.water_temp * 10) / 10) + ' °C' : null)}
       ${row('💨','Wind', full.wind_speed != null ? full.wind_speed + ' km/h' + (full.wind_bearing != null ? ' · ' + ['N','NO','O','SO','S','SW','W','NW'][Math.round(full.wind_bearing/45)%8] : '') : null)}
       ${row('💨','Böen', full.wind_gusts != null ? full.wind_gusts + ' km/h' : null)}
       ${row('📊','Luftdruck', full.pressure != null ? full.pressure + ' hPa' : null)}
@@ -8234,6 +8879,18 @@ function openCatchDetail(entry) {
         closeCatchDetail();
       }
     };
+  }
+
+  // Wetter neu laden (Open-Meteo Archive + Wassertemp aus daily_history)
+  const rewBtn = document.getElementById('catchDetailReweather');
+  if (rewBtn) {
+    rewBtn.onclick = () => reweatherCatch(full);
+  }
+
+  // Bearbeiten
+  const editBtn = document.getElementById('catchDetailEdit');
+  if (editBtn) {
+    editBtn.onclick = () => openCatchEditForm(full);
   }
 
   overlay.style.display = 'block';
@@ -8961,6 +9618,7 @@ async function init() {
   // Refresh HA states every 30s
   setInterval(async () => {
     await connectHA();
+    try { recordSessionTrackPoint(); } catch(e) {}
     renderView();
   }, 30000);
 }
@@ -8993,6 +9651,24 @@ document.addEventListener('click', function(ev) {
       </div>
     </div>
 
+    <!-- Schnell-Fang Dialog (Session) -->
+    <div id="quickCatchOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);align-items:flex-end;justify-content:center">
+      <div style="background:var(--bg-card,#161b22);width:100%;max-width:520px;border-radius:20px 20px 0 0;padding:20px;max-height:85vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <span style="font-size:17px;font-weight:900;color:#67d33f">🐟 Fang erfassen</span>
+          <button onclick="closeQuickCatch()" style="background:rgba(255,255,255,.1);border:none;color:#fff;width:32px;height:32px;border-radius:16px;font-size:18px;cursor:pointer">×</button>
+        </div>
+        <div style="font-size:12px;color:var(--txt-muted);margin-bottom:8px">Fischart wählen:</div>
+        <div id="quickFishGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px"></div>
+        <div style="font-size:12px;color:var(--txt-muted);margin-bottom:6px">Länge (optional):</div>
+        <input id="quickCatchLength" type="number" inputmode="decimal" placeholder="cm" step="1"
+          style="width:100%;box-sizing:border-box;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:var(--txt-main);font-size:16px;margin-bottom:16px">
+        <button onclick="confirmQuickCatch()" style="width:100%;background:linear-gradient(145deg,#07391b,#021108);border:1px solid rgba(103,211,63,.5);color:#67d33f;padding:15px;border-radius:12px;font-size:16px;font-weight:900;cursor:pointer">
+          ✓ Speichern (mit aktuellem Wetter)
+        </button>
+      </div>
+    </div>
+
     <!-- Fang-Detail Overlay -->
     <div id="catchDetailOverlay" style="display:none;position:fixed;inset:0;z-index:9998;background:var(--bg-base);overflow-y:auto;-webkit-overflow-scrolling:touch">
       <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-nav);position:sticky;top:0;z-index:1">
@@ -9004,6 +9680,16 @@ document.addEventListener('click', function(ev) {
         <div id="catchDetailMap" style="height:100%"></div>
       </div>
       <div style="padding:0 16px 32px">
+        <button id="catchDetailReweather"
+          style="width:100%;background:rgba(46,168,255,.1);border:1px solid rgba(46,168,255,.3);
+                 color:#2ea8ff;padding:14px;border-radius:12px;font-size:15px;font-weight:800;cursor:pointer;margin-bottom:10px">
+          🔄 Wetter neu laden
+        </button>
+        <button id="catchDetailEdit"
+          style="width:100%;background:rgba(103,211,63,.1);border:1px solid rgba(103,211,63,.3);
+                 color:#67d33f;padding:14px;border-radius:12px;font-size:15px;font-weight:800;cursor:pointer;margin-bottom:10px">
+          ✏️ Bearbeiten
+        </button>
         <button id="catchDetailDelete"
           style="width:100%;background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);
                  color:#ff6b6b;padding:14px;border-radius:12px;font-size:15px;font-weight:800;cursor:pointer">

@@ -78,6 +78,22 @@ class FishingStore:
             return True
         return False
 
+    async def async_update_entry(self, timestamp: str, updates: dict[str, Any]) -> bool:
+        """Aktualisiert Felder eines bestehenden Fangs (per Timestamp identifiziert)."""
+        changed = False
+        for e in self.entries:
+            if e.get("timestamp") == timestamp:
+                for k, v in updates.items():
+                    if v is None:
+                        e.pop(k, None)
+                    else:
+                        e[k] = v
+                changed = True
+                break
+        if changed:
+            await self.async_save()
+        return changed
+
     async def async_export_json_files(self) -> None:
         payload = {"version": 1, "entries": _fix_payload(self.entries), "settings": _fix_payload(self.settings)}
         config_path = Path(self.hass.config.path())
