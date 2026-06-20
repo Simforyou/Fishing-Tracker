@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.25 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.27 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -216,8 +216,18 @@ async function connectHA() {
     if (window.parent && window.parent.customElements) {
       const haEl = window.parent.document.querySelector('home-assistant');
       if (haEl && haEl.hass) {
+        // hass.states enthält alle Entities inkl. vollständiger Attribute
         haStates = haEl.hass.states || {};
         _ftSensorsCache = {};  // Cache leeren bei Update
+        // Sicherstellen dass kritische Sensoren wirklich da sind
+        const wtCheck = haStates['sensor.wassertemperatur_gewaesser'];
+        if (!wtCheck || wtCheck.state === 'unknown' || wtCheck.state === 'unavailable') {
+          // Nochmal direkt aus hass lesen
+          const freshStates = haEl.hass?.states;
+          if (freshStates && Object.keys(freshStates).length > 0) {
+            haStates = freshStates;
+          }
+        }
         return true;
       }
     }
@@ -1501,7 +1511,7 @@ function calcAngelwetterIndex() {
   // Zielfisch-Kontext für Tiefen-/Fluss-/Personal-Faktoren (Standard: gewählter Fisch)
   const fishName = (typeof selFish !== 'undefined' && selFish) ? selFish : 'Zander';
   const wx       = getVerifiedWeather();
-  const waterT   = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+  const waterT   = (getEstimatedWaterTemp()?.value || 13);
   const cloud    = wx.cloud_coverage;
   const wind     = wx.wind_speed;
   const windBear = wx.wind_bearing;
@@ -1848,7 +1858,7 @@ function estimateFishDepth(fishName) {
   const now = new Date();
   const month = now.getMonth() + 1;
   const waterTemp = sensors.waterTemp != null ? sensors.waterTemp
-    : parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+    : (getEstimatedWaterTemp()?.value || 13);
   let sunElev = sensors.sunElevation || 0;
   let solar = sensors.solar || 0;
   try {
@@ -2193,7 +2203,7 @@ function openFishSpotMap(fishName) {
 
   const d = _globalFishData[fishName] || null;
   const sc2 = v => v >= 75 ? '#67d33f' : v >= 55 ? '#ffd23f' : '#ff9d18';
-  const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+  const waterT = (getEstimatedWaterTemp()?.value || 13);
 
   // Komplexer Artscore mit allen Faktoren
   const curScore = calcSpeciesScore(fishName);
@@ -2268,7 +2278,7 @@ function openFishSpotMap(fishName) {
 
       // Köder-Empfehlung für aktuelle Wassertemperatur
       (() => {
-        const wt = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+        const wt = (getEstimatedWaterTemp()?.value || 13);
         const wtBucket = wt<6?'sehr_kalt':wt<12?'kalt':wt<18?'mild':wt<23?'warm':'heiss';
         const rec = learnPat.bait_by_temp?.[wtBucket];
         return rec ? '<div style="font-size:11px;color:#3fb950;margin-bottom:6px">🎯 Bei ' + wt.toFixed(0) + '°C empfohlen: <b>' + rec.bait + '</b> (' + rec.count + 'x erfolgreich)</div>' : '';
@@ -3047,7 +3057,7 @@ function logNoCatch() {
 
 async function doLogNoCatch(preset) {
   const awIdx  = calcAngelwetterIndex();
-  const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 0) || null;
+  const waterT = (getEstimatedWaterTemp()?.value || null);
   const data = {
     angelwetter_index: awIdx,
     ...(waterT ? { water_temp: waterT } : {}),
@@ -3346,7 +3356,7 @@ async function saveCatch() {
   const wx = await fetchWeatherAtTime(catchFormData.datetime || null, lat, lon);
   const waterT = wx._waterTempAtCatch
               ?? parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
-              ?? parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state)
+              ?? getEstimatedWaterTemp()?.value
               ?? null;
   const awIdx = calcAngelwetterIndex();
 
@@ -3583,7 +3593,7 @@ function catchFormView() {
   }
 
   const wx     = getVerifiedWeather();
-  const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state) || null;
+  const waterT = (getEstimatedWaterTemp()?.value || null);
   const person = haStates['person.christian_rduch']?.attributes;
   // Spot: gespeicherter Wert hat Vorrang, dann GPS-Sensor
   if (!catchFormData.spot) {
@@ -5124,7 +5134,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
         <div class="sec">🏆 Zielfisch-Ranking <span style="font-size:9px;font-weight:400;opacity:.5">Jetzt · Live</span></div>
         ${(() => {
           const nowH   = new Date().getHours();
-          const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+          const waterT = (getEstimatedWaterTemp()?.value || 13);
           const weatherScore = parseInt(chance) || 60;
           const weatherBonus = (weatherScore / 100 - 0.5) * 30;
 
@@ -5158,7 +5168,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
             const md = findFTSensor('map_data')?.attributes || {};
             const spots = md.spots || [];
             const nowH  = new Date().getHours();
-            const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state) || 14;
+            const waterT = (getEstimatedWaterTemp()?.value || 14);
 
             const scored = spots.filter(s => s.catches > 0).map(s => {
               let fishScore = 50;
@@ -6050,7 +6060,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.25'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.27'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8475,7 +8485,7 @@ function calcFactors() {
   const pressureTrend = parseFloat(findFTSensor('pressure_trend')?.state || 0);
   const windSpeed = _wxf.wind_speed || 10;
   const rain = _wxf.precipitation || 0;
-  const waterT = parseFloat(haStates['sensor.wassertemperatur_gewaesser']?.state || 13);
+  const waterT = (getEstimatedWaterTemp()?.value || 13);
   const moonPhase = haStates['sensor.moon']?.state || haStates['sensor.mondphase']?.state || '';
   const humidity = parseFloat(haStates['weather.home']?.attributes?.humidity || 70);
 
