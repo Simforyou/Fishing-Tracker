@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.24 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.25 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -4041,29 +4041,32 @@ function pressureBiteColor(score) {
 }
 
 function triggerWaterTempHistoryFetch() {
-  if (_waterTempHistoryInFlight) return;
-  if (_waterTempHistoryAsync && (Date.now() - _waterTempHistoryAsync.t) < 600000) return;
-  _waterTempHistoryInFlight = true;
-
-  // ── Quelle 1: wassertemperatur.site daily_history (echte Messwerte, beste Quelle) ──
+  // ── Quelle 1: wassertemperatur.site daily_history — IMMER prüfen, Cache überschreiben ──
   try {
     const wtSensor = haStates['sensor.wassertemperatur_gewaesser'];
     const dailyHistory = wtSensor?.attributes?.daily_history;
     if (dailyHistory && Array.isArray(dailyHistory) && dailyHistory.length >= 3) {
-      // Format: [{date: "2026-06-18", temp: 16.7}, ...]
       const samples = dailyHistory
         .filter(d => d.date && d.temp != null)
         .map(d => ({ t: new Date(d.date).getTime() + 12 * 3600 * 1000, p: parseFloat(d.temp) }))
         .filter(s => !isNaN(s.t) && !isNaN(s.p) && s.p > 0)
         .sort((a, b) => a.t - b.t);
       if (samples.length >= 3) {
-        _waterTempHistoryInFlight = false;
-        _waterTempHistoryAsync = { t: Date.now(), samples, source: 'wassertemperatur.site' };
-        if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
+        // Nur überschreiben wenn noch kein site-Cache oder Cache älter als 1h
+        const alreadySite = _waterTempHistoryAsync?.source === 'wassertemperatur.site';
+        const cacheAge = _waterTempHistoryAsync ? (Date.now() - _waterTempHistoryAsync.t) : Infinity;
+        if (!alreadySite || cacheAge > 3600000) {
+          _waterTempHistoryAsync = { t: Date.now(), samples, source: 'wassertemperatur.site' };
+          if (typeof currentView !== 'undefined' && currentView === 'weather') scheduleRenderView();
+        }
         return;
       }
     }
   } catch(e) {}
+
+  if (_waterTempHistoryInFlight) return;
+  if (_waterTempHistoryAsync && (Date.now() - _waterTempHistoryAsync.t) < 600000) return;
+  _waterTempHistoryInFlight = true;
 
   // ── Quelle 2: NLWKN / HA Recorder ───────────────────────────────────────
   const nlwknState = haStates['sensor.fishing_tracker_nlwkn_water_temp'];
@@ -6047,7 +6050,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.24'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.25'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -6134,9 +6137,9 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
 
     // Luftdruck-Chart — Open-Meteo Echtdaten (48h zurück + 48h voraus)
     try {
-      const basePressure = parseFloat(pressure) || 1015;
-      const _sensorsForP = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
-      const _trend = (_sensorsForP && _sensorsForP.pressureTrend != null) ? _sensorsForP.pressureTrend : 0;
+      const _sensors = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
+      const basePressure = _sensors.pressure || parseFloat(haStates[findFTSensor('pressure')?.entity_id]?.state) || 1015;
+      const _trend = _sensors.pressureTrend || 0;
       recordPressureSample(basePressure);
 
       // Open-Meteo fetch im Hintergrund anstoßen
@@ -6163,9 +6166,9 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
 
     // Kurzfristig-Chart (±6h, Stundenauflösung) — Open-Meteo
     try {
-      const basePressureShort = parseFloat(pressure) || 1015;
-      const _sensorsForPS = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
-      const _trendShort = (_sensorsForPS && _sensorsForPS.pressureTrend != null) ? _sensorsForPS.pressureTrend : 0;
+      const _sensorsShort = (typeof collectAllSensors === 'function') ? collectAllSensors() : {};
+      const basePressureShort = _sensorsShort.pressure || parseFloat(haStates[findFTSensor('pressure')?.entity_id]?.state) || 1015;
+      const _trendShort = _sensorsShort.pressureTrend || 0;
 
       const omShort = getOMPressureShort(basePressureShort);
       let pastShort, futureShort, xLabelsShort;
