@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.30 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.33 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -553,42 +553,38 @@ async function fetchOpenMeteoForecast(lat, lon) {
 // Fallback-Kette: Sensor → Open-Meteo surface_temperature → 5-Tage gleitendes Luft-Temp-Mittel
 function getEstimatedWaterTemp() {
   // Direkt aus parent.hass.states lesen — umgeht haStates-Cache-Timing-Problem
+  let wtds = null, nlwknState = null;
   try {
     const _haEl = window.parent?.document?.querySelector('home-assistant');
     if (_haEl?.hass?.states) {
-      const _fresh = _haEl.hass.states['sensor.wassertemperatur_gewaesser'];
-      if (_fresh && _fresh.state !== 'unknown' && _fresh.state !== 'unavailable') {
-        haStates['sensor.wassertemperatur_gewaesser'] = _fresh;
-      }
-      const _freshNlwkn = _haEl.hass.states['sensor.fishing_tracker_nlwkn_water_temp'];
-      if (_freshNlwkn) haStates['sensor.fishing_tracker_nlwkn_water_temp'] = _freshNlwkn;
+      wtds = _haEl.hass.states['sensor.wassertemperatur_gewaesser'] || null;
+      nlwknState = _haEl.hass.states['sensor.fishing_tracker_nlwkn_water_temp'] || null;
+      if (wtds) haStates['sensor.wassertemperatur_gewaesser'] = wtds;
+      if (nlwknState) haStates['sensor.fishing_tracker_nlwkn_water_temp'] = nlwknState;
     }
   } catch(e) {}
+  // Fallback auf haStates falls parent-Read nicht klappte
+  if (!wtds) wtds = haStates['sensor.wassertemperatur_gewaesser'] || null;
+  if (!nlwknState) nlwknState = haStates['sensor.fishing_tracker_nlwkn_water_temp'] || null;
 
-  // 1. wassertemperatur.site Live-Daten (echte Messung/Modell des konfigurierten Gewässers)
-  //    Erkennbar an `source` Attribut: kein "Monatstabelle" / "Schätzung"
-  const wtds = haStates['sensor.wassertemperatur_gewaesser'];
-  if (wtds) {
-    const v = parseFloat(wtds.state);
-    const src = (wtds.attributes?.source || '').toLowerCase();
-    const isLive = src && !src.includes('monatstabelle') && !src.includes('schätzung') && !src.includes('schaetzung');
-    if (isLive && !isNaN(v) && v > -2 && v < 40) {
-      return { value: v, source: 'wassertemperatur_site', label: wtds.attributes?.source || 'wassertemperatur.site' };
-    }
-  }
-  // 2. NLWKN Gewässergüte (echte Messstation, wenn aktiv)
-  const nlwknVal = parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state);
-  if (!isNaN(nlwknVal) && nlwknVal > -2 && nlwknVal < 40) {
-    const a = haStates['sensor.fishing_tracker_nlwkn_water_temp']?.attributes || {};
-    const label = a.station_name ? `NLWKN ${a.station_name}` : 'NLWKN';
-    return { value: nlwknVal, source: 'nlwkn', label: label };
-  }
-  // 3. Sensor (auch wenn Schätzung) als Fallback
+  // 1. wassertemperatur.site Live-Daten — Wert nehmen wenn plausibel
+  //    (source-Attribut bevorzugt, aber NICHT zwingend — Hauptsache der State ist gültig)
   if (wtds) {
     const v = parseFloat(wtds.state);
     if (!isNaN(v) && v > -2 && v < 40) {
-      return { value: v, source: 'sensor', label: wtds.attributes?.source || 'Sensor' };
+      const src = (wtds.attributes?.source || '').toLowerCase();
+      const isSchaetzung = src.includes('monatstabelle') || src.includes('schätzung') || src.includes('schaetzung');
+      // Echter Messwert wenn source vorhanden und keine Schätzung, ODER wenn gar kein source-Attribut da ist
+      const label = wtds.attributes?.source || 'wassertemperatur.site';
+      return { value: v, source: isSchaetzung ? 'sensor_estimate' : 'wassertemperatur_site', label: label };
     }
+  }
+  // 2. NLWKN Gewässergüte (echte Messstation, wenn aktiv)
+  const nlwknVal = parseFloat(nlwknState?.state);
+  if (!isNaN(nlwknVal) && nlwknVal > -2 && nlwknVal < 40) {
+    const a = nlwknState?.attributes || {};
+    const label = a.station_name ? `NLWKN ${a.station_name}` : 'NLWKN';
+    return { value: nlwknVal, source: 'nlwkn', label: label };
   }
   // 2. Aus dem Location-Forecast (wird vom Top-Card schon geladen)
   try {
@@ -2192,31 +2188,32 @@ function dayChartBodyHTML() {
     return '<div class="day-fish-row" data-fishspot="' + r.name + '" style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)">'
       + '<div style="width:74px;flex:none;font-size:12px;font-weight:600;color:var(--txt-main);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + r.emoji + ' ' + r.name + '</div>'
       + '<div class="day-barzone" data-fish="' + r.name + '" style="flex:1;display:flex;gap:1px;touch-action:none;cursor:pointer">' + cells + '</div>'
-      + '<div style="width:30px;flex:none;text-align:right;font-size:15px;font-weight:800;color:' + rightCol + '">' + rightVal + '</div>'
+      + '<div class="day-row-val" style="width:30px;flex:none;text-align:right;font-size:15px;font-weight:800;color:' + rightCol + '">' + rightVal + '</div>'
       + '</div>';
   }).join('');
 
   // Zeitachse / Scrub-Anzeige
-  let timeAxis = '<div style="display:flex;gap:10px;margin-bottom:6px"><div style="width:74px;flex:none"></div><div style="flex:1;position:relative;height:13px">';
+  let axisInner = '';
   if (showH !== null) {
-    const leftPct = (showH/23*100);
-    const clampLeft = Math.max(8, Math.min(92, leftPct));
-    timeAxis += '<div style="position:absolute;left:' + clampLeft + '%;transform:translateX(-50%);font-size:13px;font-weight:800;color:#fff;white-space:nowrap">' + fmt(showH) + ':00</div>';
+    const clampLeft = Math.max(8, Math.min(92, showH/23*100));
+    axisInner = '<div style="position:absolute;left:' + clampLeft + '%;transform:translateX(-50%);font-size:13px;font-weight:800;color:#fff;white-space:nowrap">' + fmt(showH) + ':00</div>';
   } else {
-    for (let h = 0; h < 24; h += 6) timeAxis += '<div style="position:absolute;left:' + (h/24*100) + '%;font-size:9px;color:var(--txt-muted)">' + fmt(h) + '</div>';
-    timeAxis += '<div style="position:absolute;right:0;font-size:9px;color:var(--txt-muted)">24</div>';
+    for (let h = 0; h < 24; h += 6) axisInner += '<div style="position:absolute;left:' + (h/24*100) + '%;font-size:9px;color:var(--txt-muted)">' + fmt(h) + '</div>';
+    axisInner += '<div style="position:absolute;right:0;font-size:9px;color:var(--txt-muted)">24</div>';
   }
-  timeAxis += '</div><div style="width:30px;flex:none"></div></div>';
+  const timeAxis = '<div style="display:flex;gap:10px;margin-bottom:6px"><div style="width:74px;flex:none"></div><div id="dayChartAxis" style="flex:1;position:relative;height:13px">' + axisInner + '</div><div style="width:30px;flex:none"></div></div>';
 
-  const headerLine = showH !== null
-    ? '<div style="font-size:12px;color:var(--txt-muted);margin:-2px 0 12px">Werte um <b style="color:#fff">' + fmt(showH) + ':00 Uhr</b> \u00b7 Finger loslassen f\u00fcr Jetzt</div>'
-    : '<div style="font-size:12px;color:var(--txt-muted);margin:-2px 0 12px">Werte <b style="color:#2ea8ff">jetzt (' + fmt(nowH) + ':00)</b> \u00b7 farbig = gute Bei\u00dfzeit</div>';
+  const headInner = showH !== null
+    ? 'Werte um <b style="color:#fff">' + fmt(showH) + ':00 Uhr</b> \u00b7 Finger loslassen f\u00fcr Jetzt'
+    : 'Werte <b style="color:#2ea8ff">jetzt (' + fmt(nowH) + ':00)</b> \u00b7 farbig = gute Bei\u00dfzeit';
+  const headerLine = '<div id="dayChartHead" style="font-size:12px;color:var(--txt-muted);margin:-2px 0 12px">' + headInner + '</div>';
 
   return headerLine + timeAxis + rowsHTML
     + '<div style="font-size:10px;color:var(--txt-muted);margin-top:8px;text-align:center;opacity:.7">\ud83d\udc46 \u00dcber die Balken streichen f\u00fcr Uhrzeiten \u00b7 Tippe Namen f\u00fcr Details</div>';
 }
 
 // Scrub-Handler global anbinden (wird nach jedem renderView aufgerufen)
+let _dayScrubActive = false;
 function attachDayChartScrub() {
   const zones = document.querySelectorAll('.day-barzone');
   if (!zones.length) return;
@@ -2226,19 +2223,90 @@ function attachDayChartScrub() {
     return Math.max(0, Math.min(23, Math.round(rel * 23)));
   };
   const updateBody = () => {
-    const body = document.getElementById('dayChartBody');
-    if (body) { body.innerHTML = dayChartBodyHTML(); attachDayChartScrub(); }
+    // Schnelles Update: nur Balkenfarben + Werte direkt im DOM ändern statt innerHTML neu zu bauen
+    if (!_dayChartData) return;
+    const { rows, nowH } = _dayChartData;
+    const scoreColor = (v) => v>=75?'#3fb344':v>=55?'#9cc02e':v>=40?'#e0a92e':v>=25?'#d97b3a':'#9a4a3a';
+    const fmt = (h) => String(h).padStart(2, '0');
+    const showH = _dayChartScrubH;
+
+    const allRows = document.querySelectorAll('.day-fish-row');
+    rows.forEach((r, ri) => {
+      const rowEl = allRows[ri];
+      if (!rowEl) return;
+      const bars = rowEl.querySelectorAll('.day-barzone > div > div');
+      r.curve.forEach((v, h) => {
+        const bar = bars[h];
+        if (!bar) return;
+        const ratio = v / 97;
+        const inGood = r.goodHours.has(h);
+        const isNow = h === nowH;
+        const isScrub = showH !== null && h === showH;
+        let col;
+        if (isScrub) col = '#ffffff';
+        else if (isNow && showH === null) col = '#2ea8ff';
+        else if (inGood && showH === null) col = scoreColor(v);
+        else col = 'rgba(140,151,168,' + (0.18 + ratio*0.5).toFixed(2) + ')';
+        bar.style.background = col;
+      });
+      // Wert rechts updaten
+      const dispH = showH !== null ? showH : nowH;
+      const valEl = rowEl.querySelector('.day-row-val');
+      if (valEl) { valEl.textContent = r.curve[dispH]; valEl.style.color = scoreColor(r.curve[dispH]); }
+    });
+
+    // Zeitachse / Header updaten
+    const axisEl = document.getElementById('dayChartAxis');
+    if (axisEl) {
+      if (showH !== null) {
+        const clampLeft = Math.max(8, Math.min(92, showH/23*100));
+        axisEl.innerHTML = '<div style="position:absolute;left:' + clampLeft + '%;transform:translateX(-50%);font-size:13px;font-weight:800;color:#fff;white-space:nowrap">' + fmt(showH) + ':00</div>';
+      } else {
+        let a = '';
+        for (let h = 0; h < 24; h += 6) a += '<div style="position:absolute;left:' + (h/24*100) + '%;font-size:9px;color:var(--txt-muted)">' + fmt(h) + '</div>';
+        a += '<div style="position:absolute;right:0;font-size:9px;color:var(--txt-muted)">24</div>';
+        axisEl.innerHTML = a;
+      }
+    }
+    const headEl = document.getElementById('dayChartHead');
+    if (headEl) {
+      headEl.innerHTML = showH !== null
+        ? 'Werte um <b style="color:#fff">' + fmt(showH) + ':00 Uhr</b> \u00b7 Finger loslassen f\u00fcr Jetzt'
+        : 'Werte <b style="color:#2ea8ff">jetzt (' + fmt(nowH) + ':00)</b> \u00b7 farbig = gute Bei\u00dfzeit';
+    }
   };
+
+  // Globaler touchmove-Blocker: solange aktiv gescrubt wird, kein Seiten-Scroll
+  if (!window._dayScrubBlockerInstalled) {
+    window._dayScrubBlockerInstalled = true;
+    document.addEventListener('touchmove', (e) => {
+      if (_dayScrubActive) { e.preventDefault(); }
+    }, { passive: false });
+  }
+
   zones.forEach(zone => {
     const onMove = (clientX) => {
       const h = hourFromX(zone, clientX);
       if (h !== _dayChartScrubH) { _dayChartScrubH = h; updateBody(); }
     };
-    zone.ontouchstart = (e) => { e.preventDefault(); e.stopPropagation(); onMove(e.touches[0].clientX); };
-    zone.ontouchmove  = (e) => { e.preventDefault(); e.stopPropagation(); onMove(e.touches[0].clientX); };
-    zone.ontouchend   = ()  => { _dayChartScrubH = null; updateBody(); };
-    zone.ontouchcancel= ()  => { _dayChartScrubH = null; updateBody(); };
+    zone.ontouchstart = (e) => {
+      _dayScrubActive = true;
+      e.stopPropagation();
+      onMove(e.touches[0].clientX);
+    };
+    zone.ontouchmove = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      onMove(e.touches[0].clientX);
+    };
+    const endScrub = () => {
+      _dayScrubActive = false;
+      _dayChartScrubH = null;
+      updateBody();
+    };
+    zone.ontouchend = endScrub;
+    zone.ontouchcancel = endScrub;
     zone.onmousedown = (e) => {
+      e.preventDefault();
       onMove(e.clientX);
       const mm = (ev) => onMove(ev.clientX);
       const mu = () => { _dayChartScrubH = null; updateBody(); document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); };
@@ -4831,13 +4899,7 @@ function renderView() {
   const chance   = calcAngelwetterIndex();
   const bestTime = getState('sensor.fishing_tracker_best_time', getState('sensor.beste_angelzeit','18:00–21:00'));
   const waterT   = (() => {
-    // NLWKN echte Vechte-Messung höchste Priorität
-    const nlwkn = parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state);
-    if (!isNaN(nlwkn) && nlwkn > -2 && nlwkn < 40) return nlwkn.toFixed(1);
-    // Konfigurierter Sensor (oft Schätzung)
-    const v = parseFloat(getState('sensor.wassertemperatur_gewaesser', getState('sensor.water_temp', '')));
-    if (!isNaN(v) && v > -2 && v < 40) return v.toFixed(1);
-    // Open-Meteo / Schätzung
+    // getEstimatedWaterTemp macht den frischen parent.hass-Read und hat die richtige Priorität
     if (typeof getEstimatedWaterTemp === 'function') {
       const est = getEstimatedWaterTemp();
       if (est && est.value != null) return est.value.toFixed(1);
@@ -6159,7 +6221,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.30'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.33'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -6268,9 +6330,14 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         pastData   = (getPressureHistory12h(basePressure, _trend) || []).map(v => isFinite(v) ? v : basePressure);
         futureData = (getPressureForecast12h(basePressure, _trend) || []).map(v => isFinite(v) ? v : basePressure);
       }
-      if (pastData.length >= 2 && futureData.length >= 1) {
-        drawPressureChart('pressureChart', pastData, futureData, basePressure);
+      // Garantierter Fallback: wenn Quellen leer/zu kurz, flache Linie aus aktuellem Druck + Trend
+      if (pastData.length < 2) {
+        pastData = [0,1,2,3,4,5,6].map(i => Math.round((basePressure - _trend * (6 - i) / 3) * 10) / 10);
       }
+      if (futureData.length < 1) {
+        futureData = [1,2,3,4,5,6].map(i => Math.round((basePressure + _trend * i / 3) * 10) / 10);
+      }
+      drawPressureChart('pressureChart', pastData, futureData, basePressure);
     } catch(e) { console.warn('pressureChart Fehler:', e); }
 
     // Kurzfristig-Chart (±6h, Stundenauflösung) — Open-Meteo
@@ -6292,15 +6359,21 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         xLabelsShort = null;
       }
 
+      // Garantierter Fallback: flache Linie aus aktuellem Druck + Trend
+      if (pastShort.length < 2) {
+        pastShort = [0,1,2,3,4,5,6].map(i => Math.round((basePressureShort - _trendShort * (6 - i) / 3) * 10) / 10);
+      }
+      if (futureShort.length < 1) {
+        futureShort = [1,2,3,4,5,6].map(i => Math.round((basePressureShort + _trendShort * i / 3) * 10) / 10);
+      }
+
       // X-Labels in Container schreiben falls vorhanden
       if (xLabelsShort) {
         const xEl = document.getElementById('pressureChartShortXLabels');
         if (xEl) xEl.innerHTML = xLabelsShort.map(l => `<span>${l}</span>`).join('');
       }
 
-      if (pastShort.length >= 2 && futureShort.length >= 1) {
-        drawPressureChart('pressureChartShort', pastShort, futureShort, basePressureShort);
-      }
+      drawPressureChart('pressureChartShort', pastShort, futureShort, basePressureShort);
     } catch(e) { console.warn('pressureChartShort Fehler:', e); }
 
     // Wassertemperatur-History via HA Recorder — läuft jetzt UNABHÄNGIG
