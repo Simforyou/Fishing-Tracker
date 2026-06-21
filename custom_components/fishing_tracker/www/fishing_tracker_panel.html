@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.46 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.47 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -558,16 +558,19 @@ async function fetchOpenMeteoForecast(lat, lon) {
 // ══════════════════════════════════════════════════════════════════════════
 // Kuratierte Liste für die Region Grafschaft Bentheim / Niedergrafschaft (30km)
 // + grenznahe NL-Flüsse. Slug = letzter URL-Teil von wassertemperatur.site.
+// Regional-Gewässer mit Stadt-Seiten (echte Messwerte statt nur Modell).
+// cityUrl = volle wassertemperatur.site Stadt-URL mit aktuellem Messwert.
 const FT_REGIONAL_WATERS = [
-  { name: 'Vechte',        slug: 'vechte',        region: 'Grafschaft Bentheim' },
-  { name: 'Dinkel',        slug: 'dinkel',        region: 'Grafschaft Bentheim' },
-  { name: 'Ems',           slug: 'ems',           region: 'Emsland' },
-  { name: 'Berkel',        slug: 'berkel',        region: 'NRW / NL Grenze' },
-  { name: 'Bocholter Aa',  slug: 'bocholter-aa',  region: 'NRW / NL Grenze' },
-  { name: 'Issel (Oude IJssel)', slug: 'oude-ijssel', region: 'NL Grenze' },
+  { name: 'Vechte (Nordhorn)', slug: 'nordhorn-in-vechte',  region: 'Grafschaft Bentheim' },
+  { name: 'Dinkel (Gronau)',   slug: 'gronau-in-dinkel',    region: 'Grafschaft Bentheim' },
+  { name: 'Ems (Lingen)',      slug: 'lingen-in-ems',       region: 'Emsland' },
+  { name: 'Ems (Rheine)',      slug: 'rheine-in-ems',       region: 'Münsterland' },
+  { name: 'Berkel (Coesfeld)', slug: 'coesfeld-in-berkel',  region: 'NRW / NL Grenze' },
+  { name: 'Hase (Bramsche)',   slug: 'bramsche-in-hase',    region: 'Osnabrücker Land' },
+  { name: 'Oude IJssel (Borken)', slug: 'borken-in-oude-ijssel', region: 'NL Grenze' },
 ];
 
-// Beliebte überregionale Flüsse für die Suche (kann erweitert werden)
+// Beliebte überregionale Flüsse für die Suche (nutzen /flusse/ — Modellwerte)
 const FT_MORE_WATERS = [
   { name: 'Rhein', slug: 'rhine' }, { name: 'Weser', slug: 'weser' },
   { name: 'Elbe', slug: 'elbe' }, { name: 'Donau', slug: 'danube' },
@@ -585,21 +588,34 @@ const FT_MORE_WATERS = [
 ];
 
 function ftWaterUrl(slug) {
+  // Stadt-Slugs (enthalten "-in-") nutzen die Stadt-Seite mit echten Messwerten,
+  // einfache Fluss-Slugs nutzen die /flusse/ Modellseite.
+  if (slug.includes('-in-')) {
+    return 'https://wassertemperatur.site/stadt/meerestemperatur-in-deutschland/water-temp-in-' + slug;
+  }
   return 'https://wassertemperatur.site/flusse/water-temp-in-' + slug;
 }
 
 // Aktuell gewähltes Gewässer aus Sensor-Attribut ableiten
 function getCurrentWaterName() {
   try {
-    const haEl = window.parent?.document?.querySelector('home-assistant');
-    const sensor = haEl?.hass?.states?.['sensor.wassertemperatur_gewaesser'];
+    const sensor = (typeof findWaterTempSensorState === 'function') ? findWaterTempSensorState() : null;
     const url = sensor?.attributes?.source_url || sensor?.attributes?.url || '';
     if (url) {
+      // Stadt-URL: ".../water-temp-in-nordhorn-in-vechte" → slug "nordhorn-in-vechte"
       const m = url.match(/water-temp-in-([a-z0-9-]+)/i);
       if (m) {
         const slug = m[1];
         const found = [...FT_REGIONAL_WATERS, ...FT_MORE_WATERS].find(w => w.slug === slug);
-        return found ? found.name : slug;
+        if (found) return found.name;
+        // Fallback: aus Stadt-Slug "nordhorn-in-vechte" den Flussnamen "Vechte" ziehen
+        const parts = slug.split('-in-');
+        if (parts.length === 2) {
+          const fluss = parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
+          const stadt = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+          return fluss + ' (' + stadt + ')';
+        }
+        return slug.charAt(0).toUpperCase() + slug.slice(1);
       }
     }
   } catch(e) {}
@@ -6464,7 +6480,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.46'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.47'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8113,7 +8129,7 @@ function locForecastWeatherHTML() {
     const trIcon = trend>0.5?'📈 steigend':trend<-0.5?'📉 fallend':'➡️ stabil';
     const wtCol = wtNow<8?'#67d3ff':wtNow<15?'#3fb950':wtNow<22?'#ffd23f':'#ff9d18';
     const titleLabel2 = isReal2 ? '🌡️ Wassertemperatur (gemessen)' : '🌡️ Wassertemperatur (geschätzt)';
-    const srcLabel2 = isReal2 ? (realWt2.label || 'wassertemperatur.site') : ('Modell · gefunden: ' + (_waterSensorIdCache || 'KEIN Sensor') + ' · ' + (realWt2?.source || 'null'));
+    const srcLabel2 = isReal2 ? (realWt2.label || 'wassertemperatur.site') : 'Modell aus Lufttemperatur-Historie';
     waterBox = `<div style="background:rgba(103,211,255,.08);border:1px solid rgba(103,211,255,.2);border-radius:12px;padding:12px;margin-bottom:10px">
       <div style="font-size:12px;font-weight:700;color:#67d3ff;margin-bottom:6px">${titleLabel2}</div>
       <div style="display:flex;justify-content:space-between;align-items:center">

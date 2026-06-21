@@ -138,7 +138,14 @@ class WaterTemperatureEngine:
 
     def _extract_current_temp(self, html: str) -> float | None:
         patterns = [
+            # Bestes Muster (Stadt-Seiten): "beträgt heute 18.1°C"
             r"beträgt heute\s+(\d+[.,]\d+)\s*°?C",
+            r"betragt heute\s+(\d+[.,]\d+)\s*°?C",
+            # "Der aktuelle Wert beträgt 18.1 Grad"
+            r"aktuelle Wert beträgt\s+(\d+[.,]?\d*)\s*Grad",
+            r"current.{0,15}is\s+(\d+[.,]\d+)\s*°?C",
+            # Überschrift "Aktuelle Wassertemperatur" gefolgt von "18.1°C ... Heute"
+            r"Aktuelle Wassertemperatur[^0-9]{0,120}?(\d+[.,]\d+)\s*°?C\s*\n?\s*Heute",
             r"Aktuelle Wassertemperatur[^<]{0,80}?(\d+[.,]\d+)\s*°?C",
             r"Heute\s*\n?\s*(\d+[.,]\d+)\s*°?C",
             r"(?<!\d)(\d{1,2}[.,]\d)\s*°C",
@@ -146,7 +153,12 @@ class WaterTemperatureEngine:
         for pattern in patterns:
             m = re.search(pattern, html, re.IGNORECASE)
             if m:
-                return float(m.group(1).replace(",", "."))
+                try:
+                    val = float(m.group(1).replace(",", "."))
+                    if -2 < val < 40:  # Plausibilität
+                        return val
+                except Exception:
+                    continue
         return None
 
     def _extract_monthly_table(self, html: str) -> dict[int, tuple[float, float, float]] | None:
