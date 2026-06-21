@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.49 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.51 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1263,12 +1263,18 @@ function getVerifiedWeather() {
   const localAvailable = !isNaN(localStation.temperature) && !isNaN(localStation.wind_speed);
 
   // ── 2. ONLINE-WETTER-ENTITIES ───────────────────────────────────────────
-  const ONLINE_ENTITIES = [
-    'weather.home', 'weather.dwd_weather', 'weather.dwd_weather_hourly',
-    'weather.met_no', 'weather.openweathermap', 'weather.open_meteo',
-    'weather.accuweather', 'weather.buienradar', 'weather.pirateweather',
-    'weather.tomorrow_io', 'weather.home_2',
-  ];
+  // Alle weather.* Entities dynamisch finden (egal wie sie genau heißen).
+  // Open-Meteo wird bevorzugt (zuverlässige Modelldaten für den Standort).
+  const allWeatherEntities = Object.keys(haStates || {}).filter(k => k.startsWith('weather.'));
+  // Sortieren: Open-Meteo zuerst, dann DWD, dann Rest
+  const rank = (e) => {
+    const n = e.toLowerCase();
+    if (n.includes('open_meteo') || n.includes('openmeteo')) return 0;
+    if (n.includes('dwd')) return 1;
+    if (n.includes('met_no') || n.includes('metno')) return 2;
+    return 5;
+  };
+  const ONLINE_ENTITIES = allWeatherEntities.sort((a, b) => rank(a) - rank(b));
   const onlineSources = [];
   for (const entity of ONLINE_ENTITIES) {
     const s = haStates[entity];
@@ -1292,33 +1298,33 @@ function getVerifiedWeather() {
     ? onlineSources.reduce((s, x) => s + (x[key] || 0), 0) / onlineSources.length
     : null;
 
+  // Wert von der bestplatzierten Quelle (Open-Meteo zuerst) — verhindert dass
+  // eine schlechte Quelle den verlässlichen Open-Meteo-Wert per Mittelwert verfälscht.
+  const onlineTop = key => {
+    for (const src of onlineSources) {
+      const v = src[key];
+      if (v != null && !isNaN(v)) return v;
+    }
+    return null;
+  };
+
   // ── 3. ZUSAMMENFÜHREN ──────────────────────────────────────────────────
-  // Lokale Station hat Priorität wo vorhanden
+  // Online-Quellen (Open-Meteo etc.) haben Priorität — zuverlässiger als ein
+  // einzelner lokaler Sensor, der ausfallen oder driften kann.
+  // Lokale Station nur als Fallback wenn keine Online-Quelle verfügbar ist.
+  const onlineAv = key => { const v = onlineAvg(key); return (v != null && !isNaN(v)) ? v : null; };
+  const onlineT = key => onlineTop(key);   // bevorzugt Open-Meteo (Rang 0)
+  const localOk = (val) => localAvailable && !isNaN(val);
   const merged = {
-    temperature:    localAvailable && !isNaN(localStation.temperature)
-                      ? localStation.temperature
-                      : onlineAvg('temperature') ?? 12,
-    wind_speed:     localAvailable && !isNaN(localStation.wind_speed)
-                      ? localStation.wind_speed
-                      : onlineAvg('wind_speed') ?? 10,
-    wind_gusts:     localAvailable && !isNaN(localStation.wind_gusts)
-                      ? localStation.wind_gusts
-                      : (onlineAvg('wind_speed') ?? 10) * 1.3,
-    wind_bearing:   localAvailable && !isNaN(localStation.wind_bearing)
-                      ? localStation.wind_bearing
-                      : onlineAvg('wind_bearing') ?? 0,
-    pressure:       localAvailable && !isNaN(localStation.pressure)
-                      ? localStation.pressure
-                      : onlineAvg('pressure') ?? 1015,
-    precipitation:  localAvailable && !isNaN(localStation.precipitation)
-                      ? localStation.precipitation
-                      : onlineAvg('precipitation') ?? 0,
-    cloud_coverage: localAvailable && !isNaN(localStation.cloud_coverage)
-                      ? localStation.cloud_coverage
-                      : onlineAvg('cloud_coverage') ?? 50,
-    humidity:       localAvailable && !isNaN(localStation.humidity)
-                      ? localStation.humidity
-                      : onlineAvg('humidity') ?? 70,
+    temperature:    onlineT('temperature') ?? (localOk(localStation.temperature) ? localStation.temperature : 12),
+    wind_speed:     onlineT('wind_speed') ?? (localOk(localStation.wind_speed) ? localStation.wind_speed : 10),
+    wind_gusts:     (onlineT('wind_speed') != null ? onlineT('wind_speed') * 1.3 : null)
+                      ?? (localOk(localStation.wind_gusts) ? localStation.wind_gusts : 13),
+    wind_bearing:   onlineT('wind_bearing') ?? (localOk(localStation.wind_bearing) ? localStation.wind_bearing : 0),
+    pressure:       onlineT('pressure') ?? (localOk(localStation.pressure) ? localStation.pressure : 1015),
+    precipitation:  onlineT('precipitation') ?? (localOk(localStation.precipitation) ? localStation.precipitation : 0),
+    cloud_coverage: onlineT('cloud_coverage') ?? (localOk(localStation.cloud_coverage) ? localStation.cloud_coverage : 50),
+    humidity:       onlineT('humidity') ?? (localOk(localStation.humidity) ? localStation.humidity : 70),
     // Solar nur von lokaler Station – kein API hat das!
     solar_radiation: !isNaN(localStation.solar_radiation) ? localStation.solar_radiation : null,
     // Forecast nur von Online (lokale Station hat keine Vorhersage)
@@ -1337,13 +1343,16 @@ function getVerifiedWeather() {
     else if (deviation <= 2.5) confidence = 'medium';
     else                        confidence = 'low';
     const onlineName = onlineSources[0].entity.replace('weather.','');
-    sourceLabel = `Haftenkamp + ${onlineName}`;
-  } else if (localAvailable) {
-    confidence = 'local_only';
-    sourceLabel = 'Wetterstation Haftenkamp';
+    // Online ist jetzt primär; Station dient nur noch zum Abgleich
+    sourceLabel = onlineSources.length > 1
+      ? onlineSources.map(s => s.entity.replace('weather.','')).join(' + ')
+      : onlineName;
   } else if (onlineSources.length > 0) {
     confidence = onlineSources.length > 1 ? 'online_multi' : 'single';
     sourceLabel = onlineSources.map(s => s.entity.replace('weather.','')).join(' + ');
+  } else if (localAvailable) {
+    confidence = 'local_only';
+    sourceLabel = 'Wetterstation Haftenkamp';
   }
 
   return { ...merged, sourceCount: totalSources, confidence, deviation, sourceLabel,
@@ -6536,7 +6545,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.49'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.51'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8870,7 +8879,7 @@ async function endSession() {
     });
   } catch(e) {}
   const intervalMs = FT_SESSION_INTERVAL_MIN * 60000;
-  let blanksCreated = 0;
+  let blanksCreated = 0, blanksFailed = 0, windowsChecked = 0;
 
   for (let t = startMs; t < endMs; t += intervalMs) {
     const winStart = t, winEnd = t + intervalMs;
@@ -8878,10 +8887,17 @@ async function endSession() {
     if (!hadCatch) {
       const midMs = winStart + intervalMs / 2;
       if (midMs > endMs) break;
-      await createSessionBlank(new Date(midMs), sess);
-      blanksCreated++;
+      windowsChecked++;
+      try {
+        const ok = await createSessionBlank(new Date(midMs), sess);
+        if (ok) blanksCreated++; else blanksFailed++;
+      } catch(err) {
+        blanksFailed++;
+        console.warn('endSession: Nullnummer fehlgeschlagen', err);
+      }
     }
   }
+  console.log(`Session-Auswertung: ${durationMin} Min, ${windowsChecked} leere Fenster, ${blanksCreated} Nullnummern erstellt, ${blanksFailed} fehlgeschlagen`);
 
   // Strecke berechnen + Session archivieren
   const distM = trackDistanceM(sess.track);
@@ -8949,8 +8965,8 @@ function showSessionSummary(record) {
           <div style="font-size:11px;color:var(--txt-muted)">🐟 Fänge</div>
         </div>
         <div style="text-align:center;background:rgba(255,255,255,.04);border-radius:10px;padding:12px">
-          <div style="font-size:24px;font-weight:900;color:#ff9d18">${catchPerHour.toFixed(1)}</div>
-          <div style="font-size:11px;color:var(--txt-muted)">📊 Fänge/h</div>
+          <div style="font-size:24px;font-weight:900;color:#ff9d18">${record.blanksCreated || 0}</div>
+          <div style="font-size:11px;color:var(--txt-muted)">∅ Nullnummern</div>
         </div>
       </div>
       ${nCatch > 0 ? `<div style="margin-top:12px;font-size:13px;color:var(--txt-sub);text-align:center">${fishSummary}</div>` : ''}
@@ -9047,8 +9063,7 @@ async function createSessionBlank(when, sess) {
 
   // Wassertemperatur aus daily_history zuordnen
   try {
-    const haEl = window.parent?.document?.querySelector('home-assistant');
-    const sensor = haEl?.hass?.states?.['sensor.wassertemperatur_gewaesser'];
+    const sensor = (typeof findWaterTempSensorState === 'function') ? findWaterTempSensorState() : null;
     const dh = sensor?.attributes?.daily_history;
     if (dh && Array.isArray(dh)) {
       const match = dh.find(d => d.date === dStr);
@@ -9056,7 +9071,13 @@ async function createSessionBlank(when, sess) {
     }
   } catch(e) {}
 
-  await callHAService('fishing_tracker', 'log_no_catch', data);
+  try {
+    const ok = await callHAService('fishing_tracker', 'log_no_catch', data);
+    return ok !== false;
+  } catch(e) {
+    console.warn('createSessionBlank: log_no_catch fehlgeschlagen', e);
+    return false;
+  }
 }
 
 // Schnell-Fang während Session (oder normal)
