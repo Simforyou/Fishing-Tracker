@@ -107,6 +107,20 @@ class WaterTemperatureEngine:
     def _parse(self, html: str, month: int, air_temp: float | None) -> dict[str, Any] | None:
         try:
             current = self._extract_current_temp(html)
+            daily_history = self._extract_daily_history(html)
+
+            # Wenn kein aktueller Wert im Text gefunden: neuesten echten Tageswert
+            # aus der Verlaufstabelle nehmen (besser als Monatstabelle).
+            current_source = "wassertemperatur.site"
+            if current is None and daily_history:
+                # Letzter Eintrag mit gültigem Temperaturwert
+                for entry in reversed(daily_history):
+                    t = entry.get("temp")
+                    if t is not None and -2 < t < 40:
+                        current = t
+                        current_source = "wassertemperatur.site (Verlauf)"
+                        break
+
             if current is None:
                 _LOGGER.debug("WaterTemp: Keine aktuelle Temperatur gefunden")
                 return None
@@ -117,12 +131,11 @@ class WaterTemperatureEngine:
 
             lo, mid, hi = self._monthly_table.get(month, (10.0, 14.0, 18.0))
             forecast = self._extract_forecast(html)
-            daily_history = self._extract_daily_history(html)
 
             return {
                 "temp": round(current, 1),
-                "source": "wassertemperatur.site",
-                "source_url": url,
+                "source": current_source,
+                "source_url": self._url or "",
                 "monthly_avg": mid,
                 "monthly_min": lo,
                 "monthly_max": hi,
