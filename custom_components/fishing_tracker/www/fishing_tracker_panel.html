@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.52 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.54 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -5949,49 +5949,132 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         Rotfeder:'🟠',Döbel:'🟡',Rapfen:'⚡'}[f] || '🐟');
 
       _logEntries = entries;  // Cache für Event-Delegation
+
+      // Statistik + Filter-State
+      const _lbStats = computeLogbookStats(entries);
+      const _lbState = getLogbookState();
+      const _filter = (_lbState.filter || '').toLowerCase().trim();
+      const _filtered = _filter
+        ? entries.filter(e => (e.fish_type || '').toLowerCase().includes(_filter))
+        : entries;
+      const _newest = entries[0];  // bereits nach Datum sortiert (neueste zuerst)
+      const _grouped = groupLogbookEntries(_filtered);
+      const _years = Object.keys(_grouped).map(Number).sort((a, b) => b - a);
+
+      // Liste der vorhandenen Fischarten für Filter-Chips (nach Häufigkeit)
+      const _fishCounts = {};
+      entries.forEach(e => { if (e.fish_type) _fishCounts[e.fish_type] = (_fishCounts[e.fish_type] || 0) + 1; });
+      const _topFishTypes = Object.entries(_fishCounts).sort((a, b) => b[1] - a[1]).slice(0, 6).map(x => x[0]);
+
+      const _idxOf = e => entries.indexOf(e);
+
+      // Ein Eintrag (kompakt) als HTML
+      const _entryHtml = (e) => `
+        <div class="lb-entry" data-catchidx="${_idxOf(e)}" style="display:flex;gap:12px;padding:11px 6px;border-radius:12px;cursor:pointer;-webkit-tap-highlight-color:rgba(103,211,63,.15)">
+          <img src="${ftEntryImg(e)}" style="width:56px;height:56px;border-radius:11px;object-fit:cover;flex-shrink:0;border:1.5px solid rgba(103,211,63,.25)">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:900">${e.fish_type || '–'}</div>
+            <div style="font-size:13px;color:var(--txt-sub);margin-top:2px">${e.length_cm ? e.length_cm + ' cm' : ''}${e.weight_kg ? ' · ' + e.weight_kg + ' kg' : ''}</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:3px">🕐 ${fmtDate(e.timestamp)}${e.spot ? ' · 📍 ' + e.spot : ''}${e.angelwetter_index ? ' · 🎣 ' + e.angelwetter_index + '%' : ''}</div>
+          </div>
+        </div>`;
+
       return `
       ${backtestHtml}
+      ${_newest ? `
+      <div class="panel lb-newest" data-catchidx="${_idxOf(_newest)}" style="background:linear-gradient(145deg,rgba(103,211,63,.1),rgba(103,211,63,.02));border-color:rgba(103,211,63,.25);cursor:pointer">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="sec" style="margin-bottom:0">🆕 Neuester Fang</div>
+          <span style="font-size:12px;color:#67d33f;font-weight:700">Details ›</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:14px">
+          <img src="${ftEntryImg(_newest)}" style="width:84px;height:84px;border-radius:14px;object-fit:cover;flex-shrink:0;border:2px solid rgba(103,211,63,.3)">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:22px;font-weight:950;line-height:1">${_newest.fish_type || 'Fang'}</div>
+            ${_newest.length_cm ? `<div style="font-size:27px;font-weight:950;color:#67d33f;line-height:1.15;letter-spacing:-.02em">${_newest.length_cm} cm</div>` : ''}
+            <div style="font-size:12px;color:var(--muted);margin-top:3px">🕐 ${fmtDate(_newest.timestamp)}${_newest.spot ? ' · 📍 ' + _newest.spot : ''}${_newest.bait ? ' · 🪱 ' + _newest.bait : ''}</div>
+          </div>
+        </div>
+      </div>` : ''}
+
+      ${entries.length > 0 ? `
+      <div class="panel">
+        <div class="grid3" style="gap:9px">
+          <div class="box" style="text-align:center"><div style="font-size:24px;font-weight:900;color:var(--blue);line-height:1">${_lbStats.total}</div><div style="font-size:10px;color:var(--muted);margin-top:5px;font-weight:600">Fänge gesamt</div></div>
+          <div class="box" style="text-align:center"><div style="font-size:24px;font-weight:900;color:#67d33f;line-height:1">${_lbStats.thisYearCount}</div><div style="font-size:10px;color:var(--muted);margin-top:5px;font-weight:600">${_lbStats.thisYear}</div></div>
+          <div class="box" style="text-align:center"><div style="font-size:15px;font-weight:800;color:var(--orange);line-height:1.1">${_lbStats.topFish || '–'}<br><span style="font-size:17px">${_lbStats.topN || 0}×</span></div><div style="font-size:10px;color:var(--muted);margin-top:5px;font-weight:600">Top-Art</div></div>
+        </div>
+      </div>` : ''}
+
       ${(()=>{
         const withGPS = entries.filter(e => e.latitude && e.longitude);
         if (withGPS.length === 0) return '';
         setTimeout(() => initLogMap(withGPS), 150);
-        return '<div class="panel" style="padding-bottom:0"><div class="sec">🗺️ Fänge auf der Karte</div><div id="logMap" style="height:240px;border-radius:0 0 14px 14px"></div></div>';
+        return '<div class="panel" style="padding-bottom:0"><div class="sec">🗺️ Fänge auf der Karte</div><div id="logMap" style="height:240px;border-radius:0 0 18px 18px"></div></div>';
       })()}
+
       <div class="panel">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <div class="sec" style="margin-bottom:0">📘 Fangbuch</div>
-          <button style="border:0;border-radius:9px;background:#145da0;color:#fff;padding:8px 16px;font-size:13px;font-weight:800;cursor:pointer"
-            onclick="openCatchForm()">+ Fang erfassen</button>
+          <button style="border:0;border-radius:9px;background:#145da0;color:#fff;padding:8px 16px;font-size:13px;font-weight:800;cursor:pointer" onclick="openCatchForm()">+ Fang erfassen</button>
         </div>
-        ${_debugInfo}
+
         ${entries.length === 0
           ? '<div style="text-align:center;padding:30px;color:rgba(255,255,255,.3)">🐟 Noch keine Fänge gespeichert.<br><br><button style="border:1px solid rgba(103,211,63,.4);background:rgba(103,211,63,.1);color:#67d33f;padding:10px 20px;border-radius:10px;font-weight:800;cursor:pointer;font-size:13px" onclick="openCatchForm()">Ersten Fang erfassen</button></div>'
-          : entries.map(e => `
-        <div class="lb-entry" data-catchidx="${entries.indexOf(e)}" style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer;-webkit-tap-highlight-color:rgba(103,211,63,.15)">
-          ${e.photo_url
-            ? `<img src="${e.photo_url}"
-                onclick="showPhotoLightbox('${e.photo_url}')"
-                style="width:64px;height:64px;border-radius:10px;object-fit:cover;flex-shrink:0;cursor:zoom-in;border:2px solid rgba(103,211,63,.3)">`
-            : `<div style="width:64px;height:64px;border-radius:10px;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0">${fishEmoji(e.fish_type)}</div>`}
-          <div style="flex:1;min-width:0">
-            <div style="font-size:15px;font-weight:900">${e.fish_type || '–'}</div>
-            <div style="font-size:13px;color:var(--txt-sub);margin-top:2px">
-              ${e.length_cm ? e.length_cm + ' cm' : ''}${e.weight_kg ? ' · ' + e.weight_kg + ' kg' : ''}
-            </div>
-            <div style="font-size:12px;color:rgba(255,255,255,.5);margin-top:2px">
-              ${e.spot || ''} · ${e.bait || ''}
-            </div>
-            <div style="font-size:11px;color:var(--muted);margin-top:2px">
-              🕐 ${fmtDate(e.timestamp)}
-              ${e.water_temp ? ' · 💧 ' + e.water_temp + '°C' : ''}
-              ${e.angelwetter_index ? ' · 🎣 ' + e.angelwetter_index + '%' : ''}
-            </div>
+          : `
+          <div style="position:relative;margin-bottom:10px">
+            <span style="position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted)">🔍</span>
+            <input id="lbSearch" type="text" placeholder="Fischart suchen … (z.B. Hecht)" value="${_lbState.filter || ''}"
+              oninput="clearTimeout(window._lbSearchT);window._lbSearchT=setTimeout(()=>setLogbookFilter(this.value),350)"
+              style="width:100%;box-sizing:border-box;padding:11px 14px 11px 38px;border-radius:12px;border:1px solid var(--border);background:var(--kpi-bg);color:var(--txt-main);font-size:15px">
+          </div>
+          <div style="display:flex;gap:7px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch">
+            <span onclick="setLogbookFilter('')" style="flex-shrink:0;padding:7px 14px;border-radius:99px;border:1px solid ${!_filter ? 'rgba(46,168,255,.4)' : 'var(--border)'};background:${!_filter ? 'rgba(46,168,255,.15)' : 'var(--kpi-bg)'};color:${!_filter ? 'var(--blue)' : 'var(--txt-sub)'};font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">Alle</span>
+            ${_topFishTypes.map(f => `<span onclick="setLogbookFilter('${f}')" style="flex-shrink:0;padding:7px 14px;border-radius:99px;border:1px solid ${_filter===f.toLowerCase() ? 'rgba(46,168,255,.4)' : 'var(--border)'};background:${_filter===f.toLowerCase() ? 'rgba(46,168,255,.15)' : 'var(--kpi-bg)'};color:${_filter===f.toLowerCase() ? 'var(--blue)' : 'var(--txt-sub)'};font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">${fishEmoji(f)} ${f}</span>`).join('')}
           </div>
 
-        </div>`).join('')}
+          ${_filtered.length === 0
+            ? `<div style="text-align:center;padding:24px;color:rgba(255,255,255,.3);font-size:14px">Keine Treffer für „${_lbState.filter}"</div>`
+            : _years.map(y => {
+                const yd = _grouped[y];
+                const yOpen = (_lbState.openYears || []).includes(y) || _filter;  // bei Filter alle offen
+                const months = Object.keys(yd.months).map(Number).sort((a, b) => b - a);
+                const big = yd.biggest;
+                return `
+                <div style="margin-top:12px">
+                  <div onclick="toggleLogbookYear(${y})" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--bg-panel);border:1px solid var(--border);border-radius:16px;cursor:pointer">
+                    <div style="display:flex;align-items:center;gap:11px">
+                      <img src="${big ? ftEntryImg(big) : FT_FISH_IMG}" style="width:44px;height:44px;border-radius:10px;object-fit:cover;flex-shrink:0;border:1px solid rgba(255,210,63,.3)">
+                      <div>
+                        <span style="font-size:17px;font-weight:900">${y}</span>
+                        ${big ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">🏆 ${big.fish_type} ${big.length_cm} cm</div>` : ''}
+                      </div>
+                    </div>
+                    <span style="display:flex;align-items:center;gap:10px"><span style="font-size:13px;color:var(--muted);font-weight:600">${yd.count} ${yd.count===1?'Fang':'Fänge'}</span><span style="color:var(--muted);font-size:12px;transition:transform .25s;${yOpen?'transform:rotate(180deg)':''};display:inline-block">▾</span></span>
+                  </div>
+                  ${yOpen ? `<div style="margin:8px 0 0 8px;border-left:2px solid rgba(46,168,255,.2);padding-left:10px">
+                    ${months.map(m => {
+                      const mEntries = yd.months[m].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                      const mKey = y + '-' + m;
+                      const mOpen = (_lbState.openMonths || []).includes(mKey) || _filter;
+                      return `
+                      <div style="margin-top:4px">
+                        <div onclick="toggleLogbookMonth('${mKey}')" style="display:flex;align-items:center;justify-content:space-between;padding:9px 10px;cursor:pointer">
+                          <span style="font-size:14px;font-weight:800;color:var(--txt-sub)">${FT_MONTH_NAMES[m]}</span>
+                          <span style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--muted)">${mEntries.length}</span><span style="color:var(--muted);font-size:11px;${mOpen?'transform:rotate(180deg)':''};display:inline-block">▾</span></span>
+                        </div>
+                        ${mOpen ? mEntries.map(_entryHtml).join('') : ''}
+                      </div>`;
+                    }).join('')}
+                  </div>` : ''}
+                </div>`;
+              }).join('')
+          }`
+        }
       </div>
 `;
     },
+
 
     sessions: () => buildSessionsView(),
 
@@ -6545,7 +6628,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.52'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.54'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8299,6 +8382,77 @@ let _overlayLon    = null;
 let _detailMap = null;
 let _logEntries = [];  // Cache für klickbare Einträge
 
+// ─────────────────────────────────────────────────────────────────────────
+// FANGBUCH: State (letzte Ansicht merken), Bild, Statistik, Gruppierung
+// ─────────────────────────────────────────────────────────────────────────
+const FT_LOGBOOK_STATE_KEY = 'ft_logbook_state';
+function getLogbookState() {
+  try { const raw = localStorage.getItem(FT_LOGBOOK_STATE_KEY); return raw ? JSON.parse(raw) : { filter: '', openYears: [], openMonths: [] }; }
+  catch(e) { return { filter: '', openYears: [], openMonths: [] }; }
+}
+function saveLogbookState(st) {
+  try { localStorage.setItem(FT_LOGBOOK_STATE_KEY, JSON.stringify(st)); } catch(e) {}
+}
+function setLogbookFilter(val) {
+  const st = getLogbookState(); st.filter = val; saveLogbookState(st);
+  scheduleRenderView();
+}
+function toggleLogbookYear(year) {
+  const st = getLogbookState();
+  st.openYears = st.openYears || [];
+  const i = st.openYears.indexOf(year);
+  if (i >= 0) st.openYears.splice(i, 1); else st.openYears.push(year);
+  saveLogbookState(st);
+  scheduleRenderView();
+}
+function toggleLogbookMonth(key) {
+  const st = getLogbookState();
+  st.openMonths = st.openMonths || [];
+  const i = st.openMonths.indexOf(key);
+  if (i >= 0) st.openMonths.splice(i, 1); else st.openMonths.push(key);
+  saveLogbookState(st);
+  scheduleRenderView();
+}
+
+// Fallback-/Logo-Bild (klassische Unterwasserszene) — liegt unter /local/
+const FT_FISH_IMG = '/local/fish_fallback.jpg';
+function ftEntryImg(e) { return (e && e.photo_url) ? e.photo_url : FT_FISH_IMG; }
+
+// Statistik über alle Fänge
+function computeLogbookStats(entries) {
+  const counts = {};
+  let biggest = null;
+  entries.forEach(e => {
+    if (e.fish_type) counts[e.fish_type] = (counts[e.fish_type] || 0) + 1;
+    const len = parseFloat(e.length_cm) || 0;
+    if (len > 0 && (!biggest || len > (parseFloat(biggest.length_cm) || 0))) biggest = e;
+  });
+  let topFish = null, topN = 0;
+  Object.entries(counts).forEach(([f, n]) => { if (n > topN) { topN = n; topFish = f; } });
+  const thisYear = new Date().getFullYear();
+  const thisYearCount = entries.filter(e => new Date(e.timestamp).getFullYear() === thisYear).length;
+  return { total: entries.length, biggest, topFish, topN, thisYearCount, thisYear };
+}
+
+// Fänge nach Jahr → Monat gruppieren, größten Fisch je Jahr ermitteln
+function groupLogbookEntries(entries) {
+  const years = {};
+  entries.forEach(e => {
+    const d = new Date(e.timestamp);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    if (!years[y]) years[y] = { count: 0, biggest: null, months: {} };
+    years[y].count++;
+    const len = parseFloat(e.length_cm) || 0;
+    if (len > 0 && (!years[y].biggest || len > (parseFloat(years[y].biggest.length_cm) || 0))) years[y].biggest = e;
+    if (!years[y].months[m]) years[y].months[m] = [];
+    years[y].months[m].push(e);
+  });
+  return years;
+}
+
+const FT_MONTH_NAMES = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+
 // Wetter + Wassertemperatur für einen Fang automatisch nachladen/abgleichen
 async function reweatherCatch(full) {
   const ts = full.timestamp;
@@ -8390,10 +8544,52 @@ async function reweatherCatch(full) {
 }
 
 // Bearbeiten-Formular für einen bestehenden Fang
-function openCatchEditForm(full) {
+let _editingCatchFull = null;
+async function openCatchEditForm(full) {
+  // Falls Wetterdaten fehlen (alter Fang, nie gespeichert): aus Open-Meteo Archive
+  // nachladen, damit die Felder vorbefüllt sind statt leer.
+  if (full.temperature == null && full.wind_speed == null && full.pressure == null) {
+    try {
+      const dt = new Date(full.timestamp);
+      const center = getBestCenter();
+      const lat = full.latitude || center[0];
+      const lon = full.longitude || center[1];
+      const dStr = dt.toISOString().slice(0, 10);
+      const hour = dt.getHours();
+      const r = await fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${dStr}&end_date=${dStr}&hourly=temperature_2m,precipitation,windspeed_10m,windgusts_10m,cloudcover,relativehumidity_2m,surface_pressure&timezone=Europe/Berlin`);
+      const data = await r.json();
+      const h = data.hourly;
+      if (h && h.temperature_2m) {
+        const r1 = v => v != null ? Math.round(v * 10) / 10 : null;
+        if (full.temperature == null && h.temperature_2m[hour] != null) full.temperature = r1(h.temperature_2m[hour]);
+        if (full.wind_speed == null && h.windspeed_10m[hour] != null) full.wind_speed = r1(h.windspeed_10m[hour]);
+        if (full.wind_gusts == null && h.windgusts_10m[hour] != null) full.wind_gusts = r1(h.windgusts_10m[hour]);
+        if (full.pressure == null && h.surface_pressure[hour] != null) full.pressure = Math.round(h.surface_pressure[hour]);
+        if (full.cloud_coverage == null && h.cloudcover[hour] != null) full.cloud_coverage = Math.round(h.cloudcover[hour]);
+        if (full.precipitation == null && h.precipitation[hour] != null) full.precipitation = r1(h.precipitation[hour]);
+        if (full.humidity == null && h.relativehumidity_2m[hour] != null) full.humidity = Math.round(h.relativehumidity_2m[hour]);
+      }
+    } catch(e) { console.warn('Edit-Form Wetter-Nachladung:', e); }
+  }
+  // Wassertemperatur aus daily_history falls fehlt
+  if (full.water_temp == null) {
+    try {
+      const sensor = (typeof findWaterTempSensorState === 'function') ? findWaterTempSensorState() : null;
+      const dh = sensor?.attributes?.daily_history;
+      if (dh && Array.isArray(dh)) {
+        const dStr = new Date(full.timestamp).toISOString().slice(0, 10);
+        const match = dh.find(d => d.date === dStr);
+        if (match && match.temp != null) full.water_temp = Math.round(parseFloat(match.temp) * 10) / 10;
+      }
+    } catch(e) {}
+  }
   const overlay = document.getElementById('catchDetailOverlay');
   const content = document.getElementById('catchDetailContent');
   if (!content) return;
+
+  // Vollständiges Objekt merken, damit saveCatchEdit auch nicht-editierbare
+  // Wetterfelder (Böen, Bewölkung, Feuchte, Niederschlag) mitspeichern kann.
+  _editingCatchFull = full;
 
   const fld = (label, id, val, unit, type) =>
     `<div style="margin-bottom:12px">
@@ -8459,6 +8655,13 @@ async function saveCatchEdit(ts) {
   const airT = getNum('editAirTemp'); if (airT != null) updates.temperature = airT;
   const prs = getNum('editPressure'); if (prs != null) updates.pressure = prs;
   const wnd = getNum('editWind'); if (wnd != null) updates.wind_speed = wnd;
+
+  // Nicht-editierbare Wetterfelder aus dem geladenen Objekt erhalten/ergänzen
+  const f = _editingCatchFull || {};
+  if (updates.wind_gusts == null && f.wind_gusts != null) updates.wind_gusts = f.wind_gusts;
+  if (updates.cloud_coverage == null && f.cloud_coverage != null) updates.cloud_coverage = f.cloud_coverage;
+  if (updates.precipitation == null && f.precipitation != null) updates.precipitation = f.precipitation;
+  if (updates.humidity == null && f.humidity != null) updates.humidity = f.humidity;
 
   const ok = await callHAService('fishing_tracker', 'update_catch', updates);
   if (ok) {
@@ -10088,7 +10291,7 @@ init();
 document.addEventListener('click', function(ev) {
   const lb = ev.target.closest('[data-catchidx]');
   if (!lb) return;
-  if (ev.target.closest('button') || ev.target.tagName === 'IMG') return;
+  if (ev.target.closest('button')) return;
   const idx = parseInt(lb.getAttribute('data-catchidx'));
   if (!isNaN(idx) && _logEntries[idx]) openCatchDetail(_logEntries[idx]);
 });

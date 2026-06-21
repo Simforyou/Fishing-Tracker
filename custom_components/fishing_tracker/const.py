@@ -69,6 +69,7 @@ WWW_FILES = [
     "fishing-tracker-card.js",
     "fishing-quick-card.js",
     "fishing_tracker_quick.html",
+    "fish_fallback.jpg",
 ]
 
 SERVICE_INSTALL_DASHBOARD = "install_dashboard"
