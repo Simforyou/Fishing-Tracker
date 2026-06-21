@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.58 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.59 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -3540,7 +3540,7 @@ function updateCatchBaits(fishName) {
 function closeCatchForm() {
   catchFormActive = false;
   catchPhotoData  = null;
-  catchFormData   = { fish:'Zander', length:'', weight:'', spot:'', bait:'Gummifisch', notes:'', _manualLat:null, _manualLon:null, _exifLat:null, _exifLon:null, _exifResult:'', _dateManuallySet:false };
+  catchFormData   = { fish:'Zander', length:'', weight:'', spot:'', bait:'Gummifisch', notes:'', angler:getLastAngler(), _manualLat:null, _manualLon:null, _exifLat:null, _exifLon:null, _exifResult:'', _dateManuallySet:false };
   renderView();
 }
 // Wird von jedem Input-Feld aufgerufen → sichert Wert vor Re-Render
@@ -3775,6 +3775,7 @@ async function saveCatch() {
     bait:              bait,
     notes:             notes,
     angelwetter_index: awIdx,
+    ...(catchFormData.angler || getLastAngler() ? {angler: catchFormData.angler || getLastAngler()} : {}),
     ...(weight ? {weight_kg: weight} : {}),
     ...(lat    ? {latitude: lat, longitude: lon} : {}),
     ...(catchFormData.datetime ? {catch_datetime: catchFormData.datetime} : {}),
@@ -4077,6 +4078,19 @@ function catchFormView() {
        </select>
      </div>
     ${inp('notes', '📝 Notizen', 'text', 'Optional')}
+
+    <!-- Angler: wer hat den Fang eingetragen -->
+    <div style="margin-bottom:14px">
+      <label style="display:block;font-size:11px;color:rgba(255,255,255,.5);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🎣 Angler</label>
+      <div style="display:flex;gap:7px;flex-wrap:wrap">
+        ${getAnglers().map(name => {
+          const active = (catchFormData.angler || getLastAngler()) === name;
+          return `<button type="button" onclick="selectAngler('${name.replace(/'/g, "\\'")}')"
+            style="padding:8px 16px;border-radius:99px;border:1px solid ${active ? 'rgba(103,211,63,.5)' : 'var(--border)'};background:${active ? 'rgba(103,211,63,.15)' : 'var(--kpi-bg)'};color:${active ? '#67d33f' : 'var(--txt-sub)'};font-size:14px;font-weight:600;cursor:pointer">${name}</button>`;
+        }).join('')}
+        <button type="button" onclick="addAngler()" style="padding:8px 16px;border-radius:99px;border:1px dashed rgba(46,168,255,.4);background:rgba(46,168,255,.06);color:#2ea8ff;font-size:14px;font-weight:600;cursor:pointer">+ Neu</button>
+      </div>
+    </div>
 
     <!-- Karte: Fangort markieren (Vollbild-Overlay) -->
     <div style="margin-bottom:18px">
@@ -5973,7 +5987,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         <div class="lb-entry" data-catchidx="${_idxOf(e)}" style="display:flex;gap:12px;padding:11px 6px;border-radius:12px;cursor:pointer;-webkit-tap-highlight-color:rgba(103,211,63,.15)">
           <img src="${ftEntryImg(e)}" style="width:56px;height:56px;border-radius:11px;object-fit:cover;flex-shrink:0;border:1.5px solid rgba(103,211,63,.25)">
           <div style="flex:1;min-width:0">
-            <div style="font-size:15px;font-weight:900">${e.fish_type || '–'}</div>
+            <div style="font-size:15px;font-weight:900;display:flex;align-items:center;gap:7px">${e.fish_type || '–'}${e.angler ? `<span style="font-size:10px;font-weight:700;background:rgba(46,168,255,.15);color:#2ea8ff;padding:2px 7px;border-radius:6px">${e.angler}</span>` : ''}</div>
             <div style="font-size:13px;color:var(--txt-sub);margin-top:2px">${e.length_cm ? e.length_cm + ' cm' : ''}${e.weight_kg ? ' · ' + e.weight_kg + ' kg' : ''}</div>
             <div style="font-size:11px;color:var(--muted);margin-top:3px">🕐 ${fmtDate(e.timestamp)}${e.spot ? ' · 📍 ' + e.spot : ''}${e.angelwetter_index ? ' · 🎣 ' + e.angelwetter_index + '%' : ''}</div>
           </div>
@@ -6637,7 +6651,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.58'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.59'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8463,6 +8477,41 @@ function groupLogbookEntries(entries) {
 }
 
 const FT_MONTH_NAMES = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+
+// ── Angler-Verwaltung (wer hat den Fang eingetragen) ──────────────────────
+const FT_ANGLERS_KEY = 'ft_anglers';
+const FT_LAST_ANGLER_KEY = 'ft_last_angler';
+function getAnglers() {
+  try {
+    const raw = localStorage.getItem(FT_ANGLERS_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch(e) { return []; }
+}
+function saveAnglers(list) {
+  try { localStorage.setItem(FT_ANGLERS_KEY, JSON.stringify(list.slice(0, 10))); } catch(e) {}
+}
+function getLastAngler() {
+  try { return localStorage.getItem(FT_LAST_ANGLER_KEY) || ''; } catch(e) { return ''; }
+}
+function setLastAngler(name) {
+  try { if (name) localStorage.setItem(FT_LAST_ANGLER_KEY, name); } catch(e) {}
+}
+function addAngler() {
+  const name = prompt('Name des Anglers:');
+  if (!name || !name.trim()) return;
+  const list = getAnglers();
+  const clean = name.trim();
+  if (!list.includes(clean)) { list.push(clean); saveAnglers(list); }
+  catchFormData.angler = clean;
+  setLastAngler(clean);
+  renderView();
+}
+function selectAngler(name) {
+  catchFormData.angler = name;
+  setLastAngler(name);
+  renderView();
+}
 
 // Wetter + Wassertemperatur für einen Fang automatisch nachladen/abgleichen
 async function reweatherCatch(full) {
