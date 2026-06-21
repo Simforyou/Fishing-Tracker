@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.45 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.46 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -671,20 +671,59 @@ function toggleWaterPicker() {
   if (box) box.innerHTML = _waterPickerOpen ? waterPickerHTML() : '';
 }
 
+// Findet den echten Wassertemperatur-Sensor (wassertemperatur.site) robust —
+// der entity_id kann je nach Geräte-Name variieren (has_entity_name=True),
+// daher auch Suche über typische Attribute (daily_history, source_url, monthly_avg).
+let _waterSensorIdCache = undefined;
+function findWaterTempSensorState() {
+  const haEl = window.parent?.document?.querySelector('home-assistant');
+  const states = haEl?.hass?.states || haStates || {};
+
+  // 1. Gecachte ID nochmal direkt versuchen
+  if (_waterSensorIdCache && states[_waterSensorIdCache]) return states[_waterSensorIdCache];
+
+  // 2. Bekannte mögliche entity_ids
+  const candidates = [
+    'sensor.wassertemperatur_gewaesser',
+    'sensor.fishing_tracker_wassertemperatur_gewasser',
+    'sensor.fishing_tracker_wassertemperatur_gewaesser',
+    'sensor.fishing_tracker_wassertemperatur_gewässer',
+    'sensor.wassertemperatur_gewasser',
+    'sensor.fishing_tracker_water_temp_detail',
+    'sensor.fishing_tracker_wassertemperatur',
+  ];
+  for (const id of candidates) {
+    if (states[id]) { _waterSensorIdCache = id; return states[id]; }
+  }
+
+  // 3. Attribut-Erkennung: Sensor mit daily_history + (source_url ODER monthly_avg ODER oxygen)
+  for (const [eid, st] of Object.entries(states)) {
+    if (!eid.startsWith('sensor.')) continue;
+    const a = st?.attributes || {};
+    const looksLikeWater = (a.daily_history !== undefined) &&
+      (a.source_url !== undefined || a.monthly_avg !== undefined || a.oxygen_mg_l !== undefined || a.source === 'wassertemperatur.site');
+    if (looksLikeWater) {
+      const v = parseFloat(st.state);
+      if (!isNaN(v) && v > -2 && v < 40) { _waterSensorIdCache = eid; return st; }
+    }
+  }
+  return null;
+}
+
 function getEstimatedWaterTemp() {
   // Direkt aus parent.hass.states lesen — umgeht haStates-Cache-Timing-Problem
   let wtds = null, nlwknState = null;
   try {
     const _haEl = window.parent?.document?.querySelector('home-assistant');
     if (_haEl?.hass?.states) {
-      wtds = _haEl.hass.states['sensor.wassertemperatur_gewaesser'] || null;
+      wtds = findWaterTempSensorState();
       nlwknState = _haEl.hass.states['sensor.fishing_tracker_nlwkn_water_temp'] || null;
-      if (wtds) haStates['sensor.wassertemperatur_gewaesser'] = wtds;
+      if (wtds && _waterSensorIdCache) haStates[_waterSensorIdCache] = wtds;
       if (nlwknState) haStates['sensor.fishing_tracker_nlwkn_water_temp'] = nlwknState;
     }
   } catch(e) {}
   // Fallback auf haStates falls parent-Read nicht klappte
-  if (!wtds) wtds = haStates['sensor.wassertemperatur_gewaesser'] || null;
+  if (!wtds) wtds = findWaterTempSensorState();
   if (!nlwknState) nlwknState = haStates['sensor.fishing_tracker_nlwkn_water_temp'] || null;
 
   // 1. wassertemperatur.site Live-Daten — Wert nehmen wenn plausibel
@@ -6425,7 +6464,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.45'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.46'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8074,7 +8113,7 @@ function locForecastWeatherHTML() {
     const trIcon = trend>0.5?'📈 steigend':trend<-0.5?'📉 fallend':'➡️ stabil';
     const wtCol = wtNow<8?'#67d3ff':wtNow<15?'#3fb950':wtNow<22?'#ffd23f':'#ff9d18';
     const titleLabel2 = isReal2 ? '🌡️ Wassertemperatur (gemessen)' : '🌡️ Wassertemperatur (geschätzt)';
-    const srcLabel2 = isReal2 ? (realWt2.label || 'wassertemperatur.site') : ('Modell · Sensor-Quelle: ' + (realWt2?.source || 'null') + '/' + (realWt2?.value ?? '?'));
+    const srcLabel2 = isReal2 ? (realWt2.label || 'wassertemperatur.site') : ('Modell · gefunden: ' + (_waterSensorIdCache || 'KEIN Sensor') + ' · ' + (realWt2?.source || 'null'));
     waterBox = `<div style="background:rgba(103,211,255,.08);border:1px solid rgba(103,211,255,.2);border-radius:12px;padding:12px;margin-bottom:10px">
       <div style="font-size:12px;font-weight:700;color:#67d3ff;margin-bottom:6px">${titleLabel2}</div>
       <div style="display:flex;justify-content:space-between;align-items:center">
