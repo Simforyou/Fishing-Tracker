@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.42 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.45 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -252,6 +252,7 @@ const VIEWS = [
   ['species',  '🎯', 'Zielfische'],
   ['spots',    '📍', 'Spots'],
   ['logbook',  '📘', 'Fangbuch'],
+  ['sessions', '🎣', 'Sessions'],
   ['analysis', '🔬', 'Analyse'],
   ['stats',    '📊', 'Statistiken'],
   ['bait',     '🪱', 'Köder-Wizard'],
@@ -3618,6 +3619,39 @@ async function deleteCatch(timestamp) {
   }
 }
 
+// Prüft ob im selben 10-Min-Fenster eine aus einer Session erzeugte Nullnummer
+// liegt, und löscht sie — verhindert Doppelung wenn ein Fang nachträglich
+// in ein Fenster eingetragen wird, das die Session als "leer" markiert hat.
+async function removeOverlappingSessionBlank(catchDatetimeStr) {
+  if (!catchDatetimeStr) return;
+  try {
+    const catchMs = new Date(catchDatetimeStr).getTime();
+    if (isNaN(catchMs)) return;
+    const windowMs = FT_SESSION_INTERVAL_MIN * 60000;
+
+    const attrs = findFTSensor('history')?.attributes || {};
+    const entries = attrs.latest || attrs.entries || [];
+
+    for (const e of entries) {
+      // Nur Session-Nullnummern betrachten
+      const isBlank = parseInt(e.caught || 0) === 0;
+      if (!isBlank || !e.session_blank) continue;
+      // Zeitpunkt der Nullnummer (catch_datetime bevorzugt, sonst timestamp)
+      const blankTimeStr = e.catch_datetime || e.timestamp;
+      if (!blankTimeStr) continue;
+      const blankMs = new Date(blankTimeStr).getTime();
+      if (isNaN(blankMs)) continue;
+      // Liegt der Fang im selben 10-Min-Fenster wie diese Nullnummer?
+      if (Math.abs(blankMs - catchMs) < windowMs) {
+        // Diese Nullnummer löschen (per timestamp identifiziert)
+        if (e.timestamp) {
+          await callHAService('fishing_tracker', 'delete_catch', { timestamp: e.timestamp });
+        }
+      }
+    }
+  } catch(err) { console.warn('removeOverlappingSessionBlank:', err); }
+}
+
 async function saveCatch() {
   // Letzten DOM-Stand sichern vor dem Speichern
   ['fish','length','weight','spot','bait','notes'].forEach(k => {
@@ -3668,6 +3702,8 @@ async function saveCatch() {
 
   const ok = await callHAService('fishing_tracker', 'log_catch', payload);
   if (ok) {
+    // Falls dieser Fang in ein Fenster fällt, das eine Session als leer markiert hat: Nullnummer entfernen
+    await removeOverlappingSessionBlank(catchFormData.datetime || null);
     catchFormActive = false;
     catchPhotoData  = null;
     renderView();
@@ -5539,7 +5575,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
           return `<div class="panel">
             <button class="quickBtn catch-btn" onclick="startSession()" style="width:100%;padding:18px">
               🎣 Angel-Session starten
-              <br><small style="font-size:11px;opacity:.7;font-weight:600">Erfasst Fänge + automatisch alle 15 Min einen Datenpunkt</small>
+              <br><small style="font-size:11px;opacity:.7;font-weight:600">Erfasst Fänge + automatisch alle 10 Min einen Datenpunkt</small>
             </button>
             <div style="display:flex;gap:10px;margin-top:10px">
               <button class="quickBtn catch-btn" onclick="switchView('logbook');openCatchForm()" style="font-size:14px;padding:12px">🐟 ✓<br><small style="font-size:10px;opacity:.7">Einzelfang</small></button>
@@ -5871,6 +5907,8 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
 `;
     },
+
+    sessions: () => buildSessionsView(),
 
     analysis: () => buildAnalysisView(),
 
@@ -6387,7 +6425,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.42'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.45'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8302,6 +8340,111 @@ async function saveCatchEdit(ts) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// SESSIONS-TAB: Verlauf aller Angel-Sessions + Route + Löschen
+// ══════════════════════════════════════════════════════════════════════════
+function buildSessionsView() {
+  const hist = getSessionHistory();
+  const active = getActiveSession();
+
+  let activeCard = '';
+  if (active) {
+    const startT = new Date(active.start);
+    const mins = Math.round((Date.now() - startT.getTime()) / 60000);
+    const hrs = Math.floor(mins / 60);
+    const durStr = hrs > 0 ? `${hrs}h ${mins % 60}min` : `${mins} min`;
+    activeCard = `<div class="panel" style="background:linear-gradient(145deg,rgba(7,57,27,.5),rgba(2,17,8,.3));border:1px solid rgba(103,211,63,.4);margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:13px;font-weight:800;color:#67d33f">🎣 Session läuft gerade</div>
+          <div style="font-size:11px;color:var(--txt-muted)">seit ${startT.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})} · ${durStr} · ${(active.catches||[]).length} Fänge</div>
+        </div>
+        <button class="quickBtn" onclick="endSession()" style="background:linear-gradient(145deg,#3a2009,#1a0f02);border:1px solid rgba(255,157,24,.4);color:#ff9d18;padding:8px 14px;font-size:13px">⏹ Beenden</button>
+      </div>
+    </div>`;
+  }
+
+  if (!hist.length && !active) {
+    return `<div class="panel">
+      <div class="sec">🎣 Angel-Sessions</div>
+      ${activeCard}
+      <div style="text-align:center;padding:40px 20px;color:var(--txt-muted)">
+        <div style="font-size:42px;margin-bottom:12px">🎣</div>
+        <div style="font-size:15px;font-weight:700;color:var(--txt-main);margin-bottom:6px">Noch keine Sessions</div>
+        <div style="font-size:13px;line-height:1.5">Starte auf der Übersicht eine Angel-Session. Nach dem Beenden erscheint sie hier mit Strecke, Dauer und Route.</div>
+      </div>
+    </div>`;
+  }
+
+  const totalDist = hist.reduce((s, r) => s + (r.distanceM || 0), 0);
+  const totalMin = hist.reduce((s, r) => s + (r.durationMin || 0), 0);
+  const totalCatch = hist.reduce((s, r) => s + (r.catches ? r.catches.length : 0), 0);
+  const totalH = Math.floor(totalMin / 60);
+
+  const rows = hist.map((r, idx) => {
+    const startT = new Date(r.start);
+    const distKm = (r.distanceM || 0) / 1000;
+    const distStr = distKm >= 1 ? distKm.toFixed(1) + ' km' : (r.distanceM || 0) + ' m';
+    const hrs = Math.floor((r.durationMin || 0) / 60);
+    const durStr = hrs > 0 ? `${hrs}h ${(r.durationMin || 0) % 60}m` : `${r.durationMin || 0}m`;
+    const nCatch = r.catches ? r.catches.length : 0;
+    const fishCounts = {};
+    (r.catches || []).forEach(c => { fishCounts[c.fish] = (fishCounts[c.fish] || 0) + 1; });
+    const fishStr = Object.entries(fishCounts).map(([f, n]) => `${n}×${f}`).join(', ');
+
+    return `<div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:13px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div style="flex:1;cursor:pointer" onclick="openSessionDetail(${idx})">
+          <div style="font-size:14px;font-weight:800;color:var(--txt-main)">${startT.toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit',year:'2-digit'})}</div>
+          <div style="font-size:11px;color:var(--txt-muted);margin-top:2px">${startT.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})} Uhr${r.water ? ' · ' + r.water : ''}</div>
+          <div style="display:flex;gap:14px;margin-top:8px;font-size:12px">
+            <span style="color:#67d33f">⏱️ ${durStr}</span>
+            <span style="color:#2ea8ff">🚶 ${distStr}</span>
+            <span style="color:#ffd23f">🐟 ${nCatch}</span>
+          </div>
+          ${fishStr ? `<div style="font-size:11px;color:var(--txt-sub);margin-top:6px">${fishStr}</div>` : ''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <button onclick="openSessionDetail(${idx})" style="background:rgba(46,168,255,.12);border:1px solid rgba(46,168,255,.3);color:#2ea8ff;width:34px;height:34px;border-radius:8px;font-size:15px;cursor:pointer">🗺️</button>
+          <button onclick="deleteSession(${idx})" style="background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);color:#ff6b6b;width:34px;height:34px;border-radius:8px;font-size:15px;cursor:pointer">🗑️</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="panel" style="margin-bottom:12px">
+      <div class="sec">🎣 Angel-Sessions</div>
+      ${activeCard}
+      <div style="display:flex;justify-content:space-around;text-align:center;background:linear-gradient(135deg,rgba(46,168,255,.06),rgba(46,168,255,.02));border-radius:10px;padding:12px">
+        <div><div style="font-size:20px;font-weight:900;color:#67d33f">${hist.length}</div><div style="font-size:10px;color:var(--txt-muted)">Sessions</div></div>
+        <div><div style="font-size:20px;font-weight:900;color:#2ea8ff">${(totalDist/1000).toFixed(1)}</div><div style="font-size:10px;color:var(--txt-muted)">km gesamt</div></div>
+        <div><div style="font-size:20px;font-weight:900;color:#ffd23f">${totalH}</div><div style="font-size:10px;color:var(--txt-muted)">Std. gesamt</div></div>
+        <div><div style="font-size:20px;font-weight:900;color:#ff9d18">${totalCatch}</div><div style="font-size:10px;color:var(--txt-muted)">Fänge</div></div>
+      </div>
+    </div>
+    <div>${rows}</div>`;
+}
+
+function openSessionDetail(idx) {
+  const hist = getSessionHistory();
+  const record = hist[idx];
+  if (record) showSessionSummary(record);
+}
+
+function deleteSession(idx) {
+  const hist = getSessionHistory();
+  const record = hist[idx];
+  if (!record) return;
+  const startT = new Date(record.start);
+  if (!confirm(`Session vom ${startT.toLocaleDateString('de-DE')} ${startT.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})} Uhr löschen?\n\nHinweis: Die einzelnen Fänge und Nullnummern bleiben im Fangbuch erhalten — nur die Session-Übersicht wird entfernt.`)) return;
+  try {
+    hist.splice(idx, 1);
+    localStorage.setItem(FT_SESSION_HISTORY_KEY, JSON.stringify(hist));
+    if (typeof showToast === 'function') showToast('Session gelöscht', '#ff9d18');
+    scheduleRenderView();
+  } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // ANALYSE-TAB: Fänge vs. Nullnummern — bei welchen Bedingungen lohnt sich Angeln?
 // ══════════════════════════════════════════════════════════════════════════
 let _analysisFishFilter = 'all'; // 'all' oder Fischart-Name
@@ -8486,7 +8629,7 @@ function buildAnalysisView() {
 // Bei Session-Ende werden 15-Min-Intervalle rückwirkend als Nullnummern erzeugt,
 // jeweils mit korrektem historischem Wetter — zuverlässiger als ein Live-Timer.
 const FT_SESSION_KEY = 'ft_active_session';
-const FT_SESSION_INTERVAL_MIN = 15;
+const FT_SESSION_INTERVAL_MIN = 10;
 
 function getActiveSession() {
   try {
@@ -8530,17 +8673,17 @@ function recordSessionTrackPoint() {
   const [lat, lon] = center;
   sess.track = sess.track || [];
   const last = sess.track[sess.track.length - 1];
-  // Nur speichern wenn Position sich geändert hat (>20m) oder >5 Min vergangen
+  // Punkt speichern wenn Position sich geändert hat (>5m) oder >2 Min vergangen
   const now = Date.now();
   if (last) {
     const dLat = Math.abs(last.lat - lat), dLon = Math.abs(last.lon - lon);
-    const movedFar = dLat > 0.0002 || dLon > 0.0003;  // ~20-25m
+    const movedFar = dLat > 0.00005 || dLon > 0.00008;  // ~5-6m
     const timeSince = now - new Date(last.ts).getTime();
-    if (!movedFar && timeSince < 5 * 60000) return;
+    if (!movedFar && timeSince < 2 * 60000) return;
   }
   sess.track.push({ ts: new Date().toISOString(), lat, lon });
-  // Spur begrenzen (max 500 Punkte)
-  if (sess.track.length > 500) sess.track = sess.track.slice(-500);
+  // Spur begrenzen (max 1000 Punkte)
+  if (sess.track.length > 1000) sess.track = sess.track.slice(-1000);
   saveActiveSession(sess);
 }
 
@@ -8557,6 +8700,40 @@ function getTrackPositionAt(when, sess) {
   return { lat: best.lat, lon: best.lon };
 }
 
+// Haversine-Distanz zwischen zwei GPS-Punkten in Metern
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Gesamtstrecke einer GPS-Spur berechnen (in Metern)
+function trackDistanceM(track) {
+  if (!track || track.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < track.length; i++) {
+    total += haversineM(track[i-1].lat, track[i-1].lon, track[i].lat, track[i].lon);
+  }
+  return total;
+}
+
+// Abgeschlossene Sessions archivieren (localStorage)
+const FT_SESSION_HISTORY_KEY = 'ft_session_history';
+function getSessionHistory() {
+  try { const raw = localStorage.getItem(FT_SESSION_HISTORY_KEY); return raw ? JSON.parse(raw) : []; }
+  catch(e) { return []; }
+}
+function saveSessionToHistory(record) {
+  try {
+    const hist = getSessionHistory();
+    hist.unshift(record);
+    // Max 100 Sessions behalten
+    localStorage.setItem(FT_SESSION_HISTORY_KEY, JSON.stringify(hist.slice(0, 100)));
+  } catch(e) {}
+}
+
 async function endSession() {
   const sess = getActiveSession();
   if (!sess) return;
@@ -8567,16 +8744,27 @@ async function endSession() {
   if (typeof showToast === 'function') showToast('⏳ Session wird ausgewertet…');
 
   // 15-Min-Raster durchgehen: jedes Intervall ohne Fang = Nullnummer
+  // Fang-Zeitpunkte aus der Session UND aus dem Fangbuch (falls während Session
+  // ein Fang übers normale Formular kam, ist er nicht in sess.catches)
   const catchTimes = (sess.catches || []).map(c => new Date(c.ts).getTime());
+  try {
+    const attrs = findFTSensor('history')?.attributes || {};
+    const entries = attrs.latest || attrs.entries || [];
+    entries.forEach(e => {
+      if (parseInt(e.caught || 0) >= 1) {
+        const t = new Date(e.catch_datetime || e.timestamp).getTime();
+        // Nur Fänge innerhalb des Session-Zeitraums berücksichtigen
+        if (!isNaN(t) && t >= startMs && t <= endMs) catchTimes.push(t);
+      }
+    });
+  } catch(e) {}
   const intervalMs = FT_SESSION_INTERVAL_MIN * 60000;
   let blanksCreated = 0;
 
   for (let t = startMs; t < endMs; t += intervalMs) {
     const winStart = t, winEnd = t + intervalMs;
-    // Hat es in diesem Fenster einen Fang gegeben?
     const hadCatch = catchTimes.some(ct => ct >= winStart && ct < winEnd);
     if (!hadCatch) {
-      // Nullnummer für die Mitte des Intervalls erzeugen
       const midMs = winStart + intervalMs / 2;
       if (midMs > endMs) break;
       await createSessionBlank(new Date(midMs), sess);
@@ -8584,11 +8772,133 @@ async function endSession() {
     }
   }
 
+  // Strecke berechnen + Session archivieren
+  const distM = trackDistanceM(sess.track);
+  const record = {
+    start: sess.start,
+    end: new Date(endMs).toISOString(),
+    durationMin,
+    distanceM: Math.round(distM),
+    water: sess.water,
+    catches: sess.catches || [],
+    track: sess.track || [],
+    blanksCreated,
+  };
+  saveSessionToHistory(record);
   saveActiveSession(null);
-  if (typeof showToast === 'function') {
-    showToast(`✅ Session beendet · ${durationMin} Min · ${sess.catches.length} Fänge · ${blanksCreated} Leerphasen`, '#67d33f');
+
+  // Zusammenfassung anzeigen
+  showSessionSummary(record);
+  setTimeout(() => scheduleRenderView(), 500);
+}
+
+// Session-Zusammenfassung mit Route-Karte anzeigen
+let _sessionSummaryMap = null;
+function showSessionSummary(record) {
+  const overlay = document.getElementById('sessionSummaryOverlay');
+  const content = document.getElementById('sessionSummaryContent');
+  if (!overlay || !content) { 
+    if (typeof showToast === 'function') showToast(`✅ Session beendet · ${record.durationMin} Min · ${record.catches.length} Fänge`, '#67d33f');
+    return;
   }
-  setTimeout(() => scheduleRenderView(), 1500);
+
+  const distKm = (record.distanceM / 1000);
+  const distStr = distKm >= 1 ? distKm.toFixed(2) + ' km' : record.distanceM + ' m';
+  const hrs = Math.floor(record.durationMin / 60);
+  const durStr = hrs > 0 ? `${hrs}h ${record.durationMin % 60}min` : `${record.durationMin} min`;
+  const nCatch = record.catches.length;
+  const startT = new Date(record.start);
+  const endT = new Date(record.end);
+
+  // Fangarten zählen
+  const fishCounts = {};
+  record.catches.forEach(c => { fishCounts[c.fish] = (fishCounts[c.fish] || 0) + 1; });
+  const fishSummary = Object.entries(fishCounts).map(([f, n]) => `${n}× ${f}`).join(', ') || 'keine Fänge';
+
+  // Fänge pro Stunde
+  const catchPerHour = record.durationMin > 0 ? (nCatch / (record.durationMin / 60)) : 0;
+
+  content.innerHTML = `
+    <div style="background:linear-gradient(145deg,rgba(7,57,27,.5),rgba(2,17,8,.3));border:1px solid rgba(103,211,63,.3);border-radius:14px;padding:18px;margin-bottom:14px">
+      <div style="text-align:center;margin-bottom:14px">
+        <div style="font-size:13px;color:var(--txt-muted)">${startT.toLocaleDateString('de-DE',{weekday:'long',day:'2-digit',month:'long'})}</div>
+        <div style="font-size:13px;color:var(--txt-muted)">${startT.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})} – ${endT.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})} Uhr${record.water ? ' · ' + record.water : ''}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">
+        <div style="text-align:center;background:rgba(255,255,255,.04);border-radius:10px;padding:12px">
+          <div style="font-size:24px;font-weight:900;color:#67d33f">${durStr}</div>
+          <div style="font-size:11px;color:var(--txt-muted)">⏱️ Angeldauer</div>
+        </div>
+        <div style="text-align:center;background:rgba(255,255,255,.04);border-radius:10px;padding:12px">
+          <div style="font-size:24px;font-weight:900;color:#2ea8ff">${distStr}</div>
+          <div style="font-size:11px;color:var(--txt-muted)">🚶 Strecke</div>
+        </div>
+        <div style="text-align:center;background:rgba(255,255,255,.04);border-radius:10px;padding:12px">
+          <div style="font-size:24px;font-weight:900;color:#ffd23f">${nCatch}</div>
+          <div style="font-size:11px;color:var(--txt-muted)">🐟 Fänge</div>
+        </div>
+        <div style="text-align:center;background:rgba(255,255,255,.04);border-radius:10px;padding:12px">
+          <div style="font-size:24px;font-weight:900;color:#ff9d18">${catchPerHour.toFixed(1)}</div>
+          <div style="font-size:11px;color:var(--txt-muted)">📊 Fänge/h</div>
+        </div>
+      </div>
+      ${nCatch > 0 ? `<div style="margin-top:12px;font-size:13px;color:var(--txt-sub);text-align:center">${fishSummary}</div>` : ''}
+    </div>
+    <div style="font-size:12px;font-weight:700;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin:4px 4px 8px">🗺️ Deine Route</div>
+    <div id="sessionRouteMap" style="height:300px;border-radius:12px;overflow:hidden;margin-bottom:14px;background:rgba(255,255,255,.03)"></div>
+  `;
+
+  overlay.style.display = 'block';
+  overlay.scrollTop = 0;
+
+  // Route-Karte rendern
+  setTimeout(() => {
+    const track = record.track || [];
+    if (!track.length) {
+      const mapEl = document.getElementById('sessionRouteMap');
+      if (mapEl) mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--txt-muted);font-size:13px">Keine GPS-Spur aufgezeichnet</div>';
+      return;
+    }
+    try {
+      if (_sessionSummaryMap) { try { _sessionSummaryMap.remove(); } catch(e){} _sessionSummaryMap = null; }
+      const latlngs = track.map(p => [p.lat, p.lon]);
+      _sessionSummaryMap = L.map('sessionRouteMap', { zoomControl: true, attributionControl: false });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(_sessionSummaryMap);
+
+      // Route-Linie
+      const routeLine = L.polyline(latlngs, { color: '#2ea8ff', weight: 4, opacity: 0.8 }).addTo(_sessionSummaryMap);
+
+      // Start-Marker (grün)
+      L.circleMarker(latlngs[0], { radius: 8, fillColor: '#67d33f', color: '#fff', weight: 2, fillOpacity: 1 })
+        .addTo(_sessionSummaryMap).bindPopup('🎣 Start');
+      // End-Marker (rot)
+      if (latlngs.length > 1) {
+        L.circleMarker(latlngs[latlngs.length-1], { radius: 8, fillColor: '#ff6b6b', color: '#fff', weight: 2, fillOpacity: 1 })
+          .addTo(_sessionSummaryMap).bindPopup('⏹ Ende');
+      }
+
+      // Fang-Marker (gelb mit Fischart)
+      (record.catches || []).forEach(c => {
+        // Position des Fangs aus Spur ableiten
+        const cPos = getTrackPositionAt(new Date(c.ts), record);
+        if (cPos.lat) {
+          L.marker([cPos.lat, cPos.lon])
+            .addTo(_sessionSummaryMap)
+            .bindPopup(`🐟 <b>${c.fish}</b>${c.length ? '<br>' + c.length + ' cm' : ''}<br>${new Date(c.ts).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}`);
+        }
+      });
+
+      _sessionSummaryMap.fitBounds(routeLine.getBounds(), { padding: [30, 30], maxZoom: 16 });
+      setTimeout(() => _sessionSummaryMap && _sessionSummaryMap.invalidateSize(true), 200);
+    } catch(e) { console.warn('Route-Karte:', e); }
+  }, 150);
+}
+
+function closeSessionSummary() {
+  const overlay = document.getElementById('sessionSummaryOverlay');
+  if (overlay) overlay.style.display = 'none';
+  if (_sessionSummaryMap) { try { _sessionSummaryMap.remove(); } catch(e){} _sessionSummaryMap = null; }
+  scheduleRenderView();
 }
 
 // Erzeugt eine Nullnummer mit historischem Wetter für einen bestimmten Zeitpunkt
@@ -8601,6 +8911,8 @@ async function createSessionBlank(when, sess) {
   const data = {
     catch_datetime: when.toISOString().slice(0, 16),
     angelwetter_index: 0,
+    session_blank: true,                    // Kennzeichen: aus Session erzeugte Nullnummer
+    session_start: sess.start,              // zu welcher Session gehört sie
   };
   if (lat && lon) { data.latitude = lat; data.longitude = lon; }
 
@@ -9649,6 +9961,15 @@ document.addEventListener('click', function(ev) {
       <div id="mapOverlayLabel" style="padding:10px 16px;background:var(--bg-nav);font-size:13px;color:rgba(103,211,63,.9);font-weight:700;flex-shrink:0;text-align:center">
         Noch kein Ort markiert
       </div>
+    </div>
+
+    <!-- Session-Zusammenfassung Overlay -->
+    <div id="sessionSummaryOverlay" style="display:none;position:fixed;inset:0;z-index:9998;background:var(--bg-base);overflow-y:auto;-webkit-overflow-scrolling:touch">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-nav);position:sticky;top:0;z-index:1">
+        <button onclick="closeSessionSummary()" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer">← Schließen</button>
+        <span style="font-size:16px;font-weight:900;color:#67d33f">🎣 Session-Auswertung</span>
+      </div>
+      <div id="sessionSummaryContent" style="padding:16px"></div>
     </div>
 
     <!-- Schnell-Fang Dialog (Session) -->

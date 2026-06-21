@@ -759,6 +759,9 @@ async def async_log_entry(hass: HomeAssistant, entry: ConfigEntry, caught: int, 
         "solar_radiation": hs_solar,
         "humidity": hs_humid,
         "water_temp": water_temp,
+        "catch_datetime": data.get("catch_datetime"),
+        "session_blank": data.get("session_blank", False),
+        "session_start": data.get("session_start"),
     }
 
     await store.async_add_entry(new_entry)
