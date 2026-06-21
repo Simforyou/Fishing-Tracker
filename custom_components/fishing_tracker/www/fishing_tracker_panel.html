@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.54 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.57 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -6007,10 +6007,14 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>` : ''}
 
       ${(()=>{
-        const withGPS = entries.filter(e => e.latitude && e.longitude);
+        const withGPS = _filtered.filter(e => e.latitude && e.longitude);
         if (withGPS.length === 0) return '';
+        _logMapCurrentFilter = _filter;  // für Zoom-bei-Filterwechsel
         setTimeout(() => initLogMap(withGPS), 150);
-        return '<div class="panel" style="padding-bottom:0"><div class="sec">🗺️ Fänge auf der Karte</div><div id="logMap" style="height:240px;border-radius:0 0 18px 18px"></div></div>';
+        const mapTitle = _filter
+          ? `🗺️ ${_lbState.filter} auf der Karte <span style="font-weight:400;opacity:.5;font-size:9px">${withGPS.length} ${withGPS.length===1?'Fang':'Fänge'}</span>`
+          : '🗺️ Fänge auf der Karte';
+        return '<div class="panel" style="padding-bottom:0"><div class="sec">' + mapTitle + '</div><div id="logMap" style="height:240px;border-radius:0 0 18px 18px"></div></div>';
       })()}
 
       <div class="panel">
@@ -6628,7 +6632,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.54'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.57'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7789,6 +7793,8 @@ let _spotMarkerLayer = null;  // LayerGroup für Marker (kein Map-Reset beim Upd
 let _formMap        = null;   // Karte im Fang-Formular
 let _logMap         = null;   // Fangbuch-Karte
 let _logMarkerLayer = null;
+let _logMapLastFilter = undefined;   // letzter Karten-Filter (für Zoom bei Wechsel)
+let _logMapCurrentFilter = '';
 let spotFishFilter = null; // null = alle Fischarten
 let _spotMarkers = [];
 let _spotData = [];
@@ -8548,7 +8554,7 @@ let _editingCatchFull = null;
 async function openCatchEditForm(full) {
   // Falls Wetterdaten fehlen (alter Fang, nie gespeichert): aus Open-Meteo Archive
   // nachladen, damit die Felder vorbefüllt sind statt leer.
-  if (full.temperature == null && full.wind_speed == null && full.pressure == null) {
+  if (full.temperature == null) {
     try {
       const dt = new Date(full.timestamp);
       const center = getBestCenter();
@@ -9464,12 +9470,12 @@ function openCatchDetail(entry) {
       ${row('🌧️','Niederschlag', full.precipitation != null ? full.precipitation + ' mm' : null)}
       ${row('☀️','Sonneneinstrahlung', full.solar_radiation != null ? Math.round(full.solar_radiation) + ' W/m²' : null)}
       ${row('💧','Luftfeuchtigkeit', full.humidity != null ? Math.round(full.humidity) + '%' : null)}
-      ${!full.temperature && !full.water_temp && !full.wind_speed
+      ${full.temperature == null
         ? '<div id="catchWeatherLoad" style="color:var(--txt-muted);font-size:12px">⏳ Lade historische Wetterdaten…</div>' : ''}
     </div>`;
 
-  // Historische Wetterdaten via Open-Meteo nachladen wenn keine vorhanden
-  if (!full.temperature && !full.water_temp && !full.wind_speed) {
+  // Historische Wetterdaten via Open-Meteo nachladen wenn Lufttemperatur fehlt
+  if (full.temperature == null) {
     const center = getBestCenter();
     const lat  = full.latitude  || center[0];
     const lon  = full.longitude || center[1];
@@ -9489,6 +9495,15 @@ function openCatchDetail(entry) {
         const C   = h.cloudcover[hour];
         const Hu  = h.relativehumidity_2m[hour];
         const P   = h.surface_pressure[hour];
+        // Ins full-Objekt schreiben, damit beim Bearbeiten/erneuten Öffnen vorhanden
+        const r1 = v => v != null ? Math.round(v * 10) / 10 : null;
+        if (T != null)  full.temperature    = r1(T);
+        if (W != null)  full.wind_speed     = r1(W);
+        if (G != null)  full.wind_gusts     = r1(G);
+        if (P != null)  full.pressure       = Math.round(P);
+        if (C != null)  full.cloud_coverage = Math.round(C);
+        if (R != null)  full.precipitation  = r1(R);
+        if (Hu != null) full.humidity       = Math.round(Hu);
         const rowH = (icon, label, val) => val != null
           ? `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">
               <span style="color:var(--txt-muted);font-size:13px">${icon} ${label}</span>
@@ -9496,6 +9511,7 @@ function openCatchDetail(entry) {
         box.innerHTML = `
           <div style="font-size:12px;font-weight:800;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🌤️ Wetter zur Fangzeit <span style="font-size:10px;color:#2ea8ff;font-weight:700">· Open-Meteo</span></div>
           ${rowH('🌡️','Lufttemperatur', T != null ? T.toFixed(1) + ' °C' : null)}
+          ${full.water_temp != null ? rowH('💧','Wassertemperatur', (Math.round(full.water_temp*10)/10) + ' °C') : ''}
           ${rowH('💨','Wind', W != null ? W.toFixed(0) + ' km/h' : null)}
           ${rowH('💨','Böen', G != null ? G.toFixed(0) + ' km/h' : null)}
           ${rowH('📊','Luftdruck', P != null ? P.toFixed(0) + ' hPa' : null)}
@@ -9531,6 +9547,12 @@ function openCatchDetail(entry) {
   } else {
     mapWrap.style.display = 'none';
   }
+
+  // Buttons wieder einblenden (könnten vom Bearbeiten-Formular versteckt sein)
+  ['catchDetailReweather', 'catchDetailEdit', 'catchDetailDelete'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.style.display = '';
+  });
 
   // Löschen-Button
   const delBtn = document.getElementById('catchDetailDelete');
@@ -9834,14 +9856,22 @@ function initLogMap(catches) {
   _logMarkerLayer.clearLayers();
 
   const bounds = [];
+  // Radius nach Fanggröße skalieren: kleine Fänge bleiben sichtbar (min 5),
+  // große werden deutlich größer (max 16). Spanne ~10–90 cm.
+  const radiusForLength = (len) => {
+    const l = parseFloat(len) || 0;
+    if (l <= 0) return 6;                       // ohne Längenangabe: Standardgröße
+    const minL = 10, maxL = 90, minR = 5, maxR = 16;
+    const clamped = Math.max(minL, Math.min(maxL, l));
+    return minR + (clamped - minL) / (maxL - minL) * (maxR - minR);
+  };
   (catches || []).forEach(function(c) {
     if (!c.latitude || !c.longitude) return;
     const caught = parseInt(c.caught || 0);
     if (caught < 1) return; // Kein Fang: nicht auf Spots-Karte zeigen
     const col = FISH_COLORS[c.fish_type] || '#2ea8ff';
-    const opacity = 0.85;
     L.circleMarker([c.latitude, c.longitude], {
-      radius: 7, color: col, fillColor: col, fillOpacity: 0.9, weight: 2,
+      radius: radiusForLength(c.length_cm), color: col, fillColor: col, fillOpacity: 0.85, weight: 2,
     }).addTo(_logMarkerLayer)
     .bindPopup(
       '<b style="color:' + col + '">' + (c.fish_type || 'Fisch') + '</b>' +
@@ -9851,7 +9881,9 @@ function initLogMap(catches) {
     bounds.push([c.latitude, c.longitude]);
   });
 
-  if (isFirstInit) {
+  // Bei Erst-Init ODER wenn sich der Filter geändert hat: auf Marker zoomen
+  const filterChanged = _logMapLastFilter !== undefined && _logMapLastFilter !== _logMapCurrentFilter;
+  if (isFirstInit || filterChanged) {
     if (bounds.length === 1) {
       _logMap.setView(bounds[0], 14);
     } else if (bounds.length > 1) {
@@ -9859,6 +9891,7 @@ function initLogMap(catches) {
       catch(e) { _logMap.setView(bounds[0], 13); }
     }
   }
+  _logMapLastFilter = _logMapCurrentFilter;
   setTimeout(() => _logMap.invalidateSize(), 100);
 }
 
