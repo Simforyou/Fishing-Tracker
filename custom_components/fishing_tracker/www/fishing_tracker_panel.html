@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.57 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.58 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -6014,7 +6014,12 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
         const mapTitle = _filter
           ? `🗺️ ${_lbState.filter} auf der Karte <span style="font-weight:400;opacity:.5;font-size:9px">${withGPS.length} ${withGPS.length===1?'Fang':'Fänge'}</span>`
           : '🗺️ Fänge auf der Karte';
-        return '<div class="panel" style="padding-bottom:0"><div class="sec">' + mapTitle + '</div><div id="logMap" style="height:240px;border-radius:0 0 18px 18px"></div></div>';
+        return '<div class="panel" style="padding-bottom:0">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+            '<div class="sec" style="margin-bottom:0">' + mapTitle + '</div>' +
+            '<button onclick="openFullscreenMap()" style="border:1px solid rgba(46,168,255,.3);background:rgba(46,168,255,.1);color:#2ea8ff;padding:6px 12px;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer">⛶ Vollbild</button>' +
+          '</div>' +
+          '<div id="logMap" style="height:240px;border-radius:0 0 18px 18px"></div></div>';
       })()}
 
       <div class="panel">
@@ -6632,7 +6637,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.57'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.58'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -9829,12 +9834,15 @@ function initCatchMap(catches, spots, fishFilter) {
 }
 
 // ── Karte: Fangbuch-Mini-Map ─────────────────────────────────────────────────
+let _logMapView = null;  // gemerkter Zoom/Center, überlebt Re-Render
 function initLogMap(catches) {
   const mapEl = document.getElementById('logMap');
   if (!mapEl) return;
   if (typeof L === 'undefined') { setTimeout(() => initLogMap(catches), 600); return; }
 
+  // Container wurde durch Re-Render ersetzt? Alten Zoom/Center merken, dann neu bauen.
   if (_logMap && !document.body.contains(_logMap.getContainer())) {
+    try { _logMapView = { center: _logMap.getCenter(), zoom: _logMap.getZoom() }; } catch(e) {}
     try { _logMap.remove(); } catch(e) {}
     _logMap = null;
     _logMarkerLayer = null;
@@ -9842,14 +9850,21 @@ function initLogMap(catches) {
   const isFirstInit = !_logMap;
 
   if (!_logMap) {
+    // Gemerkte Ansicht nutzen falls vorhanden (nach Re-Render), sonst Standard
+    const startCenter = _logMapView ? _logMapView.center : getBestCenter();
+    const startZoom = _logMapView ? _logMapView.zoom : 13;
     _logMap = L.map('logMap', {
-      center: getBestCenter(), zoom: 13,
+      center: startCenter, zoom: startZoom,
       zoomControl: false, attributionControl: false, tap: true,
     });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
     }).addTo(_logMap);
     _logMarkerLayer = L.layerGroup().addTo(_logMap);
+    // Zoom/Center laufend mitschreiben, damit sie über Re-Renders erhalten bleiben
+    _logMap.on('moveend zoomend', () => {
+      try { _logMapView = { center: _logMap.getCenter(), zoom: _logMap.getZoom() }; } catch(e) {}
+    });
   }
 
   // Nur Marker austauschen – Zoom & Position bleiben!
@@ -9881,9 +9896,11 @@ function initLogMap(catches) {
     bounds.push([c.latitude, c.longitude]);
   });
 
-  // Bei Erst-Init ODER wenn sich der Filter geändert hat: auf Marker zoomen
+  // Auf Marker zoomen nur bei: allererstem Laden (kein gemerkter View) ODER Filterwechsel.
+  // Nach reinem Re-Render (gemerkter View vorhanden) NICHT zoomen → Position bleibt.
   const filterChanged = _logMapLastFilter !== undefined && _logMapLastFilter !== _logMapCurrentFilter;
-  if (isFirstInit || filterChanged) {
+  const firstEver = isFirstInit && !_logMapView;
+  if (firstEver || filterChanged) {
     if (bounds.length === 1) {
       _logMap.setView(bounds[0], 14);
     } else if (bounds.length > 1) {
@@ -9893,6 +9910,78 @@ function initLogMap(catches) {
   }
   _logMapLastFilter = _logMapCurrentFilter;
   setTimeout(() => _logMap.invalidateSize(), 100);
+}
+
+// ── Vollbild-Karte ───────────────────────────────────────────────────────────
+let _fullMap = null;
+function openFullscreenMap() {
+  const overlay = document.getElementById('fullscreenMapOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+
+  // Aktuell gefilterte Fänge mit GPS (gleiche Logik wie Mini-Karte)
+  const st = getLogbookState();
+  const filter = (st.filter || '').toLowerCase().trim();
+  const withGPS = (_logEntries || []).filter(e => {
+    if (!e.latitude || !e.longitude) return false;
+    if (parseInt(e.caught || 0) < 1) return false;
+    if (filter && !(e.fish_type || '').toLowerCase().includes(filter)) return false;
+    return true;
+  });
+
+  // Titel
+  const titleEl = document.getElementById('fullscreenMapTitle');
+  if (titleEl) titleEl.textContent = filter
+    ? `🗺️ ${st.filter} · ${withGPS.length} ${withGPS.length===1?'Fang':'Fänge'}`
+    : `🗺️ Alle Fänge · ${withGPS.length}`;
+
+  setTimeout(() => {
+    if (typeof L === 'undefined') return;
+    // Frische Karte bauen (alte entfernen)
+    if (_fullMap) { try { _fullMap.remove(); } catch(e){} _fullMap = null; }
+    _fullMap = L.map('fullscreenMap', {
+      center: getBestCenter(), zoom: 13,
+      zoomControl: true, attributionControl: false,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(_fullMap);
+
+    const radiusForLength = (len) => {
+      const l = parseFloat(len) || 0;
+      if (l <= 0) return 7;
+      const minL = 10, maxL = 90, minR = 6, maxR = 20;
+      const clamped = Math.max(minL, Math.min(maxL, l));
+      return minR + (clamped - minL) / (maxL - minL) * (maxR - minR);
+    };
+
+    const bounds = [];
+    withGPS.forEach(c => {
+      const col = FISH_COLORS[c.fish_type] || '#2ea8ff';
+      L.circleMarker([c.latitude, c.longitude], {
+        radius: radiusForLength(c.length_cm), color: col, fillColor: col, fillOpacity: 0.85, weight: 2,
+      }).addTo(_fullMap)
+      .bindPopup(
+        '<b style="color:' + col + '">' + (c.fish_type || 'Fisch') + '</b>' +
+        (c.length_cm ? '<br>' + c.length_cm + ' cm' : '') +
+        (c.weight_kg ? ' · ' + c.weight_kg + ' kg' : '') +
+        (c.spot ? '<br>📍 ' + c.spot : '') +
+        '<br><span style="font-size:11px;opacity:.6">' + new Date(c.timestamp).toLocaleDateString('de-DE') + '</span>'
+      );
+      bounds.push([c.latitude, c.longitude]);
+    });
+
+    if (bounds.length === 1) _fullMap.setView(bounds[0], 15);
+    else if (bounds.length > 1) {
+      try { _fullMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 }); }
+      catch(e) { _fullMap.setView(bounds[0], 13); }
+    }
+    setTimeout(() => _fullMap.invalidateSize(), 150);
+  }, 100);
+}
+
+function closeFullscreenMap() {
+  const overlay = document.getElementById('fullscreenMapOverlay');
+  if (overlay) overlay.style.display = 'none';
+  if (_fullMap) { try { _fullMap.remove(); } catch(e){} _fullMap = null; }
 }
 
 function initSpotMap(spots) {
@@ -10347,6 +10436,14 @@ document.addEventListener('click', function(ev) {
     </div>
 
     <!-- Session-Zusammenfassung Overlay -->
+    <div id="fullscreenMapOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-base);flex-direction:column">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-nav);flex-shrink:0">
+        <button onclick="closeFullscreenMap()" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer">← Schließen</button>
+        <span id="fullscreenMapTitle" style="font-size:16px;font-weight:900;color:#2ea8ff">🗺️ Fänge-Karte</span>
+      </div>
+      <div id="fullscreenMap" style="flex:1;width:100%"></div>
+    </div>
+
     <div id="sessionSummaryOverlay" style="display:none;position:fixed;inset:0;z-index:9998;background:var(--bg-base);overflow-y:auto;-webkit-overflow-scrolling:touch">
       <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-nav);position:sticky;top:0;z-index:1">
         <button onclick="closeSessionSummary()" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer">← Schließen</button>
