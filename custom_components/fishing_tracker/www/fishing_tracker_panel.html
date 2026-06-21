@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.51 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.52 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -6545,7 +6545,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.51'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.52'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8335,8 +8335,7 @@ async function reweatherCatch(full) {
 
   // 2. Wassertemperatur aus daily_history (wassertemperatur.site) zuordnen
   try {
-    const haEl = window.parent?.document?.querySelector('home-assistant');
-    const sensor = haEl?.hass?.states?.['sensor.wassertemperatur_gewaesser'];
+    const sensor = (typeof findWaterTempSensorState === 'function') ? findWaterTempSensorState() : null;
     const dailyHist = sensor?.attributes?.daily_history;
     if (dailyHist && Array.isArray(dailyHist)) {
       // Exakten Tag finden
@@ -8358,6 +8357,22 @@ async function reweatherCatch(full) {
       }
     }
   } catch(e) { console.warn('WaterTemp-History:', e); }
+
+  // 2b. Falls keine Wassertemp aus History (alter Fang): Open-Meteo Modell-Schätzung
+  if (updates.water_temp == null) {
+    try {
+      // Open-Meteo Marine/Archive hat keine Flusswassertemp; daher Schätzung
+      // aus der Lufttemperatur-Historie der letzten Tage (gedämpft).
+      const r2 = await fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${dStr}&end_date=${dStr}&daily=temperature_2m_mean&timezone=Europe/Berlin`);
+      const d2 = await r2.json();
+      const tmean = d2?.daily?.temperature_2m_mean?.[0];
+      if (tmean != null) {
+        // Flusswasser folgt der Lufttemperatur gedämpft: grob 0.8× + Offset
+        const est = Math.round((tmean * 0.85 + 2) * 10) / 10;
+        if (est > 0 && est < 35) updates.water_temp = est;
+      }
+    } catch(e) { console.warn('WaterTemp-Estimate:', e); }
+  }
 
   // 3. Speichern via Service
   const ok = await callHAService('fishing_tracker', 'update_catch', updates);
@@ -8437,9 +8452,9 @@ async function saveCatchEdit(ts) {
   const ft = getVal('editFishType'); if (ft) updates.fish_type = ft;
   const len = getNum('editLength'); if (len != null) updates.length_cm = len;
   const wt = getNum('editWeight'); if (wt != null) updates.weight_kg = wt;
-  updates.bait = getVal('editBait') || null;
-  updates.spot = getVal('editSpot') || null;
-  updates.notes = getVal('editNotes') || null;
+  updates.bait = getVal('editBait');
+  updates.spot = getVal('editSpot');
+  updates.notes = getVal('editNotes');
   const watT = getNum('editWaterTemp'); if (watT != null) updates.water_temp = watT;
   const airT = getNum('editAirTemp'); if (airT != null) updates.temperature = airT;
   const prs = getNum('editPressure'); if (prs != null) updates.pressure = prs;
