@@ -615,7 +615,7 @@ class HistorySensor(FishingBaseSensor):
         # Schlanke Einträge fürs Fangbuch (nur Display-Felder → HA 16KB Limit)
         display_fields = ["timestamp","fish_type","caught","spot","bait",
                           "length_cm","weight_kg","photo_url","latitude","longitude",
-                          "angelwetter_index","water_temp","notes"]
+                          "angelwetter_index","water_temp","notes","angler"]
         try:
             catches_display = [
                 {k: e.get(k) for k in display_fields}

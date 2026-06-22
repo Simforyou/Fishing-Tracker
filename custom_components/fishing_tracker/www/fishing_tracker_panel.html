@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.59 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.65 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -2521,6 +2521,57 @@ function attachDayChartScrub() {
   });
 }
 
+// Heutiger wetter-/solunar-basierter Score für einen Spot, kombiniert mit
+// Fanghistorie an diesem Spot zu den jeweiligen Tageszeiten.
+// Liefert: { todayScore, bestHour, bestHourScore, histStrength, recencyDays }
+function computeSpotTodayScore(fishName, spotCatches) {
+  const _now = new Date();
+  const sens = collectAllSensors();
+
+  // 1) Heutige Tageskurve (0-100 je Stunde) für diese Fischart – gleiche Engine wie Übersicht
+  const hourScores = Array.from({ length: 24 }, (_, h) => {
+    try { return calcUnifiedDayScore(fishName, _now, h, sens, null); }
+    catch(e) { try { return calcAngelwetterDayScore(_now, h, sens, null); } catch(e2) { return 50; } }
+  });
+
+  // 2) Zu welchen Stunden war ich an DIESEM Spot erfolgreich? → Gewichtungsprofil
+  const hourHist = new Array(24).fill(0);
+  let recencyDays = 999;
+  (spotCatches || []).forEach(c => {
+    if (!c.timestamp) return;
+    const d = new Date(c.timestamp);
+    const hh = d.getHours();
+    const ageDays = (_now - d) / 86400000;
+    // Neuere Fänge gewichten stärker (max 1.0 heute, linear bis 0 bei 60 Tagen)
+    const w = Math.max(0.15, 1 - ageDays / 60);
+    hourHist[hh] += w;
+    if (ageDays < recencyDays) recencyDays = ageDays;
+    // Nachbarstunden leicht mitgewichten (±1h)
+    hourHist[(hh + 23) % 24] += w * 0.4;
+    hourHist[(hh + 1) % 24] += w * 0.4;
+  });
+  const histTotal = hourHist.reduce((a, b) => a + b, 0);
+  const histStrength = Math.min(1, histTotal / 3); // 3+ gewichtete Fänge = volle Historie
+
+  // 3) Heutiger Tagesbestwert: bestes Stundenfenster gewichtet mit Historie
+  let bestHour = 0, bestCombined = -1, bestPureWeather = 0;
+  for (let h = 0; h < 24; h++) {
+    const weather = hourScores[h];
+    // Wenn Historie vorhanden: Stunden an denen ich dort fing höher gewichten
+    const histW = histTotal > 0 ? (hourHist[h] / Math.max(...hourHist)) : 0.5;
+    // Kombination: Wetter ist Basis, Historie verstärkt passende Tageszeiten
+    const combined = weather * (0.7 + 0.3 * histW);
+    if (combined > bestCombined) { bestCombined = combined; bestHour = h; bestPureWeather = weather; }
+  }
+
+  // 4) Spot-Tagesscore = bestes Fenster heute, leicht angehoben durch Historie-Stärke
+  //    (mehr/aktuellere Fänge an diesem Spot = vertrauenswürdigere Empfehlung)
+  const recencyBoost = recencyDays < 7 ? 6 : recencyDays < 21 ? 3 : 0;
+  const todayScore = Math.min(99, Math.round(bestPureWeather + histStrength * 8 + recencyBoost));
+
+  return { todayScore, bestHour, bestHourScore: Math.round(bestPureWeather), histStrength, recencyDays, hourScores };
+}
+
 function fishSpotForecastHTML(fishName) {
   const fmt = (h) => String(h).padStart(2,'0') + ':00';
   let windowBox = '', tripBox = '';
@@ -2762,37 +2813,36 @@ function openFishSpotMap(fishName) {
       return sum + Math.max(0, 30 - age); // Max 30 Punkte für Fang heute, 0 für >30 Tage
     }, 0);
 
-    // Differenziertes Scoring:
-    // 25% aktueller Fischartscore (gleich für alle → wenig Gewicht)
-    // 35% Fischart-spezifische Erfolge an diesem Spot
-    // 25% historische Gesamterfolgsrate des Spots
-    // 15% Aktualität der Fänge
-    const fishBonus    = Math.min(fishCnt * 15, 45);           // 0–45 Pkt
-    const recencyNorm  = Math.min(recencyBonus / fishCatches.length || 0, 15); // 0–15 Pkt
-    const spotScore    = Math.round(
-      curScore * 0.25 +
-      fishBonus * 0.35 / (45/100) +    // auf 0-100 skaliert
-      (s.success_rate || 0) * 0.25 +
-      recencyNorm * 0.15 / (15/100)    // auf 0-100 skaliert
-    );
+    // NEU: Wetter-/Solunar-basierter HEUTE-Score für diesen Spot
+    // (welcher Spot ist HEUTE am besten, basierend auf aktueller Wetterlage +
+    //  Erfolgshistorie zu den jeweiligen Tageszeiten an diesem Spot)
+    const todayInfo = computeSpotTodayScore(fishName, fishCatches);
+    const spotScore = todayInfo.todayScore;
 
     return Object.assign({}, s, {
       lat: spotLat, lon: spotLon,  // GPS dieser Fischart, nicht Spot-Gesamt
-      fishCnt, spotScore: Math.min(99, Math.max(10, spotScore))
+      fishCnt,
+      spotScore: Math.min(99, Math.max(10, spotScore)),
+      bestHour: todayInfo.bestHour,
+      bestHourScore: todayInfo.bestHourScore,
+      recencyDays: todayInfo.recencyDays,
     });
   }).filter(Boolean)
     .sort((a, b) => b.spotScore - a.spotScore);
 
   // Spot-Liste
   if (rankedSpots.length > 0) {
-    list.innerHTML = '<div style="font-size:11px;font-weight:800;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">📊 Bewertete Spots</div>' +
+    const fmtH = (h) => String(h).padStart(2,'0') + ':00';
+    list.innerHTML = '<div style="font-size:11px;font-weight:800;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🎯 Beste Spots HEUTE <span style="font-weight:400;opacity:.6">· Wetter + Historie</span></div>' +
       rankedSpots.slice(0, 5).map((s, i) => {
         const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1) + '.';
+        const recTxt = s.recencyDays < 999 ? (s.recencyDays < 1 ? 'heute' : s.recencyDays < 2 ? 'gestern' : Math.round(s.recencyDays) + ' Tage') : '–';
         return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">' +
           '<span style="font-size:18px">' + medal + '</span>' +
           '<div style="flex:1">' +
             '<div style="font-size:14px;font-weight:800">📍 ' + s.spot + '</div>' +
-            '<div style="font-size:11px;color:var(--txt-muted)">' + s.fishCnt + 'x ' + fishName + ' · ' + s.catches + ' Fänge gesamt</div>' +
+            '<div style="font-size:11px;color:var(--txt-muted)">' + s.fishCnt + 'x ' + fishName + ' · letzter Fang: ' + recTxt + '</div>' +
+            '<div style="font-size:11px;color:#ffd23f;margin-top:2px">⏰ Heute beste Zeit: ' + fmtH(s.bestHour) + ' · ' + s.bestHourScore + '%</div>' +
           '</div>' +
           '<div style="font-size:18px;font-weight:900;color:' + sc2(s.spotScore) + '">' + s.spotScore + '%</div>' +
         '</div>';
@@ -3762,10 +3812,23 @@ async function saveCatch() {
   const lon = catchFormData._manualLon ?? catchFormData._exifLon ?? person?.longitude ?? null;
   // Wetter IMMER vom GPS-Standort + Fangzeitpunkt via Open-Meteo
   const wx = await fetchWeatherAtTime(catchFormData.datetime || null, lat, lon);
-  const waterT = wx._waterTempAtCatch
-              ?? parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
-              ?? getEstimatedWaterTemp()?.value
-              ?? null;
+  // Wassertemperatur: echten Sensor (wassertemperatur.site) bevorzugen.
+  // Der Open-Meteo Boden-Proxy ist im Sommer stark überhöht (heißer Boden ≠ Wasser),
+  // daher nur als letzter Fallback für alte Fänge.
+  const _realWt = (typeof getEstimatedWaterTemp === 'function') ? getEstimatedWaterTemp() : null;
+  const _realWtIsMeasured = _realWt && (_realWt.source === 'wassertemperatur_site' || _realWt.source === 'nlwkn');
+  // Ist der Fang "jetzt" (heute)? Dann ist der aktuelle Sensorwert gültig.
+  const _catchIsToday = !catchFormData.datetime ||
+    (new Date(catchFormData.datetime).toDateString() === new Date().toDateString());
+  let waterT;
+  if (_realWtIsMeasured && _catchIsToday) {
+    waterT = Math.round(_realWt.value * 10) / 10;       // echter Messwert für heute
+  } else {
+    waterT = wx._waterTempAtCatch
+          ?? (_realWt ? Math.round(_realWt.value * 10) / 10 : null)
+          ?? parseFloat(haStates['sensor.fishing_tracker_nlwkn_water_temp']?.state)
+          ?? null;
+  }
   const awIdx = calcAngelwetterIndex();
 
   const payload = {
@@ -5686,24 +5749,6 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
 
     forecast: () => {
       const tab = currentFcTab || '7days';
-      setTimeout(() => {
-        try {
-          const ti = (() => { const d=new Date().getDay(); return d===0?6:d-1; })();
-          if (tab==='overview'||tab==='7days') {
-            drawChart('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff', 0);
-            addChartTouch('weekChart', generalWeekForecast(7).map(x=>x.v), '#2ea8ff');
-          } else if (tab==='24h') {
-            drawChart('dayChart24', generalDayCurve(), '#ff9d18');
-            addChartTouch('dayChart24', generalDayCurve(), '#ff9d18');
-          } else if (tab==='14days') {
-            // 14-Tage Prognose aus echten HA-Wetterdaten
-const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(WEEK).slice(0,15);
-            const ti14 = _d14todayIdx;
-            drawChart('chart14', d14, '#a78bfa', ti14);
-            addChartTouch('chart14', d14, '#a78bfa');
-          }
-        } catch(e) { console.error('Chart:', e); }
-      }, 100);
       return `
       <div class="fc-tabs" id="fcTabs">
         <button class="fc-tab ${tab==='7days'||tab==='overview'?'active':''}" data-fctab="7days">7 Tage</button>
@@ -5852,7 +5897,10 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       setTimeout(() => initCatchMap(filtered, realSpots, spotFishFilter), 100);
 
       let out = '<div class="panel" style="padding-bottom:0">';
-      out += '<div class="sec">🗺️ Alle Fänge <span style="font-size:10px;color:var(--txt-muted);font-weight:400">– Tippe einen Marker an</span></div>';
+      out += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+        '<div class="sec" style="margin-bottom:0">🗺️ Alle Fänge <span style="font-size:10px;color:var(--txt-muted);font-weight:400">– Tippe einen Marker an</span></div>' +
+        '<button onclick="openFullscreenSpotMap()" style="border:1px solid rgba(46,168,255,.3);background:rgba(46,168,255,.1);color:#2ea8ff;padding:6px 12px;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer">⛶ Vollbild</button>' +
+        '</div>';
 
       if (fishTypes.length > 0) {
         out += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">';
@@ -5968,10 +6016,14 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       const _lbStats = computeLogbookStats(entries);
       const _lbState = getLogbookState();
       const _filter = (_lbState.filter || '').toLowerCase().trim();
-      const _filtered = _filter
-        ? entries.filter(e => (e.fish_type || '').toLowerCase().includes(_filter))
-        : entries;
+      const _anglerFilter = (_lbState.anglerFilter || '').trim();
+      const _filtered = entries.filter(e => {
+        if (_filter && !(e.fish_type || '').toLowerCase().includes(_filter)) return false;
+        if (_anglerFilter && (e.angler || '') !== _anglerFilter) return false;
+        return true;
+      });
       const _newest = entries[0];  // bereits nach Datum sortiert (neueste zuerst)
+      const _anyFilter = _filter || _anglerFilter;  // irgendein Filter aktiv?
       const _grouped = groupLogbookEntries(_filtered);
       const _years = Object.keys(_grouped).map(Number).sort((a, b) => b - a);
 
@@ -5979,6 +6031,11 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       const _fishCounts = {};
       entries.forEach(e => { if (e.fish_type) _fishCounts[e.fish_type] = (_fishCounts[e.fish_type] || 0) + 1; });
       const _topFishTypes = Object.entries(_fishCounts).sort((a, b) => b[1] - a[1]).slice(0, 6).map(x => x[0]);
+
+      // Liste der Angler aus den Fängen
+      const _anglerSet = {};
+      entries.forEach(e => { if (e.angler) _anglerSet[e.angler] = (_anglerSet[e.angler] || 0) + 1; });
+      const _anglerList = Object.keys(_anglerSet).sort((a, b) => _anglerSet[b] - _anglerSet[a]);
 
       const _idxOf = e => entries.indexOf(e);
 
@@ -6023,7 +6080,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       ${(()=>{
         const withGPS = _filtered.filter(e => e.latitude && e.longitude);
         if (withGPS.length === 0) return '';
-        _logMapCurrentFilter = _filter;  // für Zoom-bei-Filterwechsel
+        _logMapCurrentFilter = _filter + '|' + _anglerFilter;  // für Zoom-bei-Filterwechsel
         setTimeout(() => initLogMap(withGPS), 150);
         const mapTitle = _filter
           ? `🗺️ ${_lbState.filter} auf der Karte <span style="font-weight:400;opacity:.5;font-size:9px">${withGPS.length} ${withGPS.length===1?'Fang':'Fänge'}</span>`
@@ -6055,22 +6112,27 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
             <span onclick="setLogbookFilter('')" style="flex-shrink:0;padding:7px 14px;border-radius:99px;border:1px solid ${!_filter ? 'rgba(46,168,255,.4)' : 'var(--border)'};background:${!_filter ? 'rgba(46,168,255,.15)' : 'var(--kpi-bg)'};color:${!_filter ? 'var(--blue)' : 'var(--txt-sub)'};font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">Alle</span>
             ${_topFishTypes.map(f => `<span onclick="setLogbookFilter('${f}')" style="flex-shrink:0;padding:7px 14px;border-radius:99px;border:1px solid ${_filter===f.toLowerCase() ? 'rgba(46,168,255,.4)' : 'var(--border)'};background:${_filter===f.toLowerCase() ? 'rgba(46,168,255,.15)' : 'var(--kpi-bg)'};color:${_filter===f.toLowerCase() ? 'var(--blue)' : 'var(--txt-sub)'};font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">${fishEmoji(f)} ${f}</span>`).join('')}
           </div>
+          ${_anglerList.length > 0 ? `
+          <div style="display:flex;gap:7px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch;margin-top:2px">
+            <span style="flex-shrink:0;font-size:11px;color:var(--txt-muted);font-weight:700;align-self:center;padding-right:2px">🎣 Angler:</span>
+            ${_anglerList.map(a => `<span onclick="setLogbookAnglerFilter('${a.replace(/'/g, "\\'")}')" style="flex-shrink:0;padding:7px 14px;border-radius:99px;border:1px solid ${_anglerFilter===a ? 'rgba(103,211,63,.5)' : 'var(--border)'};background:${_anglerFilter===a ? 'rgba(103,211,63,.15)' : 'var(--kpi-bg)'};color:${_anglerFilter===a ? '#67d33f' : 'var(--txt-sub)'};font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">${a}</span>`).join('')}
+          </div>` : ''}
 
           ${_filtered.length === 0
             ? `<div style="text-align:center;padding:24px;color:rgba(255,255,255,.3);font-size:14px">Keine Treffer für „${_lbState.filter}"</div>`
             : _years.map(y => {
                 const yd = _grouped[y];
-                const yOpen = (_lbState.openYears || []).includes(y) || _filter;  // bei Filter alle offen
+                const yOpen = (_lbState.openYears || []).includes(y) || _anyFilter;  // bei Filter alle offen
                 const months = Object.keys(yd.months).map(Number).sort((a, b) => b - a);
                 const big = yd.biggest;
                 return `
                 <div style="margin-top:12px">
                   <div onclick="toggleLogbookYear(${y})" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--bg-panel);border:1px solid var(--border);border-radius:16px;cursor:pointer">
                     <div style="display:flex;align-items:center;gap:11px">
-                      <img src="${big ? ftEntryImg(big) : FT_FISH_IMG}" style="width:44px;height:44px;border-radius:10px;object-fit:cover;flex-shrink:0;border:1px solid rgba(255,210,63,.3)">
+                      <img src="${big ? ftEntryImg(big) : FT_FISH_IMG}" ${big ? `onclick="event.stopPropagation();openCatchDetailByIdx(${_idxOf(big)})"` : ''} style="width:44px;height:44px;border-radius:10px;object-fit:cover;flex-shrink:0;border:1px solid rgba(255,210,63,.3);${big ? 'cursor:pointer' : ''}">
                       <div>
                         <span style="font-size:17px;font-weight:900">${y}</span>
-                        ${big ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">🏆 ${big.fish_type} ${big.length_cm} cm</div>` : ''}
+                        ${big ? `<div onclick="event.stopPropagation();openCatchDetailByIdx(${_idxOf(big)})" style="font-size:11px;color:var(--muted);margin-top:2px;cursor:pointer">🏆 ${big.fish_type} ${big.length_cm} cm ›</div>` : ''}
                       </div>
                     </div>
                     <span style="display:flex;align-items:center;gap:10px"><span style="font-size:13px;color:var(--muted);font-weight:600">${yd.count} ${yd.count===1?'Fang':'Fänge'}</span><span style="color:var(--muted);font-size:12px;transition:transform .25s;${yOpen?'transform:rotate(180deg)':''};display:inline-block">▾</span></span>
@@ -6079,7 +6141,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
                     ${months.map(m => {
                       const mEntries = yd.months[m].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
                       const mKey = y + '-' + m;
-                      const mOpen = (_lbState.openMonths || []).includes(mKey) || _filter;
+                      const mOpen = (_lbState.openMonths || []).includes(mKey) || _anyFilter;
                       return `
                       <div style="margin-top:4px">
                         <div onclick="toggleLogbookMonth('${mKey}')" style="display:flex;align-items:center;justify-content:space-between;padding:9px 10px;cursor:pointer">
@@ -6651,7 +6713,7 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.59'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.65'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -6866,112 +6928,152 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
   }
 }
 
+// Einheitliche Farbschwellen wie in der Übersicht (FANGFAKTOR™)
+function ffColorFor(v) {
+  return v >= 75 ? '#4ade80' : v >= 60 ? '#a3e635' : v >= 45 ? '#fde047' : v >= 30 ? '#fb923c' : '#ef4444';
+}
+function ffQualText(v) {
+  return v >= 75 ? 'sehr gute Fangchancen' : v >= 60 ? 'gute Fangchancen' : v >= 45 ? 'mittlere Fangchancen' : v >= 30 ? 'schlechte Fangchancen' : 'sehr schlechte Fangchancen';
+}
+
 function buildForecastTab(tab) {
-  const dailyForecast2 = findFTSensor('daily_fc_sensor')?.attributes?.days || null;
-  const useReal2 = dailyForecast2 && dailyForecast2.length > 0;
-  // WEEK_DATA ist bereits korrekt aus HA-Sensor – dieselbe Quelle wie Chart!
-  const weekDays = generalWeekForecast(7);
-  const sc2 = v => v>=80?'#67d33f':v>=60?'#ffd23f':'#ff9d18';
   const sol = haStates['sensor.solunar_beisszeiten']?.attributes || {};
   const factors = calcFactors();
+  const _sens = collectAllSensors();
+  const _now = new Date();
 
-  if (tab === 'overview' || tab === '7days') {
+  // ── 24-STUNDEN-TAB (FANGFAKTOR-Stil, Skala 0–10) ──────────────────────────
+  if (tab === '24h') {
+    const curH = _now.getHours();
+    const hours24 = Array.from({length: 24}, (_, h) => {
+      try { return calcAngelwetterDayScore(_now, h, _sens, null); } catch(e) { return 50; }
+    });
+    const curScore = hours24[curH] || 50;
+    const score10 = (curScore / 10).toFixed(1);
+    // Beste Zeit: Zukunfts-Peak bevorzugen
+    let topH, topVal;
+    const futureScores = hours24.map((v, h) => ({ h, v })).filter(x => x.h >= curH);
+    if (futureScores.length > 0) {
+      const peak = futureScores.reduce((a, b) => b.v > a.v ? b : a);
+      topH = peak.h; topVal = peak.v;
+    } else {
+      const peak = hours24.map((v, h) => ({ h, v })).reduce((a, b) => b.v > a.v ? b : a);
+      topH = peak.h; topVal = peak.v;
+    }
+    const BAR_AREA_PX = 76;
+    const barsHtml = hours24.map((v, h) => {
+      const heightPx = Math.max(3, Math.round((Math.max(0, Math.min(100, v)) / 100) * BAR_AREA_PX));
+      const isCur = h === curH, isTop = h === topH;
+      const op = isCur ? 1 : (isTop ? 0.95 : 0.7);
+      const border = isCur ? 'box-shadow:0 0 0 1.5px #fff inset;' : '';
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0;height:96px">
+        <div style="width:78%;height:${heightPx}px;background:${ffColorFor(v)};border-radius:3px 3px 1px 1px;opacity:${op};${border}"></div>
+        <div style="font-size:9px;color:${isCur?'#fff':'rgba(255,255,255,.4)'};margin-top:3px;${isCur?'font-weight:850':''};line-height:1">${h}</div>
+      </div>`;
+    }).join('');
     return `
-      <div class="panel blue" style="margin-top:10px">
-        <div class="sec">🌤️ Angelwetter – 7 Tage</div>
-        <div class="chart-box" style="height:200px"><svg id="weekChart" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
-        <div style="display:flex;justify-content:space-around;margin-top:10px;flex-wrap:wrap;gap:4px">
-          ${weekDays.map(w=>`<div style="text-align:center;${w.isToday?'background:rgba(46,168,255,.15);border-radius:8px;padding:2px 6px':''}">
-            <div style="font-size:11px;color:rgba(255,255,255,.45)">${w.d}</div>
-            ${w.date?`<div style="font-size:9px;color:rgba(255,255,255,.3)">${w.date}</div>`:''}
-            <div style="font-size:15px;font-weight:900;color:${sc2(w.v)}">${w.v}%</div>
-            ${w.isToday?'<div style="font-size:9px;color:#2ea8ff;font-weight:700">Heute</div>':''}
-          </div>`).join('')}
+      <div class="panel" style="margin-top:10px;background:linear-gradient(135deg,rgba(15,32,52,.95),rgba(8,15,28,.98))">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div style="font-size:11px;font-weight:850;letter-spacing:1.5px;color:rgba(255,255,255,.5)">📊 FANGFAKTOR™ · HEUTE 24H</div>
+          <div style="font-size:10px;color:rgba(255,255,255,.35)">Skala 0–10</div>
         </div>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+          <div style="font-size:46px;font-weight:950;color:${ffColorFor(curScore)};line-height:1;letter-spacing:-1px">${score10}</div>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:850;color:#fff">${ffQualText(curScore)}</div>
+            <div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:4px">Beste Zeit: ${String(topH).padStart(2,'0')}:00 · ${(topVal/10).toFixed(1)}</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:1px;padding:0 2px">${barsHtml}</div>
       </div>
       <div class="panel" style="margin-top:0">
         <div class="sec">📊 Einflussfaktoren</div>
-        ${factors.map(([i,l,v])=>`<div class="wi-row"><span class="wi-label">${i} ${l}</span><div class="wi-bar-wrap"><div class="wi-bar" style="width:${v}%;background:${sc2(v)}"></div></div><span style="font-size:12px;font-weight:800;width:36px;text-align:right;color:${sc2(v)}">${v}%</span></div>`).join('')}
-      </div>
-      <div class="panel" style="margin-top:0">
-        <div class="sec">🌙 Solunar Beißzeiten</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="sol-card sol-main"><div class="sol-lbl">Hauptzeit 1</div><div class="sol-time greenText">${sol.major1||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~2h Fenster</div></div>
-          <div class="sol-card sol-main"><div class="sol-lbl">Hauptzeit 2</div><div class="sol-time greenText">${sol.major2||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~2h Fenster</div></div>
-          <div class="sol-card sol-minor"><div class="sol-lbl">Nebenzeit 1</div><div class="sol-time blueText">${sol.minor1||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~1h Fenster</div></div>
-          <div class="sol-card sol-minor"><div class="sol-lbl">Nebenzeit 2</div><div class="sol-time blueText">${sol.minor2||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~1h Fenster</div></div>
-        </div>
-      </div>`;
-  } else if (tab === '24h') {
-    return `
-      <div class="panel blue" style="margin-top:10px">
-        <div class="sec">🌤️ 24h Angelwetter – Heute</div>
-        <div class="chart-box" style="height:200px"><svg id="dayChart24" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
-      </div>
-      <div class="panel" style="margin-top:0">
-        <div class="sec">⏰ Stundenweise Prognose</div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
-          ${[6,9,12,15,18,19,20,21].map(h=>{const v=generalDayCurve()[h]||50;return`<div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:10px;padding:8px;text-align:center"><div style="font-size:11px;color:var(--txt-muted)">${String(h).padStart(2,'0')}:00</div><div style="font-size:16px;font-weight:900;color:${sc2(v)};margin-top:3px">${v}%</div></div>`}).join('')}
-        </div>
-      </div>`;
-  } else {
-    // 14-Tage Prognose aus echten HA-Wetterdaten
-// 14-Tage: 4 Vergangenheit + Heute + 10 Zukunft
-const TODAY_IDX_14 = 4; // Heute ist immer an Position 4
-const dayNames = ['So','Mo','Di','Mi','Do','Fr','Sa'];
-const shortDate = (d) => dayNames[d.getDay()];
-
-// Tages-Scores berechnen: Wetterdaten für -4 bis +10 Tage
-const fcDays14 = getConsolidatedForecast();
-
-
-const d14 = [];
-const d14labels = [];
-const now14 = new Date();
-
-// Top-Fischart aus aktuellem Ranking
-const liveSensors14 = collectAllSensors();
-const sampleH14 = [6, 9, 12, 15, 18, 21];  // identisch zu generalWeekForecast → konsistente Werte
-// Datum-basiertes fcDay-Lookup wie in generalWeekForecast (statt positional index)
-const _fcByDate14 = {};
-(fcDays14 || []).forEach(f => { try {
-  const dd = new Date(f.datetime).toDateString();
-  if (!_fcByDate14[dd]) _fcByDate14[dd] = f;
-} catch(e) {} });
-
-for (let i = -4; i <= 10; i++) {
-  const day = new Date(now14);
-  day.setHours(12, 0, 0, 0);  // gleiche Tagesnormierung wie 7-Tage
-  day.setDate(day.getDate() + i);
-  d14labels.push({ name: shortDate(day), date: day.getDate(), isPast: i < 0, isToday: i === 0 });
-
-  const fcDay = (i > 0) ? (_fcByDate14[day.toDateString()] || null) : null;
-  if (fcDay) fcDay._frontInfo = detectColdFront(fcDays14, i);
-  let sum = 0, n = 0;
-  for (const h of sampleH14) {
-    const v = (i <= 0)
-      ? calcAngelwetterDayScore(day, h, liveSensors14, null)
-      : calcAngelwetterDayScore(day, h, null, fcDay);
-    if (!isNaN(v)) { sum += v; n++; }
-  }
-  d14.push(n ? Math.round(sum / n) : 50);
-}
-_d14forChart = d14.slice(); _d14todayIdx = 4;  // Chart nutzt exakt dieselben Werte
-
-    return `
-      <div class="panel blue" style="margin-top:10px">
-        <div class="sec">🌤️ Angelwetter – 14 Tage <span style="font-weight:400;opacity:.5;font-size:9px">4 Rückblick + Heute + 10 Vorschau</span></div>
-        <div class="chart-box" style="height:200px"><svg id="chart14" viewBox="0 0 900 220" preserveAspectRatio="none" style="width:100%;height:100%"></svg></div>
-        <div style="display:grid;grid-template-columns:repeat(15,1fr);gap:2px;margin-top:8px">
-          ${d14labels.map((d,i)=>`<div style="text-align:center;opacity:${d.isPast?'.45':'1'}">
-            <div style="font-size:9px;font-weight:${d.isToday?'900':'600'};color:${d.isToday?'#ffd23f':'rgba(255,255,255,.5)'}">
-              ${d.name}${d.isToday?' ★':''}
-            </div>
-            <div style="font-size:11px;font-weight:900;color:${d.isPast?'rgba(255,255,255,.35)':sc2(d14[i])}">${d14[i]}%</div>
-          </div>`).join('')}
-        </div>
+        ${factors.map(([i,l,v])=>`<div class="wi-row"><span class="wi-label">${i} ${l}</span><div class="wi-bar-wrap"><div class="wi-bar" style="width:${v}%;background:${ffColorFor(v)}"></div></div><span style="font-size:12px;font-weight:800;width:32px;text-align:right;color:${ffColorFor(v)}">${(v/10).toFixed(1)}</span></div>`).join('')}
       </div>`;
   }
+
+  // ── 7-TAGE & 14-TAGE-TABS (Balken pro Tag, Skala 0–10) ────────────────────
+  const isWeek = (tab === 'overview' || tab === '7days');
+  const numDays = isWeek ? 7 : 15;       // 14-Tage = 4 Rückblick + heute + 10 Vorschau
+  const startOffset = isWeek ? 0 : -4;
+  const fcDays = getConsolidatedForecast();
+  const _fcByDate = {};
+  (fcDays || []).forEach(f => { try { const dd = new Date(f.datetime).toDateString(); if (!_fcByDate[dd]) _fcByDate[dd] = f; } catch(e) {} });
+  const dayNames = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+  const sampleH = [6, 9, 12, 15, 18, 21];
+
+  const days = [];
+  for (let i = startOffset; i < startOffset + numDays; i++) {
+    const day = new Date(_now);
+    day.setHours(12, 0, 0, 0);
+    day.setDate(day.getDate() + i);
+    const isPast = i < 0, isToday = i === 0;
+    const fcDay = (i > 0) ? (_fcByDate[day.toDateString()] || null) : null;
+    if (fcDay) fcDay._frontInfo = detectColdFront(fcDays, i);
+    let sum = 0, n = 0;
+    for (const h of sampleH) {
+      const v = (i <= 0) ? calcAngelwetterDayScore(day, h, _sens, null)
+                         : calcAngelwetterDayScore(day, h, null, fcDay);
+      if (!isNaN(v)) { sum += v; n++; }
+    }
+    const score = n ? Math.round(sum / n) : 50;
+    days.push({ name: dayNames[day.getDay()], date: day.getDate(), score, isPast, isToday });
+  }
+
+  // Persistenz für evtl. Chart-Nutzung (14-Tage)
+  if (!isWeek) { _d14forChart = days.map(d => d.score); _d14todayIdx = 4; }
+
+  // Heutigen Score prominent zeigen
+  const todayObj = days.find(d => d.isToday) || days[0];
+  const todayScore = todayObj.score;
+  // Bester Zukunftstag
+  const futureDays = days.filter(d => !d.isPast && !d.isToday);
+  const bestFuture = futureDays.length ? futureDays.reduce((a, b) => b.score > a.score ? b : a) : null;
+
+  const maxBarPx = 90;
+  const barsHtml = days.map(d => {
+    const heightPx = Math.max(4, Math.round((Math.max(0, Math.min(100, d.score)) / 100) * maxBarPx));
+    const op = d.isPast ? 0.4 : (d.isToday ? 1 : 0.82);
+    const border = d.isToday ? 'box-shadow:0 0 0 2px #fff inset;' : '';
+    const lblColor = d.isToday ? '#fff' : d.isPast ? 'rgba(255,255,255,.3)' : 'rgba(255,255,255,.5)';
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0;height:${maxBarPx + 38}px">
+      <div style="font-size:10px;font-weight:900;color:${d.isPast ? 'rgba(255,255,255,.35)' : ffColorFor(d.score)};margin-bottom:3px;line-height:1">${(d.score/10).toFixed(1)}</div>
+      <div style="width:72%;height:${heightPx}px;background:${ffColorFor(d.score)};border-radius:3px 3px 1px 1px;opacity:${op};${border}"></div>
+      <div style="font-size:9px;color:${lblColor};margin-top:4px;${d.isToday?'font-weight:850':''};line-height:1.2;text-align:center">${d.name}${d.isToday?'<br>★':`<br><span style="opacity:.6">${d.date}</span>`}</div>
+    </div>`;
+  }).join('');
+
+  const titleTxt = isWeek ? '📊 FANGFAKTOR™ · 7 TAGE' : '📊 FANGFAKTOR™ · 14 TAGE';
+  const subTitle = isWeek ? '' : '<span style="font-weight:400;opacity:.5;font-size:9px;margin-left:6px">4 Rückblick + Heute + 10 Vorschau</span>';
+
+  return `
+    <div class="panel" style="margin-top:10px;background:linear-gradient(135deg,rgba(15,32,52,.95),rgba(8,15,28,.98))">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:850;letter-spacing:1.5px;color:rgba(255,255,255,.5)">${titleTxt}${subTitle}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,.35)">Skala 0–10</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
+        <div style="font-size:46px;font-weight:950;color:${ffColorFor(todayScore)};line-height:1;letter-spacing:-1px">${(todayScore/10).toFixed(1)}</div>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:850;color:#fff">Heute: ${ffQualText(todayScore)}</div>
+          ${bestFuture ? `<div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:4px">Bester Tag: ${bestFuture.name} ${bestFuture.date}. · ${(bestFuture.score/10).toFixed(1)}</div>` : ''}
+        </div>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:${isWeek?'4':'2'}px;padding:0 2px">${barsHtml}</div>
+    </div>
+    <div class="panel" style="margin-top:0">
+      <div class="sec">📊 Einflussfaktoren <span style="font-weight:400;opacity:.5;font-size:9px">aktuell</span></div>
+      ${factors.map(([i,l,v])=>`<div class="wi-row"><span class="wi-label">${i} ${l}</span><div class="wi-bar-wrap"><div class="wi-bar" style="width:${v}%;background:${ffColorFor(v)}"></div></div><span style="font-size:12px;font-weight:800;width:32px;text-align:right;color:${ffColorFor(v)}">${(v/10).toFixed(1)}</span></div>`).join('')}
+    </div>
+    <div class="panel" style="margin-top:0">
+      <div class="sec">🌙 Solunar Beißzeiten</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="sol-card sol-main"><div class="sol-lbl">Hauptzeit 1</div><div class="sol-time greenText">${sol.major1||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~2h Fenster</div></div>
+        <div class="sol-card sol-main"><div class="sol-lbl">Hauptzeit 2</div><div class="sol-time greenText">${sol.major2||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~2h Fenster</div></div>
+        <div class="sol-card sol-minor"><div class="sol-lbl">Nebenzeit 1</div><div class="sol-time blueText">${sol.minor1||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~1h Fenster</div></div>
+        <div class="sol-card sol-minor"><div class="sol-lbl">Nebenzeit 2</div><div class="sol-time blueText">${sol.minor2||'--:--'}</div><div style="font-size:10px;color:rgba(255,255,255,.4)">~1h Fenster</div></div>
+      </div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -7107,6 +7209,45 @@ function calcSolunarPeriods(date, lat, lon) {
 }
 
 // Wie nah ist eine Stunde an einem Solunar-Fenster? → Bonus
+// Solunar-Info für einen konkreten Fang-Zeitpunkt (für Fangbuch-Detailansicht)
+function solunarInfoAt(date, lat, lon) {
+  try {
+    const periods = calcSolunarPeriods(date, lat, lon);
+    const hour = date.getHours() + date.getMinutes() / 60;
+    const target = new Date(date);
+    const minsTo = (events) => events.length ? Math.min(...events.map(e => Math.abs((e - target)/60000))) : 9999;
+    const majorMins = minsTo(periods.major);
+    const minorMins = minsTo(periods.minor);
+
+    // War der Fang in einem Beißfenster?
+    let windowLabel = 'Außerhalb der Beißzeiten', windowColor = '#8b97a8', windowIcon = '🌙';
+    if (majorMins <= 30)      { windowLabel = 'Major-Beißzeit (Peak)';   windowColor = '#67d33f'; windowIcon = '🔥'; }
+    else if (majorMins <= 60) { windowLabel = 'Major-Beißzeit';          windowColor = '#67d33f'; windowIcon = '🐟'; }
+    else if (majorMins <= 90) { windowLabel = 'Major-Randzeit';          windowColor = '#a8d33f'; windowIcon = '🐟'; }
+    else if (minorMins <= 30) { windowLabel = 'Minor-Beißzeit (Peak)';   windowColor = '#2ea8ff'; windowIcon = '🐠'; }
+    else if (minorMins <= 60) { windowLabel = 'Minor-Beißzeit';          windowColor = '#2ea8ff'; windowIcon = '🐠'; }
+
+    const fmt = (d) => d ? d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+    const majorTimes = (periods.major || []).map(fmt);
+    const minorTimes = (periods.minor || []).map(fmt);
+
+    // Mondphase aus HA-Sensor (sensor.moon liefert z.B. 'waxing_gibbous')
+    let moonName = '', moonEmoji = '';
+    try {
+      const moonState = haStates['sensor.moon']?.state || '';
+      const moonMap = {
+        new_moon: ['🌑','Neumond'], waxing_crescent: ['🌒','Zunehmende Sichel'],
+        first_quarter: ['🌓','Erstes Viertel'], waxing_gibbous: ['🌔','Zunehmender Mond'],
+        full_moon: ['🌕','Vollmond'], waning_gibbous: ['🌖','Abnehmender Mond'],
+        last_quarter: ['🌗','Letztes Viertel'], waning_crescent: ['🌘','Abnehmende Sichel'],
+      };
+      if (moonMap[moonState]) { moonEmoji = moonMap[moonState][0]; moonName = moonMap[moonState][1]; }
+    } catch(e) {}
+
+    return { windowLabel, windowColor, windowIcon, majorTimes, minorTimes, moonName, moonEmoji };
+  } catch(e) { return null; }
+}
+
 function solunarBonusAt(date, hour, lat, lon) {
   const periods = calcSolunarPeriods(date, lat, lon);
   const target = new Date(date); target.setHours(hour, 0, 0, 0);
@@ -7807,6 +7948,7 @@ const scoreFromFc = (fc, fallback, date) => {
 
 // ── Leaflet Spot-Karte ───────────────────────────────────────────────────────
 let _spotMap        = null;
+let _spotMapView    = null;  // gemerkter Zoom/Center, überlebt Re-Render
 let _seaMapLayer    = null;  // OpenSeaMap Tiefenlinien
 let _spotMarkerLayer = null;  // LayerGroup für Marker (kein Map-Reset beim Update)
 let _formMap        = null;   // Karte im Fang-Formular
@@ -8346,8 +8488,17 @@ function locForecastBannerHTML() {
   if (!loc) return '';
   const lf = _locForecast;
   let detail = '';
-  if (lf) { const wt = lf.avgDaily[0]?.waterTemp; detail = wt!=null ? ` · 🌡️ ${wt.toFixed(1)}°C Wasser` : ''; }
-  else { loadSelectedLocationData(); }
+  // Echten Messwert (wassertemperatur.site) bevorzugen – konsistent mit Live-Bedingungen.
+  // Nur wenn kein echter Wert da ist, auf das Open-Meteo Modell zurückfallen.
+  const realWt = (typeof getEstimatedWaterTemp === 'function') ? getEstimatedWaterTemp() : null;
+  if (realWt && realWt.value != null) {
+    detail = ` · 🌡️ ${realWt.value.toFixed(1)}°C Wasser`;
+  } else if (lf) {
+    const wt = lf.avgDaily[0]?.waterTemp;
+    detail = wt != null ? ` · 🌡️ ${wt.toFixed(1)}°C Wasser` : '';
+  } else {
+    loadSelectedLocationData();
+  }
   return `<div data-view="weather" style="cursor:pointer;background:linear-gradient(135deg,rgba(46,168,255,.14),rgba(46,168,255,.05));border:1px solid rgba(46,168,255,.3);border-radius:14px;padding:12px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px">
     <div style="font-size:22px">📍</div>
     <div style="flex:1"><div style="font-size:14px;font-weight:800;color:var(--txt-main)">${loc.name}</div>
@@ -8420,6 +8571,12 @@ function saveLogbookState(st) {
 }
 function setLogbookFilter(val) {
   const st = getLogbookState(); st.filter = val; saveLogbookState(st);
+  scheduleRenderView();
+}
+function setLogbookAnglerFilter(name) {
+  const st = getLogbookState();
+  st.anglerFilter = (st.anglerFilter === name) ? '' : name;  // Toggle
+  saveLogbookState(st);
   scheduleRenderView();
 }
 function toggleLogbookYear(year) {
@@ -8511,6 +8668,11 @@ function selectAngler(name) {
   catchFormData.angler = name;
   setLastAngler(name);
   renderView();
+}
+
+// Fang-Detail per Index öffnen (für klickbaren Jahres-Top-Fang)
+function openCatchDetailByIdx(idx) {
+  if (!isNaN(idx) && _logEntries[idx]) openCatchDetail(_logEntries[idx]);
 }
 
 // Wetter + Wassertemperatur für einen Fang automatisch nachladen/abgleichen
@@ -8726,10 +8888,16 @@ async function saveCatchEdit(ts) {
   const ok = await callHAService('fishing_tracker', 'update_catch', updates);
   if (ok) {
     showToast('✅ Gespeichert', '#67d33f');
+    // Lokale Kopie sofort aktualisieren (für Anzeige, falls Sensor-Refresh verzögert)
+    if (_editingCatchFull) Object.assign(_editingCatchFull, updates);
     setTimeout(() => {
       const allAttrs = findFTSensor('history')?.attributes || {};
-      const fresh = (allAttrs.latest || []).find(e => e.timestamp === ts);
-      if (fresh) openCatchDetail(fresh);
+      // In latest (volle Daten) ODER entries (schlank) suchen
+      let fresh = (allAttrs.latest || []).find(e => e.timestamp === ts)
+               || (allAttrs.entries || []).find(e => e.timestamp === ts);
+      // Frische Werte mit gerade gespeicherten Updates anreichern (Sensor kann nachhängen)
+      if (fresh) { fresh = Object.assign({}, fresh, updates); openCatchDetail(fresh); }
+      else if (_editingCatchFull) openCatchDetail(_editingCatchFull);
       else closeCatchDetail();
     }, 1500);
   } else {
@@ -9512,6 +9680,38 @@ function openCatchDetail(entry) {
       </div>
     </div>` : ''}
 
+    <!-- Solunar zur Fangzeit -->
+    ${(() => {
+      try {
+        const dt = new Date(full.timestamp);
+        const center = getBestCenter();
+        const lat = full.latitude || center[0];
+        const lon = full.longitude || center[1];
+        const si = solunarInfoAt(dt, lat, lon);
+        if (!si) return '';
+        return `
+        <div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px">
+          <div style="font-size:12px;font-weight:800;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🌙 Solunar zur Fangzeit</div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:22px">${si.windowIcon}</span>
+            <span style="font-size:15px;font-weight:800;color:${si.windowColor}">${si.windowLabel}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+            <span style="color:var(--txt-muted);font-size:13px">🔥 Major-Zeiten</span>
+            <b style="font-size:13px;color:var(--txt-main)">${si.majorTimes.join(' · ') || '–'}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0${si.moonName ? ';border-bottom:1px solid var(--border)' : ''}">
+            <span style="color:var(--txt-muted);font-size:13px">🐠 Minor-Zeiten</span>
+            <b style="font-size:13px;color:var(--txt-main)">${si.minorTimes.join(' · ') || '–'}</b>
+          </div>
+          ${si.moonName ? `<div style="display:flex;justify-content:space-between;padding:6px 0">
+            <span style="color:var(--txt-muted);font-size:13px">${si.moonEmoji} Mondphase</span>
+            <b style="font-size:13px;color:var(--txt-main)">${si.moonName}</b>
+          </div>` : ''}
+        </div>`;
+      } catch(e) { return ''; }
+    })()}
+
     <!-- Wetterdaten zur Fangzeit -->
     <div id="catchWeatherBox" style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px">
       <div style="font-size:12px;font-weight:800;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🌤️ Wetter zur Fangzeit</div>
@@ -9795,8 +9995,9 @@ function initCatchMap(catches, spots, fishFilter) {
     return;
   }
 
-  // Prüfen ob Map-Container noch im DOM ist (nach renderView() neu erstellt)
+  // Container wurde durch renderView() ersetzt? Zoom/Center merken, dann neu bauen.
   if (_spotMap && !document.body.contains(_spotMap.getContainer())) {
+    try { _spotMapView = { center: _spotMap.getCenter(), zoom: _spotMap.getZoom() }; } catch(e) {}
     try { _spotMap.remove(); } catch(e) {}
     _spotMap = null;
     _spotMarkerLayer = null;
@@ -9804,8 +10005,10 @@ function initCatchMap(catches, spots, fishFilter) {
   const isFirstInit = !_spotMap;
 
   if (!_spotMap) {
+    const startCenter = _spotMapView ? _spotMapView.center : getBestCenter();
+    const startZoom = _spotMapView ? _spotMapView.zoom : 13;
     _spotMap = L.map('spotMap', {
-      center: getBestCenter(), zoom: 13,
+      center: startCenter, zoom: startZoom,
       zoomControl: true, attributionControl: true, tap: true,
     });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -9815,6 +10018,10 @@ function initCatchMap(catches, spots, fishFilter) {
     // OpenSeaMap als optionaler Layer (nicht automatisch hinzufügen)
     _seaMapLayer = null; // wird nur per Button hinzugefügt
     _spotMarkerLayer = L.layerGroup().addTo(_spotMap);
+    // Zoom/Center laufend mitschreiben, damit sie über Re-Renders erhalten bleiben
+    _spotMap.on('moveend zoomend', () => {
+      try { _spotMapView = { center: _spotMap.getCenter(), zoom: _spotMap.getZoom() }; } catch(e) {}
+    });
 
     // GPS-Button nur einmal hinzufügen
     const gpsBtn = L.control({ position: 'topleft' });
@@ -9870,8 +10077,9 @@ function initCatchMap(catches, spots, fishFilter) {
     });
   }
 
-  // Nur beim ersten Laden auf Fänge zentrieren – danach Zoom beibehalten
-  if (isFirstInit) {
+  // Auf Fänge zentrieren nur beim allerersten Laden (kein gemerkter View) – sonst Zoom behalten
+  const firstEver = isFirstInit && !_spotMapView;
+  if (firstEver) {
     if (bounds.length === 1) {
       _spotMap.setView(bounds[0], 14);
     } else if (bounds.length > 1) {
@@ -10031,6 +10239,85 @@ function closeFullscreenMap() {
   const overlay = document.getElementById('fullscreenMapOverlay');
   if (overlay) overlay.style.display = 'none';
   if (_fullMap) { try { _fullMap.remove(); } catch(e){} _fullMap = null; }
+}
+
+// ── Vollbild-Spots-Karte ─────────────────────────────────────────────────────
+let _fullSpotMap = null;
+function openFullscreenSpotMap() {
+  const overlay = document.getElementById('fullscreenSpotOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'flex';
+
+  const allCatches = getCatches();
+  const realSpots = getSpots();
+  const filtered = spotFishFilter ? allCatches.filter(c => c.fish_type === spotFishFilter) : allCatches;
+  const withGPS = filtered.filter(c => c.lat && c.lon && parseInt(c.caught || 0) >= 1);
+
+  const titleEl = document.getElementById('fullscreenSpotTitle');
+  if (titleEl) titleEl.textContent = spotFishFilter
+    ? `🗺️ ${spotFishFilter} · ${withGPS.length} ${withGPS.length===1?'Fang':'Fänge'}`
+    : `🗺️ Alle Spots · ${withGPS.length}`;
+
+  setTimeout(() => {
+    if (typeof L === 'undefined') return;
+    if (_fullSpotMap) { try { _fullSpotMap.remove(); } catch(e){} _fullSpotMap = null; }
+    _fullSpotMap = L.map('fullscreenSpotMap', {
+      center: getBestCenter(), zoom: 13,
+      zoomControl: true, attributionControl: false,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(_fullSpotMap);
+
+    const radiusForLength = (len) => {
+      const l = parseFloat(len) || 0;
+      if (l <= 0) return 7;
+      const minL = 10, maxL = 90, minR = 6, maxR = 20;
+      const clamped = Math.max(minL, Math.min(maxL, l));
+      return minR + (clamped - minL) / (maxL - minL) * (maxR - minR);
+    };
+
+    // Hotspot-Kreise (nur ohne Filter)
+    if (!spotFishFilter) {
+      (realSpots || []).forEach(s => {
+        if (!s.lat || !s.lon || s.catches < 2) return;
+        const intensity = Math.min(1, s.catches / 6);
+        const hcol = intensity > 0.6 ? '#ff4444' : intensity > 0.3 ? '#ff9d18' : '#ffd23f';
+        L.circle([s.lat, s.lon], {
+          radius: Math.min(60 + s.catches * 15, 180),
+          color: hcol, fillColor: hcol, fillOpacity: 0.15, weight: 1.5, opacity: 0.5,
+        }).addTo(_fullSpotMap);
+      });
+    }
+
+    const bounds = [];
+    withGPS.forEach(c => {
+      const col = FISH_COLORS[c.fish_type] || '#2ea8ff';
+      const dt = c.timestamp ? new Date(c.timestamp).toLocaleDateString('de-DE') : '';
+      L.circleMarker([c.lat, c.lon], {
+        radius: radiusForLength(c.length_cm), color: col, fillColor: col, fillOpacity: 0.85, weight: 2,
+      }).addTo(_fullSpotMap)
+      .bindPopup(
+        '<div style="min-width:140px"><div style="font-size:14px;font-weight:900;color:' + col + '">' + (c.fish_type || 'Fisch') + '</div>' +
+        (c.length_cm ? '<div style="font-size:12px">' + c.length_cm + ' cm' + (c.weight_kg ? ' · ' + c.weight_kg + ' kg' : '') + '</div>' : '') +
+        (c.spot ? '<div style="font-size:11px;color:#888">📍 ' + c.spot + '</div>' : '') +
+        (c.bait ? '<div style="font-size:11px;color:#888">🎣 ' + c.bait + '</div>' : '') +
+        (dt ? '<div style="font-size:10px;color:#aaa;margin-top:3px">🕐 ' + dt + '</div>' : '') + '</div>'
+      );
+      bounds.push([c.lat, c.lon]);
+    });
+
+    if (bounds.length === 1) _fullSpotMap.setView(bounds[0], 15);
+    else if (bounds.length > 1) {
+      try { _fullSpotMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 }); }
+      catch(e) { _fullSpotMap.setView(bounds[0], 13); }
+    }
+    setTimeout(() => _fullSpotMap.invalidateSize(), 150);
+  }, 100);
+}
+
+function closeFullscreenSpotMap() {
+  const overlay = document.getElementById('fullscreenSpotOverlay');
+  if (overlay) overlay.style.display = 'none';
+  if (_fullSpotMap) { try { _fullSpotMap.remove(); } catch(e){} _fullSpotMap = null; }
 }
 
 function initSpotMap(spots) {
@@ -10485,6 +10772,14 @@ document.addEventListener('click', function(ev) {
     </div>
 
     <!-- Session-Zusammenfassung Overlay -->
+    <div id="fullscreenSpotOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-base);flex-direction:column">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-nav);flex-shrink:0">
+        <button onclick="closeFullscreenSpotMap()" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer">← Schließen</button>
+        <span id="fullscreenSpotTitle" style="font-size:16px;font-weight:900;color:#2ea8ff">🗺️ Spots-Karte</span>
+      </div>
+      <div id="fullscreenSpotMap" style="flex:1;width:100%"></div>
+    </div>
+
     <div id="fullscreenMapOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:var(--bg-base);flex-direction:column">
       <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-nav);flex-shrink:0">
         <button onclick="closeFullscreenMap()" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;padding:8px 14px;border-radius:8px;font-size:14px;cursor:pointer">← Schließen</button>
