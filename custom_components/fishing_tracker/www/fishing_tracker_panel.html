@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.65 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.70 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -408,6 +408,14 @@ const STYLES = `
   .wgstat .l{font-size:10px;color:var(--txt-muted);margin-top:5px;font-weight:600}
   .wgdet{max-height:0;overflow:hidden;transition:max-height .3s cubic-bezier(.4,0,.2,1)}
   .wgroup.open .wgdet{max-height:680px}
+  /* Aufklappbare Sektionen (Zielfisch-Wissen) – native details */
+  .fsec{background:var(--bg-panel);border:1px solid var(--border);border-radius:16px;margin-bottom:10px;overflow:hidden}
+  .fsec>summary{display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;user-select:none;font-size:14px;font-weight:800;color:var(--txt-main);list-style:none}
+  .fsec>summary::-webkit-details-marker{display:none}
+  .fsec>summary::after{content:'▾';margin-left:auto;color:var(--txt-muted);font-size:12px;transition:transform .25s}
+  .fsec[open]>summary::after{transform:rotate(180deg)}
+  .fsec>summary .fsi{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;font-size:15px;background:rgba(46,168,255,.1);border:1px solid rgba(46,168,255,.16);flex-shrink:0}
+  .fsec-body{padding:0 16px 16px}
   .wgdet-in{padding:4px 16px 16px;border-top:1px solid var(--border);margin-top:2px;padding-top:12px}
   .wgrow{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.045);font-size:14px}
   .wgrow:last-child{border-bottom:none}
@@ -2572,6 +2580,153 @@ function computeSpotTodayScore(fishName, spotCatches) {
   return { todayScore, bestHour, bestHourScore: Math.round(bestPureWeather), histStrength, recencyDays, hourScores };
 }
 
+// Statische Wissensdatenbank – fundiert recherchiert
+const FT_FISH_KNOWLEDGE = {
+  Hecht: {
+    standplatz: 'Der Hecht ist ein Lauerjäger und braucht <b>Deckung</b>: Schilf- und Krautkanten, Seerosen, Totholz, Spundwände. Er sucht stets die angenehmste Temperatur – im Sommer kühlere/tiefere Zonen, im Winter wärmere. Wichtig: <b>Größere Hechte stehen tiefer und kühler</b> (unter ~19°C) als kleine. Im Frühjahr nach der Laichzeit (Schwerpunkt April) bleibt er bis Mai/Juni im flachen Uferwasser, danach zieht er Richtung tieferes Wasser und verteilt sich. Faustregel: Wo die Beutefische stehen, steht auch der Hecht.',
+    koeder: 'Gummifisch (15 cm, breite Schwanzwurzel für starke Flanke) ist der vielseitigste Sommerköder. Bei tagsüber tief stehenden Hechten an Kanten: <b>Jerkbait</b> mit ruckartiger Führung. In der Dämmerung bei glattem Wasser: <b>Oberflächenköder</b> (Popper, Stickbait) – langsam mit kurzen Zupfern und langen Pausen, der Biss kommt meist in der Pause. <b>Temperaturregel:</b> warmes Wasser → schneller, kaltes Wasser → langsamer führen, immer Spinnstops einbauen. Ein <b>Stahl- oder dickes Fluorocarbon-Vorfach (min. 0,60 mm)</b> ist gegen die Zähne Pflicht. Häufigster Fehler: zu schnelle Führung.',
+    jahreszeit: '<b>Frühjahr</b> (nach Schonzeit): beste Zeit, Hechte flach und hungrig. <b>Sommer:</b> anspruchsvoller – früh morgens (5–8 Uhr) und abends (ab 19 Uhr) an flachen, windstillen Schilf-/Seerosenbereichen; Mittagshitze meist Flaute. <b>Herbst:</b> Fressphase vor dem Winter, Hechte an Kanten, größere Köder. <b>Winter:</b> sonnige kalte Tage sind „Hechtwetter" – er frisst auch kalt aktiv, aber träge.',
+    besonderes: 'Hecht ist <b>UV-sensitiv</b> und sieht Grün, Gelb, Orange gut; Rot wirkt bei Dämmerlicht nicht. Seine Seitenlinie ist stark – er nimmt Vibrationen wahr, daher funktionieren Köder mit Druckwelle auch bei schlechter Sicht. Auflandiger Wind verbessert die Chancen am windzugewandten Ufer (Nahrung + Sauerstoff). Nach Gewittern beißt er oft besonders gut.',
+  },
+  Zander: {
+    standplatz: 'Zander liebt <b>Struktur an offenem Wasser</b>: Strömungskanten, tiefe Gumpen, Buhnenfelder, Steinpackungen, Brücken, Spundwände, harter/sandiger Grund. Tagsüber steht er <b>tief und inaktiv</b>, in der Dämmerung zieht er ins Flachwasser direkt an die Steinpackung. Er ist ein <b>Wander- und Schwarmfisch</b> – fängst du einen, stehen oft mehrere da; zieht ein Schwarm vorbei, knallt es mehrfach, eine Woche später ist der Spot leer.',
+    koeder: 'Klassiker: <b>Gummifisch am Jigkopf</b>, Faulenzen/Jiggen mit <b>Grundkontakt</b> – der Köder darf am Boden „stauben". <b>Köderführung mit Gefühl</b>, weniger Aktion als beim Barsch; Zander „prüft" die Beute. Bei trägem Zander den Köder auch mal bewegungslos liegen lassen. Ködergröße eher <b>klein</b>: Mageninhalt-Studien zeigen ø 7,6 cm Beute. Im Sommer 7,5–12,5 cm, Herbst/Winter größer (12–14 cm). <b>Köderfarbe nach Sicht:</b> klares Wasser → natürliche Dekore (Barsch, Motoroil); trübes Wasser/Dämmerung → helle, UV-aktive Köder. Feine Geflochtene (0,10–0,15 mm) überträgt die oft zaghaften Bisse. <b>Fluorocarbon-Vorfach</b> – Titan erkennt der weit sehende Zander.',
+    jahreszeit: '<b>Sommer:</b> tagsüber tief/schattig, abends Hauptjagdzeit – mit kleineren Ködern, schwereren Jigköpfen (14–16 g) und schnellerer, ruckartiger Führung. <b>Herbst:</b> Top-Saison, größere Köder, Zander frisst sich Winterspeck an. <b>Winter:</b> tief und sehr inaktiv an Gumpen/Buhnenköpfen, großen Köder langsam am Grund, Angsthaken gegen Kurzbisse. <b>Hochwasser/Trübung:</b> sehr gute Zeit, auch tagsüber.',
+    besonderes: 'Zander hat ein <b>Tapetum lucidum</b> (reflektierende Schicht) – exzellente Nachtsicht, jagt bei Dunkelheit über Kontraste. Hauptbeißzeit oft <b>2–3 h nach Sonnenuntergang</b> (ca. 22–01 Uhr). <b>Sehr scheu und geräuschempfindlich</b> – Ruhe am Ufer halten. Beutewahl je nach Sicht: bei klarem Wasser tagsüber bevorzugt er Barsche (gute Tarnung = lässt ihn nah heran), bei Trübung/Nacht eher Rotaugen. Nur <b>tote</b> Köderfische (Tierschutzgesetz) – als Aasfresser nimmt er sie problemlos.',
+  },
+  Barsch: {
+    standplatz: 'Barsche sind <b>Schwarmfische</b> und stehen an Struktur: Kanten, Steinpackungen, Hindernisse, Spundwände, Brückenpfeiler, Krautfelder. In Schwärmen jagen sie aktiv Kleinfische, oft an der Oberfläche („Barschrauben" mit springenden Beutefischen – auf Möwen/Jagdszenen achten). Findest du einen, stehen meist viele da – schnell den Schwarm abfischen.',
+    koeder: '<b>Kleine, aktive Köder:</b> Dropshot, kleine Gummis (Twister, Shads 5–8 cm), Spinner, kleine Wobbler, Mini-Jigs. Im Gegensatz zum Zander darf der Barsch <b>aggressiv und verspielt</b> angesprochen werden – er verfolgt Köder neugierig und stößt mehrfach nach. Bei trägen Fischen Dropshot mit feinem Spiel auf der Stelle. Kräftige Kontrastfarben (Firetiger, Rot/Weiß) funktionieren gut.',
+    jahreszeit: '<b>Frühjahr/Sommer:</b> aktive Schwärme, Oberflächenjagd, beste Zeit. <b>Herbst:</b> Barsche fressen sich Winterspeck an, oft große Exemplare an tiefen Kanten – Top-Zeit für Kapitale. <b>Winter:</b> tief und eng gedrängt am Grund, vertikal und sehr langsam anbieten.',
+    besonderes: 'Der Barsch verlässt sich auf seine <b>Streifen-Tarnung</b> und lässt Räuber (auch Zander) sehr nah heran. Seine hochrückige Form und die Stachel-Rückenflosse sind Schutz. Tagsüber bei guter Sicht sehr gut zu fangen, da sichtorientierter Jäger. Kleine Barsche sind selbst Lieblingsbeute von Hecht und Zander.',
+  },
+  Karpfen: {
+    standplatz: 'Karpfen lieben <b>wärmeres Wasser</b> als die Räuber und stehen an Krautfeldern, Seerosen, im Flachwasser bei Sonne, an Schilfkanten und über weichem, nahrungsreichem Grund. Verräterische <b>Blasen an der Oberfläche</b> zeigen fressende Karpfen an. Sie ziehen oft feste Routen.',
+    koeder: 'Boilies, Mais, Pellets, Tigernüsse an der <b>Haarmontage</b>. Anfüttern lohnt sich stark – Karpfen lassen sich an einen Platz binden. Im Warmen sind sie sehr fresslustig, auch tagsüber. Geduld und ein gut gewählter, angefütterter Platz schlagen ständiges Wechseln.',
+    jahreszeit: '<b>Sommer:</b> Hauptsaison, Karpfen sehr aktiv, auch nachts. <b>Frühjahr/Herbst:</b> gute Phasen bei mildem Wetter. <b>Winter:</b> Stoffwechsel niedrig, sie stehen tief und fressen wenig – kleine Köderportionen, viel Geduld.',
+    besonderes: 'Karpfen können als Karpfenartige den <b>Druckausgleich über den Verdauungstrakt</b> – sie reagieren weniger empfindlich auf Luftdruckwechsel als Räuber. Sie sind <b>wärmeliebend</b>: während Hechte bei Hitze leiden, drehen Karpfen erst richtig auf.',
+  },
+};
+// ─────────────────────────────────────────────────────────────────────────
+// WETTER-ANGEPASSTE ENZYKLOPÄDIE
+// Fundiertes Angelwissen pro Art, das sich an die aktuellen Live-Bedingungen
+// anpasst (Luftdruck-Trend, Wassertemperatur, Licht/Bewölkung, Wind).
+// Quellen: Blinker, Dr. Catch, JAEGER, Fischfindertest, simfisch u.a.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Aktuelle Bedingungen für die Strategie-Logik sammeln
+function ftCurrentConditions() {
+  const s = collectAllSensors();
+  const wt = (getEstimatedWaterTemp()?.value);
+  const cloud = s.cloudCover != null ? s.cloudCover : 50;
+  const wind = s.windSpeed != null ? s.windSpeed : 10;
+  const trend = s.pressureTrend != null ? s.pressureTrend : 0;  // hPa/3h ca.
+  const hour = new Date().getHours();
+  const isLowLight = (hour < 8 || hour >= 20 || cloud > 70);   // Dämmerung/trüb
+  const isBright = (cloud < 30 && hour >= 9 && hour < 18);     // hell/sonnig
+  return {
+    waterTemp: wt != null ? wt : (s.waterTemp != null ? s.waterTemp : 14),
+    cloud, wind, trend, hour, isLowLight, isBright,
+    pressure: s.pressure != null ? s.pressure : 1015,
+  };
+}
+
+// Strategie-Box: konkrete Empfehlung für JETZT, je nach Bedingungen + Art
+function weatherStrategyHTML(fishName) {
+  const c = ftCurrentConditions();
+  const isPredator = ['Hecht','Zander','Barsch','Aal','Forelle','Wels','Rapfen','Döbel'].includes(fishName);
+
+  // Bausteine sammeln (jeweils Icon, Titel, Text)
+  const tips = [];
+
+  // ── 1) Luftdruck-Trend (gilt für alle Räuber stark) ──────────────────────
+  if (c.trend <= -1.5) {
+    tips.push(['📉','Fallender Druck', isPredator
+      ? 'Vor einem Tiefdruck/Front oft kurze, intensive Fressphase. Jetzt aktiver führen, Flachwasser und Kanten abklopfen – die Beißlust kann schlagartig einsetzen.'
+      : 'Vor Wetterumschwung fressen Friedfische oft nochmal kräftig. Gute Phase – jetzt ans Wasser.']);
+  } else if (c.trend >= 1.5) {
+    tips.push(['📈','Steigender Druck', 'Nach einem Tief stabilisiert sich das Wetter. Oft gute Beißphasen, sobald sich der Druck eingependelt hat. Sauerstoffgehalt steigt – Fische werden aktiver.']);
+  } else {
+    tips.push(['➡️','Stabiler Druck', 'Konstanter Luftdruck über mehrere Tage = verlässlichste Beißbedingungen. Die Fische sind an den Druck gewöhnt und fressen regelmäßig. Solide Bedingungen.']);
+  }
+
+  // ── 2) Wassertemperatur (artspezifisch) ──────────────────────────────────
+  const wt = c.waterTemp;
+  if (fishName === 'Hecht') {
+    if (wt >= 23) tips.push(['🌡️','Warmes Wasser ('+wt.toFixed(0)+'°C)','Über 23°C wird der Hecht träge und zieht in tiefere, sauerstoffreiche Zonen oder an kühle Einläufe. Größere Hechte stehen tiefer. Im Fluss bleibt er wegen besserer Sauerstoffversorgung aktiver als im See. Köder langsam führen, früh morgens/spät abends ansetzen.']);
+    else if (wt >= 12 && wt < 20) tips.push(['🌡️','Idealbereich ('+wt.toFixed(0)+'°C)','14–18°C ist Hecht-Wohlfühltemperatur – jetzt ist er aktiv und aggressiv. Auch tagsüber an Krautkanten und Strukturen fängig. Schnellere Köderführung möglich.']);
+    else if (wt < 12) tips.push(['🌡️','Kühles Wasser ('+wt.toFixed(0)+'°C)','Hecht ist auch kalt aktiv (frisst mehr als andere Arten), aber träger. Köderführung deutlich verlangsamen, Spinnstops einbauen. Sonnige kalte Tage = klassisches „Hechtwetter".']);
+  } else if (fishName === 'Zander') {
+    if (wt >= 22) tips.push(['🌡️','Warmes Wasser ('+wt.toFixed(0)+'°C)','Aktionsradius eingeschränkt. Tagsüber tief und schattig, abends zieht er zum Jagen ins Flachwasser. Beutefische „schießen" durchs warme Wasser – schwerere Jigköpfe (14–16g) und in der Dämmerung schnellere, ruckartige Führung imitieren das.']);
+    else if (wt >= 10 && wt < 20) tips.push(['🌡️','Guter Bereich ('+wt.toFixed(0)+'°C)','Aktiver Zander. Faulenzen/Jiggen mit Grundkontakt, Köder darf am Boden „stauben". Dämmerung und Nacht sind Hauptbeißzeit.']);
+    else if (wt < 10) tips.push(['🌡️','Kaltes Wasser ('+wt.toFixed(0)+'°C)','Zander steht tief und inaktiv, oft an Gumpen und Buhnenköpfen. Großen Köder direkt am Grund, sehr langsam führen. Angsthaken gegen Kurzbisse – im Kalten attackiert er oft nur den Köderschwanz.']);
+  } else if (fishName === 'Barsch') {
+    if (wt >= 20) tips.push(['🌡️','Warmes Wasser ('+wt.toFixed(0)+'°C)','Barsche jagen aktiv im Schwarm, oft an der Oberfläche („Barschrauben"). Auf Jagdszenen achten (springende Kleinfische, Möwen). Kleine schnelle Köder.']);
+    else if (wt >= 8 && wt < 20) tips.push(['🌡️','Guter Bereich ('+wt.toFixed(0)+'°C)','Aktive Schwärme an Kanten und Struktur. Dropshot und kleine Gummis funktionieren. Findest du einen, stehen meist mehrere da.']);
+    else tips.push(['🌡️','Kaltes Wasser ('+wt.toFixed(0)+'°C)','Barsche stehen tief und eng gedrängt am Grund. Sehr langsam und vertikal anbieten. Kleine Köder, lange Pausen.']);
+  } else if (['Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Güster'].includes(fishName)) {
+    if (wt >= 18) tips.push(['🌡️','Warmes Wasser ('+wt.toFixed(0)+'°C)','Friedfische sind jetzt am aktivsten – im Gegensatz zu den Räubern lieben sie Wärme. Gute Fressphasen, auch tagsüber. Auf Blasen an der Oberfläche achten.']);
+    else if (wt < 10) tips.push(['🌡️','Kaltes Wasser ('+wt.toFixed(0)+'°C)','Stoffwechsel niedrig, Friedfische fressen wenig und stehen tief. Kleine Köder, viel Geduld, wenig Futter.']);
+    else tips.push(['🌡️','Mittlerer Bereich ('+wt.toFixed(0)+'°C)','Friedfische werden mit steigender Temperatur aktiver. Anfüttern lohnt sich, Fressphasen werden länger.']);
+  }
+
+  // ── 3) Licht / Bewölkung (artspezifisch) ─────────────────────────────────
+  if (fishName === 'Zander') {
+    if (c.isBright) tips.push(['☀️','Helles Wasser & Sonne','Schlechte Zander-Bedingungen tagsüber – er steht tief und meidet Licht. Tief und langsam anbieten, oder auf die Dämmerung warten. In trübem Wasser (Hochwasser, Algen) geht auch tagsüber was.']);
+    else if (c.isLowLight) tips.push(['🌙','Dämmerung / trüb','Top-Zeit! Zander ist der „König der Dämmerung". Bei schlechter Sicht erkennen Beutefische ihn spät – jetzt zieht er ins Flachwasser zum Jagen. Helle/UV-aktive Köder einsetzen.']);
+  } else if (fishName === 'Hecht') {
+    if (c.isBright) tips.push(['☀️','Sonne & klares Wasser','Hecht steht im Schatten von Kraut, Seerosen und Strukturen und lauert. Köder gezielt an Deckung führen. Mittagshitze ist oft Flaute – Dämmerung ist besser.']);
+    else if (c.cloud > 60) tips.push(['☁️','Bedeckt','Gute Hechtbedingungen – bei diffusem Licht jagt er auch im Freiwasser und auf Flächen, nicht nur aus der Deckung. Aktiver führen.']);
+  } else if (fishName === 'Barsch') {
+    if (c.isBright) tips.push(['☀️','Sonne','Barsche nutzen ihre Tarnung und jagen sichtorientiert. In klarem Wasser tagsüber sehr gut zu fangen – natürliche Köderfarben.']);
+    else if (c.isLowLight) tips.push(['🌙','Schwaches Licht','Barsche ziehen sich etwas zurück, größere Exemplare werden in der Dämmerung aber aktiv. Kontrastreiche Köder.']);
+  }
+
+  // ── 4) Wind (Sauerstoff & Nahrung) ───────────────────────────────────────
+  if (c.wind >= 15) {
+    tips.push(['💨','Wind ('+Math.round(c.wind)+' km/h)', isPredator
+      ? 'Auflandiger Wind drückt warmes Oberflächenwasser und Nahrung ans Ufer – dort sammeln sich Kleinfische und in ihrem Gefolge die Räuber. Das windzugewandte Ufer („wo dir der Wind ins Gesicht bläst") ist oft die beste Wahl. Wind erhöht zudem den Sauerstoffgehalt.'
+      : 'Wind bringt Sauerstoff und treibt Nahrung ans windzugewandte Ufer. Dort stehen oft die Fische. Leichte Wellen trüben die Sicht – die Fische werden mutiger.']);
+  } else if (c.wind < 5 && (fishName === 'Hecht')) {
+    tips.push(['🪞','Windstille','Bei glattem Wasser ohne Wind sind in der Dämmerung Oberflächenköder (Popper, Stickbait, „Walk-the-Dog") besonders spektakulär – der Hecht steigt von unten auf und schlägt in der Pause zu.']);
+  }
+
+  if (tips.length === 0) return '';
+
+  const tipHtml = tips.map(([icon, title, txt]) =>
+    `<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="font-size:18px;flex-shrink:0">${icon}</div>
+      <div><div style="font-size:13px;font-weight:800;color:var(--txt-main);margin-bottom:2px">${title}</div>
+      <div style="font-size:12px;color:var(--txt-sub);line-height:1.5">${txt}</div></div>
+    </div>`).join('');
+
+  return `<details class="fsec" open>
+    <summary><span class="fsi">🧭</span>Strategie jetzt – ${fishName}</summary>
+    <div class="fsec-body">
+      <div style="font-size:11px;color:var(--txt-muted);margin-bottom:6px">Angepasst an aktuelle Bedingungen: ${wt.toFixed(0)}°C Wasser · ${Math.round(c.cloud)}% Bewölkung · ${Math.round(c.wind)} km/h Wind · Druck ${c.trend > 0.5 ? 'steigend' : c.trend < -0.5 ? 'fallend' : 'stabil'}</div>
+      ${tipHtml}
+    </div>
+  </details>`;
+}
+
+// Statisches, fundiertes Artwissen (ausklappbar)
+function fishKnowledgeHTML(fishName) {
+  const K = FT_FISH_KNOWLEDGE[fishName];
+  if (!K) return '';
+  const sec = (icon, title, bodyHtml, open) =>
+    `<details class="fsec"${open?' open':''}>
+      <summary><span class="fsi">${icon}</span>${title}</summary>
+      <div class="fsec-body">${bodyHtml}</div>
+    </details>`;
+
+  let out = '';
+  if (K.standplatz) out += sec('📍', 'Wo steht er', K.standplatz);
+  if (K.koeder) out += sec('🎣', 'Köder & Führung', K.koeder);
+  if (K.jahreszeit) out += sec('📅', 'Über das Jahr', K.jahreszeit);
+  if (K.besonderes) out += sec('💡', 'Wissenswertes', K.besonderes);
+  return out;
+}
+
 function fishSpotForecastHTML(fishName) {
   const fmt = (h) => String(h).padStart(2,'0') + ':00';
   let windowBox = '', tripBox = '';
@@ -2584,29 +2739,8 @@ function fishSpotForecastHTML(fishName) {
       '<div style="font-size:12px;color:var(--txt-muted);margin-top:2px">\ud83c\udfaf Peak um ' + fmt(win.peak.hour) + ' \u00b7 ' + win.peak.score + '% Bei\u00dfchance</div>' +
       '</div>';
   } catch(e) {}
-  try {
-    const trip = planBestTrip(fishName);
-    const dayNames = ['So','Mo','Di','Mi','Do','Fr','Sa'];
-    const best = trip[0];
-    const bestLabel = best.dayOffset === 0 ? 'Heute' : best.dayOffset === 1 ? 'Morgen' : dayNames[best.date.getDay()];
-    tripBox =
-      '<div style="background:linear-gradient(145deg,rgba(63,185,80,.1),rgba(46,168,255,.06));border:1px solid rgba(63,185,80,.3);border-radius:13px;padding:12px;margin-bottom:10px">' +
-      '<div style="font-size:11px;font-weight:700;color:#3fb950;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">\ud83d\udcc5 Bester Tag diese Woche</div>' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
-      '<span style="font-size:18px;font-weight:900;color:var(--txt-main)">' + bestLabel + ' ' + fmt(best.bestHour) + '</span>' +
-      '<span style="font-size:18px;font-weight:900;color:#3fb950">' + best.score + '%</span></div>' +
-      '<div style="display:flex;gap:3px">' +
-      trip.slice().sort((a,b)=>a.dayOffset-b.dayOffset).map(dd => {
-        const lbl = dd.dayOffset === 0 ? 'Heute' : dayNames[dd.date.getDay()];
-        const dcol = dd.score >= 75 ? '#3fb950' : dd.score >= 55 ? '#ffd23f' : '#ff9d18';
-        const isBest = dd.dayOffset === best.dayOffset;
-        return '<div style="flex:1;text-align:center;padding:5px 2px;border-radius:6px;background:' + (isBest?'rgba(63,185,80,.15)':'transparent') + '">' +
-          '<div style="font-size:9px;color:var(--txt-muted)">' + lbl + '</div>' +
-          '<div style="font-size:12px;font-weight:800;color:' + dcol + '">' + dd.score + '</div></div>';
-      }).join('') + '</div></div>';
-  } catch(e) {}
   const mapBtn = '<div data-fishmap="' + fishName + '" style="cursor:pointer;text-align:center;background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:11px;margin-bottom:4px;font-size:13px;font-weight:700;color:#2ea8ff">\ud83d\uddfa\ufe0f Deine Fangspots f\u00fcr ' + fishName + ' auf Karte</div>';
-  return windowBox + tripBox + mapBtn;
+  return windowBox + mapBtn;
 }
 
 function openFishSpotMap(fishName) {
@@ -5790,6 +5924,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
         </div>
       </div>
       ${fishSpotForecastHTML(selFish)}
+      ${weatherStrategyHTML(selFish)}
       ${fishDepthHTML(selFish)}
       <div class="panel">
         <div class="sec">📊 ${actLabel} nach Wassertemperatur</div>
@@ -5885,6 +6020,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
         <div class="sec">📍 Typische Spots</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px">${(d.spots||[]).map(s=>`<span style="background:rgba(46,168,255,.12);color:#7ec8ff;border-radius:6px;padding:4px 10px;font-size:12px;font-weight:700">📍 ${s}</span>`).join('')}</div>
       </div>
+      ${fishKnowledgeHTML(selFish)}
       ${locForecastBiteHTML(selFish)}`;
     },
 
@@ -6713,7 +6849,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.65'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.70'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7442,6 +7578,90 @@ function collectAllSensors() {
 // liveData: von collectAllSensors() ODER null für Forecast-Modus
 // fcData: weather.home forecast-Objekt für Zukunftstage
 const _sunAltCache = {}; // memoisierter Sonnenstand pro Tag+Stunde+Ort (Heatmap ruft 360× auf)
+// ─────────────────────────────────────────────────────────────────────────
+// DYNAMISCHE BIOLOGISCHE AKTIVITÄTSKURVE (ersetzt statische Uhrzeit-Tabellen)
+// Die Tageszeit-Aktivität wird aus dem ECHTEN Sonnenstand (Auf-/Untergang)
+// plus einem art-spezifischen Verhaltensprofil berechnet. So gleiten die
+// Beißfenster übers Jahr korrekt mit der Dämmerung mit.
+// Profile recherchiert (Balzer, Blinker, simfisch, Fisch&Fang, Decathlon u.a.):
+//   dawn  = Gewicht Morgendämmerung   dusk = Gewicht Abenddämmerung
+//   day   = Tag-Plateau                night= Nacht-Plateau
+//   mittagsDip = Mittags-Delle (lichtscheue/wärmeempfindliche Arten)
+//   nightHunt  = echte Nachtjäger (Plateau hoch, Peak verschiebt in die Nacht)
+// Alle Werte 0..1.
+// ─────────────────────────────────────────────────────────────────────────
+const FT_ACTIVITY_PROFILE = {
+  // ── Raubfische ──────────────────────────────────────────────────────────
+  Hecht:   { dawn: 1.0, dusk: 1.0,  day: 0.72, night: 0.30, mittagsDip: true  },
+  Zander:  { dawn: 0.85, dusk: 1.0, day: 0.30, night: 0.92, mittagsDip: false, nightHunt: true },
+  Barsch:  { dawn: 1.0, dusk: 1.0,  day: 0.62, night: 0.10, mittagsDip: true  },
+  Forelle: { dawn: 1.0, dusk: 0.95, day: 0.60, night: 0.22, mittagsDip: true  },
+  Rapfen:  { dawn: 0.9, dusk: 0.9,  day: 0.88, night: 0.12, mittagsDip: false }, // tagaktiver Oberflächenjäger
+  Wels:    { dawn: 0.6, dusk: 0.95, day: 0.20, night: 1.0,  mittagsDip: false, nightHunt: true }, // nachtaktiv
+  Aal:     { dawn: 0.4, dusk: 0.9,  day: 0.05, night: 1.0,  mittagsDip: false, nightHunt: true }, // streng nachtaktiv
+  // ── Friedfische ─────────────────────────────────────────────────────────
+  Karpfen: { dawn: 0.95, dusk: 0.9, day: 0.55, night: 0.75, mittagsDip: false }, // sehr flexibel, auch nachts
+  Schleie: { dawn: 1.0, dusk: 0.85, day: 0.45, night: 0.70, mittagsDip: false }, // früh morgens + nachts
+  Brasse:  { dawn: 1.0, dusk: 0.9,  day: 0.55, night: 0.75, mittagsDip: false }, // Brachsenstraßen, auch nachts
+  Güster:  { dawn: 1.0, dusk: 0.9,  day: 0.55, night: 0.65, mittagsDip: false },
+  Rotauge: { dawn: 0.95, dusk: 0.9, day: 0.75, night: 0.30, mittagsDip: false }, // tag-/dämmerungsaktiv
+  Rotfeder:{ dawn: 0.9, dusk: 0.9,  day: 0.80, night: 0.20, mittagsDip: false }, // oberflächennah, tagaktiv
+  Döbel:   { dawn: 1.0, dusk: 0.85, day: 0.82, night: 0.25, mittagsDip: false }, // Morgengrauen-Spezialist
+  Ukelei:  { dawn: 0.85, dusk: 0.9, day: 0.90, night: 0.15, mittagsDip: false }, // Oberfläche, tagaktiv
+  Grundel: { dawn: 0.7, dusk: 0.8,  day: 0.80, night: 0.55, mittagsDip: false }, // Grundfisch, recht flexibel
+};
+const _DEFAULT_PROFILE = { dawn: 1.0, dusk: 0.95, day: 0.6, night: 0.4, mittagsDip: false };
+
+const _sunTimesCache = {};
+const _bioCurveCache = {};
+function bioActivityCurve(fishName, date) {
+  const p = FT_ACTIVITY_PROFILE[fishName] || _DEFAULT_PROFILE;
+  try {
+    const ctr = getBestCenter();
+    const dk = fishName+'_'+date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+ctr[0].toFixed(2);
+    if (_bioCurveCache[dk]) return _bioCurveCache[dk];
+
+    const sk = date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+ctr[0].toFixed(2);
+    let st = _sunTimesCache[sk];
+    if (!st) {
+      const rs = _AST.sunRiseSet(date, ctr[0], ctr[1]);
+      st = { rise: rs.rise ? rs.rise.getHours() + rs.rise.getMinutes()/60 : 6,
+             set:  rs.set  ? rs.set.getHours()  + rs.set.getMinutes()/60  : 21 };
+      _sunTimesCache[sk] = st;
+    }
+    const rise = st.rise, set = st.set;
+    const noon = (rise + set) / 2;
+    const win = 1.7; // Breite der Dämmerungs-Glocke (Stunden)
+
+    const curve = [];
+    for (let h = 0; h < 24; h++) {
+      const dawnPeak = Math.exp(-Math.pow((h - rise) / win, 2));
+      const duskPeak = Math.exp(-Math.pow((h - set)  / win, 2));
+      const isDay   = h > rise + 0.5 && h < set - 0.5;
+      let base = isDay ? p.day : p.night;
+
+      // Mittags-Delle für lichtscheue/wärmeempfindliche Arten
+      if (p.mittagsDip && isDay) {
+        const midDip = Math.exp(-Math.pow((h - noon) / 2.4, 2));
+        base *= (1 - 0.32 * midDip);
+      }
+      // Nachtjäger: in der echten Nacht zusätzlich anheben (Plateau gilt schon,
+      // aber Peak soll klar in der Dunkelheit liegen, nicht nur in der Dämmerung)
+      let level = Math.max(base, p.dawn * dawnPeak, p.dusk * duskPeak);
+      if (p.nightHunt && !isDay) {
+        // Tiefste Nacht (fern von Auf/Untergang) bekommt vollen night-Wert
+        level = Math.max(level, p.night);
+      }
+      curve.push(Math.round(level * 100));
+    }
+    _bioCurveCache[dk] = curve;
+    return curve;
+  } catch(e) {
+    // Fallback: flache Kurve mit leichter Tag-Betonung
+    return Array.from({length:24}, (_,h) => (h>=6&&h<=20)?60:35);
+  }
+}
+
 function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, options) {
   const d = _globalFishData[fishName];
   if (!d) return 65;
@@ -7506,9 +7726,19 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     solar = Math.round(clearSky * (1 - Math.min(0.85, (cloudCover / 100) * 0.85)));
   } catch(e) {}
 
-  // ── 1. Biologische Aktivitätskurve ───────────────────────────────────────
-  const curve    = d.curve || Array(24).fill(50);
-  const bioNow   = curve[hour] || 50;
+  // ── 1. Biologische Aktivitätskurve (dynamisch, sonnenstandsbasiert) ───────
+  // Die Tageszeit-Aktivität kommt jetzt aus dem echten Sonnenstand + Art-Profil
+  // (gleitet übers Jahr mit der Dämmerung). Die alte statische Kurve dient nur
+  // noch als leichte Glättung (20%), damit art-spezifische Feinheiten erhalten
+  // bleiben, ohne die saisonale Dämmerungs-Kopplung zu überschreiben.
+  const staticCurve = d.curve || Array(24).fill(50);
+  let bioNow = 50;
+  try {
+    const dynC = bioActivityCurve(fishName, date);
+    bioNow = (dynC[hour] || 50) * 0.80 + (staticCurve[hour] || 50) * 0.20;
+  } catch(e) {
+    bioNow = staticCurve[hour] || 50;
+  }
 
   // ── 2. Wassertemperatur — artspezifischer Multiplikator ─────────────────
   // Quelle: alpenforelle.ch/wassertemperatur-beim-fischen (wissenschaftliche Tabelle)
@@ -7817,14 +8047,15 @@ function planBestTrip(fishName) {
     const day = new Date(now); day.setDate(day.getDate() + i);
     const fc = i === 0 ? null : (fcByDate[day.toDateString()] || null);
     const liveData = i === 0 ? collectAllSensors() : null;
-    // Beste Stunde des Tages finden — RAW-Score für Ranking (kein Clamp), Display-Score für Anzeige
+    // Beste Stunde des Tages finden — RAW-Score für Ranking, normaler Score für Anzeige
     let bestHour = 6, bestRaw = -Infinity, bestDisp = 0;
     for (const h of [5,6,7,8,9,18,19,20,21]) {
       const rawScore  = calcUnifiedDayScore(fishName, day, h, liveData, fc, { raw: true });
       if (rawScore > bestRaw) {
         bestRaw = rawScore;
         bestHour = h;
-        bestDisp = Math.min(97, Math.max(5, rawScore));
+        // Normaler (differenzierter) Score für die Anzeige – gleiche Skala wie 14-Tage-Prognose
+        bestDisp = calcUnifiedDayScore(fishName, day, h, liveData, fc);
       }
     }
     days.push({ date: day, dayOffset: i, bestHour, score: bestDisp, raw: bestRaw });
@@ -8364,13 +8595,29 @@ async function loadSelectedLocationData(force) {
       fullTMax.push(cnt?tMax/cnt:12); fullTMin.push(cnt?tMin/cnt:6);
     }
     const waterEst = estimateWaterTemp(allTimes, fullTMax, fullTMin, PAST);
+    // Modell-Reihe an echten Messwert (wassertemperatur.site) kalibrieren:
+    // Offset = echter Heute-Wert − Modell-Heute-Wert, auf ganze Reihe anwenden.
+    // So stimmt das Niveau mit der Realität, relative Tagestrends bleiben erhalten.
+    let waterOffset = 0;
+    try {
+      const realWt = (typeof getEstimatedWaterTemp === 'function') ? getEstimatedWaterTemp() : null;
+      const isMeasured = realWt && (realWt.source === 'wassertemperatur_site' || realWt.source === 'nlwkn');
+      if (isMeasured && realWt.value != null && waterEst.today != null) {
+        waterOffset = realWt.value - waterEst.today;
+        // Plausibilitätsgrenze: max ±5°C Korrektur
+        if (waterOffset > 5) waterOffset = 5;
+        if (waterOffset < -5) waterOffset = -5;
+      }
+    } catch(e) {}
+    const adjWater = (v) => v != null ? Math.round((v + waterOffset) * 10) / 10 : v;
     const avgDaily = [];
     for (let i = PAST; i < Math.min(days, PAST+14); i++) {
       let rain=0, wind=0, cnt=0;
       sources.forEach(s => { const d=s.data.daily; if (d.precipitation_sum[i]!=null){ rain+=d.precipitation_sum[i]||0; wind+=d.wind_speed_10m_max[i]||0; cnt++; } });
       avgDaily.push({ date:new Date(allTimes[i]), tMax:fullTMax[i], tMin:fullTMin[i],
         rain:cnt?rain/cnt:0, wind:cnt?wind/cnt:10,
-        waterTemp: waterEst.series[i]!=null ? waterEst.series[i] : waterEst.today });
+        waterTemp: adjWater(waterEst.series[i]!=null ? waterEst.series[i] : waterEst.today),
+        waterIsCalibrated: waterOffset !== 0 });
     }
     let agreement = 100;
     if (sources.length > 1) {
@@ -8415,17 +8662,68 @@ function locForecastBiteHTML(fishName) {
   if (!loc) return '';
   if (!_locForecast) { loadSelectedLocationData(); return locForecastLoadingPanel('Beißprognose für ' + loc.name); }
   const lf = _locForecast;
-  const sc = v => v>=75?'#3fb950':v>=55?'#ffd23f':'#ff9d18';
   const dn = d => ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()];
   const scores = locDayScores(fishName);
+  const days = lf.avgDaily.slice(0, 14);
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  // Heutiger Score + bester Zukunftstag
+  const todayScore = scores[0] != null ? scores[0] : 50;
+  let bestIdx = 0, bestVal = -1;
+  scores.forEach((s, i) => { if (i > 0 && s > bestVal) { bestVal = s; bestIdx = i; } });
+  const bestDay = days[bestIdx];
+
+  // Scrollbare Balken (14 Tage)
+  const maxBarPx = 90;
+  const barsHtml = days.map((d, i) => {
+    const v = scores[i] != null ? scores[i] : 50;
+    const heightPx = Math.max(5, Math.round((Math.max(0, Math.min(100, v)) / 100) * maxBarPx));
+    const isToday = i === 0;
+    const isBest = i === bestIdx && i > 0;
+    const op = isToday ? 1 : (isBest ? 0.95 : 0.8);
+    const border = isToday ? 'box-shadow:0 0 0 2px #fff inset;' : (isBest ? 'box-shadow:0 0 0 1.5px #3fb950 inset;' : '');
+    return `<div style="flex:0 0 auto;width:38px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:${maxBarPx + 40}px">
+      <div style="font-size:11px;font-weight:900;color:${ffColorFor(v)};margin-bottom:3px;line-height:1">${v}</div>
+      <div style="width:24px;height:${heightPx}px;background:${ffColorFor(v)};border-radius:4px 4px 1px 1px;opacity:${op};${border}"></div>
+      <div style="font-size:9px;color:${isToday?'#fff':'rgba(255,255,255,.5)'};margin-top:4px;${isToday?'font-weight:850':''};line-height:1.2;text-align:center">${isToday?'Heute':dn(d.date)}<br><span style="opacity:.6">${d.date.getDate()}.${d.date.getMonth()+1}.</span></div>
+    </div>`;
+  }).join('');
+
+  // Übersichtliche Tagesliste darunter
+  const listHtml = days.map((d, i) => {
+    const v = scores[i] != null ? scores[i] : 50;
+    const isToday = i === 0;
+    const isBest = i === bestIdx && i > 0;
+    const dayLbl = isToday ? 'Heute' : (i === 1 ? 'Morgen' : dn(d.date) + '. ' + d.date.getDate() + '.' + (d.date.getMonth()+1) + '.');
+    const qual = v >= 75 ? 'sehr gut' : v >= 60 ? 'gut' : v >= 45 ? 'mittel' : v >= 30 ? 'schwach' : 'schlecht';
+    const wt = d.waterTemp != null ? d.waterTemp.toFixed(1) + '°C' : '–';
+    const bg = isToday ? 'rgba(46,168,255,.08)' : isBest ? 'rgba(63,185,80,.08)' : 'transparent';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:9px 8px;border-bottom:1px solid var(--border);background:${bg};border-radius:8px">
+      <div style="width:42px;text-align:center;flex-shrink:0">
+        <div style="font-size:17px;font-weight:900;color:${ffColorFor(v)}">${v}</div>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:800;color:var(--txt-main)">${dayLbl}${isBest?' <span style="font-size:10px;color:#3fb950;font-weight:700">★ Bester Tag</span>':''}</div>
+        <div style="font-size:11px;color:var(--txt-muted)">${qual} · 💧 ${wt}${d.rain > 1 ? ' · 🌧️ ' + d.rain.toFixed(1) + 'mm' : ''}${d.wind ? ' · 💨 ' + Math.round(d.wind) + ' km/h' : ''}</div>
+      </div>
+    </div>`;
+  }).join('');
+
   return `<div class="panel" style="margin-top:0">
     <div class="sec">🎣 Beißprognose ${fishName} · 14 Tage <span style="font-size:11px;color:var(--txt-muted);font-weight:600">📍 ${lf.name}</span></div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">
-    ${lf.avgDaily.slice(0,14).map((d,i)=>`<div style="text-align:center;background:var(--kpi-bg);border:1px solid var(--border);border-radius:8px;padding:6px 2px">
-      <div style="font-size:9px;color:var(--txt-muted)">${dn(d.date)}</div>
-      <div style="font-size:13px;font-weight:900;color:${sc(scores[i])}">${scores[i]}</div></div>`).join('')}
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+      <div style="font-size:42px;font-weight:950;color:${ffColorFor(todayScore)};line-height:1;letter-spacing:-1px">${todayScore}</div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:850;color:#fff">Heute: ${todayScore>=75?'sehr gute':todayScore>=60?'gute':todayScore>=45?'mittlere':'schwache'} Chancen</div>
+        ${bestDay ? `<div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:3px">Bester Tag: ${dn(bestDay.date)}. ${bestDay.date.getDate()}.${bestDay.date.getMonth()+1}. · ${bestVal}</div>` : ''}
+      </div>
     </div>
-    <div style="font-size:10px;color:var(--txt-muted);text-align:center;margin-top:8px;opacity:.7">Beißchance mit lokalem Fischverhalten-Modell · geschätzte Wassertemp</div></div>`;
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:6px;margin-bottom:4px">
+      <div style="display:flex;gap:6px;min-width:min-content">${barsHtml}</div>
+    </div>
+    <div style="font-size:10px;color:var(--txt-muted);text-align:center;margin:4px 0 12px;opacity:.6">← horizontal wischen für alle 14 Tage →</div>
+    <div style="margin-top:4px">${listHtml}</div>
+    <div style="font-size:10px;color:var(--txt-muted);text-align:center;margin-top:10px;opacity:.7">Lokales Fischverhalten-Modell · ${lf.avgDaily[0]?.waterIsCalibrated ? 'Wassertemp an Messwert kalibriert' : 'geschätzte Wassertemp'}</div></div>`;
 }
 
 // Wassertemp + Fluss + 7-Tage-Wetter (gemittelt) für gewählten Ort – für Wetter-View
