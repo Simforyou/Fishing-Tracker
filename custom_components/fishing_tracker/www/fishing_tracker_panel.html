@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.70 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.73 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -6849,7 +6849,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.70'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.73'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7582,43 +7582,91 @@ const _sunAltCache = {}; // memoisierter Sonnenstand pro Tag+Stunde+Ort (Heatmap
 // DYNAMISCHE BIOLOGISCHE AKTIVITÄTSKURVE (ersetzt statische Uhrzeit-Tabellen)
 // Die Tageszeit-Aktivität wird aus dem ECHTEN Sonnenstand (Auf-/Untergang)
 // plus einem art-spezifischen Verhaltensprofil berechnet. So gleiten die
-// Beißfenster übers Jahr korrekt mit der Dämmerung mit.
-// Profile recherchiert (Balzer, Blinker, simfisch, Fisch&Fang, Decathlon u.a.):
-//   dawn  = Gewicht Morgendämmerung   dusk = Gewicht Abenddämmerung
-//   day   = Tag-Plateau                night= Nacht-Plateau
-//   mittagsDip = Mittags-Delle (lichtscheue/wärmeempfindliche Arten)
-//   nightHunt  = echte Nachtjäger (Plateau hoch, Peak verschiebt in die Nacht)
+// Beißfenster übers Jahr korrekt mit der Dämmerung mit ("average anchoring",
+// Vazquez 2019 – wissenschaftlich die korrekte Methode für saisonale Muster).
+//
+// Profile recherchiert aus Fachliteratur, Angelpraxis UND Telemetrie-Studien:
+//  • Hecht: crepuscular + diel vertical migration; am wenigsten aktiv bei
+//    hoher Lichtintensität, Peaks in Dämmerung/Nacht; crepuscular v.a. im
+//    Sommer ausgeprägt (Casselman 1978; Baktoft/Jepsen/Kobler; Ostsee-Studie).
+//  • Barsch: visuell orientiert, TAGAKTIV mit Peaks Dämmerung ODER Mittag;
+//    kaum Nachtaktivität; Muster Okt–Apr am stärksten, Hochsommer flacher
+//    (Jacobsen et al. 2002, dän. Radio-Telemetrie; Craig 1977).
+//  • Zander: Tapetum lucidum, lichtscheu; im SOMMER nachtaktiv, sonst
+//    dämmerungsaktiv (iFiske; Elbe-Telemetrie Neumond-Tagaktivität).
+//  • Aal/Wels: streng nachtaktiv (Blinker; Angelverein; Balzer).
+//  • Karpfen: zwei Peaks ~8–11 h & 19–23 h; <10°C Vormittags-Peak + Nacht;
+//    Feld-Telemetrie: höchste Aktivität nachts/Dämmerung, sehr flexibel
+//    (Fressrhythmus-Studie 4–34°C; bioRxiv 2025; Ebro-Telemetrie).
+//  • Döbel: Morgengrauen-Spezialist (Fisch&Fang).
+//
+//   dawn=Morgendämmerung  dusk=Abenddämmerung  day=Tag-Plateau  night=Nacht
+//   middayPeak = zusätzlicher Mittags-Buckel (Barsch im Winterhalbjahr)
+//   mittagsDip = Mittags-Delle (lichtscheu/wärmeempfindlich, Sommer)
+//   nightHunt  = echter Nachtjäger (Peak in der Dunkelheit)
+//   summer/winter = optionale saisonale Overrides (Halbjahr)
 // Alle Werte 0..1.
 // ─────────────────────────────────────────────────────────────────────────
 const FT_ACTIVITY_PROFILE = {
   // ── Raubfische ──────────────────────────────────────────────────────────
-  Hecht:   { dawn: 1.0, dusk: 1.0,  day: 0.72, night: 0.30, mittagsDip: true  },
-  Zander:  { dawn: 0.85, dusk: 1.0, day: 0.30, night: 0.92, mittagsDip: false, nightHunt: true },
-  Barsch:  { dawn: 1.0, dusk: 1.0,  day: 0.62, night: 0.10, mittagsDip: true  },
-  Forelle: { dawn: 1.0, dusk: 0.95, day: 0.60, night: 0.22, mittagsDip: true  },
-  Rapfen:  { dawn: 0.9, dusk: 0.9,  day: 0.88, night: 0.12, mittagsDip: false }, // tagaktiver Oberflächenjäger
-  Wels:    { dawn: 0.6, dusk: 0.95, day: 0.20, night: 1.0,  mittagsDip: false, nightHunt: true }, // nachtaktiv
-  Aal:     { dawn: 0.4, dusk: 0.9,  day: 0.05, night: 1.0,  mittagsDip: false, nightHunt: true }, // streng nachtaktiv
+  Hecht:   { dawn: 1.0, dusk: 1.0,  day: 0.68, night: 0.32, mittagsDip: true,
+             summer: { dawn: 1.0, dusk: 1.0, day: 0.58, night: 0.42, mittagsDip: true },   // stärker crepuscular/nächtlich
+             winter: { dawn: 0.95, dusk: 0.95, day: 0.80, night: 0.22, mittagsDip: false } }, // gleichmäßiger, Tag ok
+  Zander:  { dawn: 0.85, dusk: 1.0, day: 0.30, night: 0.88, nightHunt: true,
+             summer: { dawn: 0.7, dusk: 0.95, day: 0.22, night: 1.0, nightHunt: true },    // Sommer: nachtaktiv
+             winter: { dawn: 0.9, dusk: 1.0, day: 0.45, night: 0.6, nightHunt: false } },  // sonst: dämmerungsaktiv
+  Barsch:  { dawn: 1.0, dusk: 1.0,  day: 0.62, night: 0.10,
+             summer: { dawn: 0.9, dusk: 0.95, day: 0.78, night: 0.12, mittagsDip: true },  // flacher, Mittags-Delle
+             winter: { dawn: 1.0, dusk: 1.0, day: 0.55, night: 0.06, middayPeak: true } }, // Okt–Apr: ausgeprägt, Mittags-Buckel
+  Forelle: { dawn: 1.0, dusk: 0.95, day: 0.60, night: 0.22, mittagsDip: true },
+  Rapfen:  { dawn: 0.9, dusk: 0.9,  day: 0.88, night: 0.12 },                               // tagaktiver Oberflächenjäger
+  Wels:    { dawn: 0.6, dusk: 0.95, day: 0.20, night: 1.0,  nightHunt: true,
+             winter: { dawn: 0.5, dusk: 0.8, day: 0.25, night: 0.7, nightHunt: true } },    // Winter: insgesamt träger
+  Aal:     { dawn: 0.4, dusk: 0.9,  day: 0.05, night: 1.0,  nightHunt: true },              // streng nachtaktiv
   // ── Friedfische ─────────────────────────────────────────────────────────
-  Karpfen: { dawn: 0.95, dusk: 0.9, day: 0.55, night: 0.75, mittagsDip: false }, // sehr flexibel, auch nachts
-  Schleie: { dawn: 1.0, dusk: 0.85, day: 0.45, night: 0.70, mittagsDip: false }, // früh morgens + nachts
-  Brasse:  { dawn: 1.0, dusk: 0.9,  day: 0.55, night: 0.75, mittagsDip: false }, // Brachsenstraßen, auch nachts
-  Güster:  { dawn: 1.0, dusk: 0.9,  day: 0.55, night: 0.65, mittagsDip: false },
-  Rotauge: { dawn: 0.95, dusk: 0.9, day: 0.75, night: 0.30, mittagsDip: false }, // tag-/dämmerungsaktiv
-  Rotfeder:{ dawn: 0.9, dusk: 0.9,  day: 0.80, night: 0.20, mittagsDip: false }, // oberflächennah, tagaktiv
-  Döbel:   { dawn: 1.0, dusk: 0.85, day: 0.82, night: 0.25, mittagsDip: false }, // Morgengrauen-Spezialist
-  Ukelei:  { dawn: 0.85, dusk: 0.9, day: 0.90, night: 0.15, mittagsDip: false }, // Oberfläche, tagaktiv
-  Grundel: { dawn: 0.7, dusk: 0.8,  day: 0.80, night: 0.55, mittagsDip: false }, // Grundfisch, recht flexibel
+  Karpfen: { dawn: 0.95, dusk: 0.95, day: 0.55, night: 0.78,                                // 2 Peaks (Vormittag+Abend), nachts aktiv
+             summer: { dawn: 0.9, dusk: 1.0, day: 0.5, night: 0.85 },                       // wärmer: nachts/Dämmerung stark
+             winter: { dawn: 1.0, dusk: 0.7, day: 0.55, night: 0.35 } },                    // kalt: Vormittags-Peak, wenig Nacht
+  Schleie: { dawn: 1.0, dusk: 0.85, day: 0.45, night: 0.70,                                 // früh morgens + nachts
+             winter: { dawn: 0.8, dusk: 0.6, day: 0.4, night: 0.3 } },                      // Hitze-/Kältestarre möglich
+  Brasse:  { dawn: 1.0, dusk: 0.9,  day: 0.55, night: 0.78,                                 // Brachsenstraßen, auch nachts
+             winter: { dawn: 0.9, dusk: 0.7, day: 0.5, night: 0.35 } },                     // träge Schwärme im Kalten
+  Güster:  { dawn: 1.0, dusk: 0.9,  day: 0.55, night: 0.62 },
+  Rotauge: { dawn: 0.95, dusk: 0.9, day: 0.75, night: 0.30 },                               // tag-/dämmerungsaktiv
+  Rotfeder:{ dawn: 0.9, dusk: 0.9,  day: 0.80, night: 0.20 },                               // oberflächennah, tagaktiv
+  Döbel:   { dawn: 1.0, dusk: 0.80, day: 0.82, night: 0.25 },                               // Morgengrauen-Spezialist
+  Ukelei:  { dawn: 0.85, dusk: 0.9, day: 0.90, night: 0.15 },                               // Oberfläche, tagaktiv
+  Grundel: { dawn: 0.7, dusk: 0.8,  day: 0.80, night: 0.55 },                               // Grundfisch, flexibel
 };
-const _DEFAULT_PROFILE = { dawn: 1.0, dusk: 0.95, day: 0.6, night: 0.4, mittagsDip: false };
+const _DEFAULT_PROFILE = { dawn: 1.0, dusk: 0.95, day: 0.6, night: 0.4 };
+
+// Saison-Auswahl: liefert das passende (ggf. saisonale) Profil für ein Datum.
+// Sommerhalbjahr = Mai–Sep, Winterhalbjahr = Nov–Mär, dazwischen Basis.
+function _seasonalProfile(base, date) {
+  if (!base) return _DEFAULT_PROFILE;
+  const m = date.getMonth(); // 0=Jan
+  const isSummer = (m >= 4 && m <= 8);   // Mai–Sep
+  const isWinter = (m >= 10 || m <= 2);  // Nov–Mär
+  if (isSummer && base.summer) return Object.assign({}, base, base.summer);
+  if (isWinter && base.winter) return Object.assign({}, base, base.winter);
+  return base;
+}
 
 const _sunTimesCache = {};
 const _bioCurveCache = {};
-function bioActivityCurve(fishName, date) {
-  const p = FT_ACTIVITY_PROFILE[fishName] || _DEFAULT_PROFILE;
+function bioActivityCurve(fishName, date, cloudPct) {
+  const p = _seasonalProfile(FT_ACTIVITY_PROFILE[fishName], date) || _DEFAULT_PROFILE;
+  // Bewölkung dehnt das Dämmerungs-Fressfenster in den Tag (wissenschaftlich
+  // belegt: geringere Lichtdurchdringung macht Beute verwundbar, "an overcast
+  // afternoon can fish like a dawn"). Hohe Bewölkung → breitere Glocken +
+  // leicht angehobenes Tag-Plateau bei den Sichtjägern.
+  const cloud = (cloudPct != null) ? Math.max(0, Math.min(100, cloudPct)) : 50;
+  const cloudF = cloud / 100;  // 0..1
+  // Cache-Key inkl. Bewölkung (auf 25%-Stufen gerundet, damit Cache nicht explodiert)
+  const cloudBucket = Math.round(cloudF * 4);
   try {
     const ctr = getBestCenter();
-    const dk = fishName+'_'+date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+ctr[0].toFixed(2);
+    const dk = fishName+'_'+date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+ctr[0].toFixed(2)+'_c'+cloudBucket;
     if (_bioCurveCache[dk]) return _bioCurveCache[dk];
 
     const sk = date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+ctr[0].toFixed(2);
@@ -7631,25 +7679,38 @@ function bioActivityCurve(fishName, date) {
     }
     const rise = st.rise, set = st.set;
     const noon = (rise + set) / 2;
-    const win = 1.7; // Breite der Dämmerungs-Glocke (Stunden)
+    // Glockenbreite wächst mit Bewölkung: klar 1.7h → bedeckt bis ~2.8h
+    const win = 1.7 + cloudF * 1.1;
+    // Lichtscheue/sichtorientierte Tagjäger: bei Bewölkung Tag-Plateau anheben
+    // (Dämmerungsverhalten dehnt sich aus). Echte Nachtjäger profitieren kaum.
+    const dayLift = (['Hecht','Barsch','Forelle','Rapfen','Döbel'].includes(fishName))
+      ? cloudF * 0.22
+      : (['Rotauge','Rotfeder','Ukelei','Schleie','Brasse','Güster'].includes(fishName))
+        ? cloudF * 0.14
+        : cloudF * 0.08;
 
     const curve = [];
     for (let h = 0; h < 24; h++) {
       const dawnPeak = Math.exp(-Math.pow((h - rise) / win, 2));
       const duskPeak = Math.exp(-Math.pow((h - set)  / win, 2));
       const isDay   = h > rise + 0.5 && h < set - 0.5;
-      let base = isDay ? p.day : p.night;
+      let base = isDay ? Math.min(1, p.day + dayLift) : p.night;
 
-      // Mittags-Delle für lichtscheue/wärmeempfindliche Arten
+      // Mittags-Delle für lichtscheue/wärmeempfindliche Arten (Sommer)
+      // — bei starker Bewölkung abgeschwächt (weniger grelles Licht)
       if (p.mittagsDip && isDay) {
         const midDip = Math.exp(-Math.pow((h - noon) / 2.4, 2));
-        base *= (1 - 0.32 * midDip);
+        base *= (1 - (0.32 * (1 - cloudF * 0.6)) * midDip);
       }
-      // Nachtjäger: in der echten Nacht zusätzlich anheben (Plateau gilt schon,
-      // aber Peak soll klar in der Dunkelheit liegen, nicht nur in der Dämmerung)
-      let level = Math.max(base, p.dawn * dawnPeak, p.dusk * duskPeak);
+      // Mittags-Buckel (z.B. Barsch im Winterhalbjahr – Telemetrie zeigt
+      // Peaks „dawn and dusk OR midday", Aktivität in der Tagesmitte)
+      let middayBoost = 0;
+      if (p.middayPeak && isDay) {
+        middayBoost = 0.85 * Math.exp(-Math.pow((h - noon) / 2.6, 2));
+      }
+      // Nachtjäger: in der echten Nacht zusätzlich anheben
+      let level = Math.max(base, p.dawn * dawnPeak, p.dusk * duskPeak, middayBoost);
       if (p.nightHunt && !isDay) {
-        // Tiefste Nacht (fern von Auf/Untergang) bekommt vollen night-Wert
         level = Math.max(level, p.night);
       }
       curve.push(Math.round(level * 100));
@@ -7734,7 +7795,7 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   const staticCurve = d.curve || Array(24).fill(50);
   let bioNow = 50;
   try {
-    const dynC = bioActivityCurve(fishName, date);
+    const dynC = bioActivityCurve(fishName, date, cloudCover);
     bioNow = (dynC[hour] || 50) * 0.80 + (staticCurve[hour] || 50) * 0.20;
   } catch(e) {
     bioNow = staticCurve[hour] || 50;
@@ -7830,7 +7891,9 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   }
 
   // ── 8. Mondphase ──────────────────────────────────────────────────────────
-  const moonBonus = moonFishScore(moonPhaseForDate(date));
+  const _moonPhase = moonPhaseForDate(date);
+  const moonBonus = moonFishScore(_moonPhase)
+                  + moonNightHuntBonus(_moonPhase, hour, isNight, cloudCover, fishName);
 
   // ── 9. Saison ─────────────────────────────────────────────────────────────
   const seasonBonus = seasonalScore(date);
@@ -7887,16 +7950,33 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     else if (solar > 150) lightMult = 0.80;
     else if (isNight || solar < 50) lightMult = 1.25;      // Nacht: Bonus
     else if (isDawn) lightMult = 1.15;
-  } else if (['Hecht', 'Barsch', 'Rapfen'].includes(fishName)) {
-    // Dämmerungsjäger: Hochsonne leicht ungünstig
+  } else if (['Hecht', 'Barsch', 'Rapfen', 'Forelle'].includes(fishName)) {
+    // Dämmerungs-Sichtjäger: Hochsonne leicht ungünstig, Dämmerung optimal.
+    // Forelle ergänzt – visuell jagend, lichtempfindlich, dämmerungsaktiv.
     if (solar > 800 && cloudCover < 20) lightMult = 0.75;
     else if (solar > 500) lightMult = 0.88;
     else if (isDawn || (solar > 50 && solar < 300)) lightMult = 1.10;
-  } else if (['Karpfen', 'Schleie', 'Brasse', 'Rotauge', 'Rotfeder'].includes(fishName)) {
-    // Friedfische: etwas Licht ok, Knallsonne im Sommer ungünstig
+  } else if (['Döbel'].includes(fishName)) {
+    // Scheuer Morgengrauen-Spezialist: meidet grelles Licht, Dämmerung top
+    if (solar > 700 && cloudCover < 25) lightMult = 0.78;
+    else if (isDawn || (solar > 50 && solar < 250)) lightMult = 1.12;
+    else if (isNight) lightMult = 0.85;
+  } else if (['Karpfen', 'Schleie', 'Brasse', 'Güster'].includes(fishName)) {
+    // Friedfische (gründelnd): etwas Licht ok, Knallsonne im Sommer ungünstig,
+    // dämmern/nachts aktiv – Schleie/Brasse/Güster auch nachts unterwegs.
     if (sunElevation > 45 && cloudCover < 20 && waterTemp > 20) lightMult = 0.80;
-    else if (isNight) lightMult = 0.75;
     else if (solar > 100 && solar < 500) lightMult = 1.05;
+    else if (isNight) lightMult = 0.95;   // nachtaktiver als andere Friedfische
+  } else if (['Rotauge', 'Rotfeder', 'Ukelei'].includes(fishName)) {
+    // Tagaktive (oft oberflächennahe) Weißfische: Licht wenig störend,
+    // pralle Mittagssonne im Hochsommer leicht dämpfend, Nacht schwach.
+    if (sunElevation > 50 && cloudCover < 15 && waterTemp > 22) lightMult = 0.85;
+    else if (solar > 80 && solar < 600) lightMult = 1.06;
+    else if (isNight) lightMult = 0.55;   // ausgeprägt tagaktiv
+  } else if (['Grundel'].includes(fishName)) {
+    // Grundgebundener Lauerfisch: lichttolerant, recht flexibel über den Tag
+    if (isNight) lightMult = 0.85;
+    else if (solar > 50 && solar < 600) lightMult = 1.04;
   }
 
   // Sauerstoff-Multiplikator (kritisch bei warmem Wasser)
@@ -7905,6 +7985,35 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   let o2effective = o2sat;
   if (_riverData && _riverData.isLow) o2effective -= 1.5;
   if (_riverData && (_riverData.status === 'rising' || _riverData.status === 'falling')) o2effective += 0.5;
+  // Sauerstoff-TAGESGANG (wissenschaftlich belegt): Photosynthese hebt O2 vom
+  // Morgen bis zum späten Nachmittag, nachts zehren Atmung/Zersetzung ihn auf →
+  // Tiefstwert kurz vor Sonnenaufgang. Nur bei warmem Wasser spürbar (im Kalten
+  // ist O2 reichlich und der Effekt auf das Beißen vernachlässigbar).
+  if (waterTemp > 16) {
+    const ctrO2 = (() => { try { return getBestCenter(); } catch(e) { return [52.4, 7.0]; } })();
+    let riseH = 6, setH = 21;
+    try {
+      const sk = date.getFullYear()+'-'+date.getMonth()+'-'+date.getDate()+'_'+ctrO2[0].toFixed(2);
+      const stO2 = _sunTimesCache[sk] || (() => { const rs=_AST.sunRiseSet(date,ctrO2[0],ctrO2[1]); return {rise:rs.rise?rs.rise.getHours()+rs.rise.getMinutes()/60:6, set:rs.set?rs.set.getHours()+rs.set.getMinutes()/60:21}; })();
+      riseH = stO2.rise; setH = stO2.set;
+    } catch(e) {}
+    // O2-Phase: -1 (Tiefstwert bei Sonnenaufgang) bis +1 (Höchstwert spätnachm.)
+    const peakO2H = setH - 2;          // Höchstwert ~2h vor Sonnenuntergang
+    const lowO2H  = riseH;             // Tiefstwert bei Sonnenaufgang
+    // Sinusförmiger Tagesgang zwischen Tief und Hoch
+    let o2Phase;
+    if (hour >= lowO2H && hour <= peakO2H) {
+      o2Phase = -Math.cos(Math.PI * (hour - lowO2H) / Math.max(1, peakO2H - lowO2H)); // -1→+1
+    } else {
+      // Nachts/abends fallend zurück zum Tief
+      const span = (24 - peakO2H) + lowO2H;
+      const t = ((hour - peakO2H + 24) % 24) / Math.max(1, span);
+      o2Phase = Math.cos(Math.PI * t); // +1→-1
+    }
+    // Stärke des Tagesgangs wächst mit Wärme (mehr Zehrung, knapperes O2)
+    const warmth = Math.min(1, (waterTemp - 16) / 10); // 16°C→0, 26°C→1
+    o2effective += o2Phase * (0.8 + warmth * 1.2);      // ±0.8 bis ±2.0 mg/l
+  }
   if (o2effective < 5) {
     o2Mult = ['Forelle','Rapfen','Döbel'].includes(fishName) ? 0.30 : 0.50;
   } else if (o2effective < 6.5) {
@@ -7915,11 +8024,24 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     o2Mult = 1.08; // sauerstoffreich: leicht positiv
   }
 
-  // Druck-Multiplikator (Physoclisten empfindlicher)
+  // Druck-Multiplikator — BEWUSST ABGESCHWÄCHT. Der absolute Luftdruck ist als
+  // direkter Beiß-Auslöser wissenschaftlich kaum belegt (ein Fisch erzeugt durch
+  // 30 cm Tiefenwechsel eine größere Druckänderung als ein ganzes Wetter­system).
+  // Der reproduzierbare Effekt ist der TREND: fallender Druck = aufziehende Front
+  // = weniger Licht + aufsteigende Beutefische → kurze aktive Fressphase davor.
+  // Daher: enge Spannweite um 1.0 (0.82–1.12) statt 0.5–1.2, plus klarer
+  // Trend-Bonus bei fallendem Druck.
   const _pStable = computeStabilityHours(pressure);
   const _pScore  = pressureBiteFavorability(pressure, pressureTrend, _pStable, fishName);
-  // _pScore 0–100 → Mult 0.5–1.2
-  const pressureMult = 0.5 + (_pScore / 100) * 0.7;
+  let pressureMult = 0.82 + (_pScore / 100) * 0.30;   // 0.82 … 1.12
+  // Fallender Druck (Front naht): kurzfristiger Aktivitäts-Schub, v.a. Räuber
+  if (pressureTrend < -0.6) {
+    pressureMult *= (['Hecht','Zander','Barsch','Rapfen','Wels'].includes(fishName)) ? 1.06 : 1.03;
+  } else if (pressureTrend > 1.0) {
+    // Kräftig steigender Druck nach Front: oft kurze Beißflaute
+    pressureMult *= 0.96;
+  }
+  pressureMult = Math.max(0.78, Math.min(1.15, pressureMult));
 
   // Additive Situationsboni (kleinere Gewichtung)
   // ── 13. Photoperiode ──────────────────────────────────────────────────────
@@ -8088,12 +8210,30 @@ const moonPhaseForDate = (date) => {
   return ((diff % 29.53059) + 29.53059) % 29.53059;
 };
 const moonFishScore = (phase) => {
-  // Vollmond (14-15) und Neumond (0/29) = beste Angelzeiten
+  // Mondeinfluss im SÜSSWASSER ist wissenschaftlich schwach belegt (anders als
+  // bei Gezeiten im Meer). Kritische Analysen großer Fang-Datensätze finden
+  // kaum Mondabhängigkeit. Daher nur dezenter Effekt (vorher ±10/-5 → jetzt
+  // ±4/-2). Die artspezifische Vollmond-Nachtjagd kommt separat (moonNightHunt).
   const nearFull = Math.abs(phase - 14.76);
   const nearNew  = Math.min(phase, 29.53 - phase);
-  if (nearFull < 2 || nearNew < 2) return 10;   // Vollmond/Neumond: +10
-  if (nearFull < 4 || nearNew < 4) return 5;    // nahe dran: +5
-  if (nearFull > 10 && nearNew > 10) return -5; // Halbmond: -5
+  if (nearFull < 2 || nearNew < 2) return 4;    // Vollmond/Neumond: +4
+  if (nearFull < 4 || nearNew < 4) return 2;     // nahe dran: +2
+  if (nearFull > 10 && nearNew > 10) return -1;  // Halbmond: -1
+  return 0;
+};
+
+// Vollmond-Nachtjagd: Sichtjäger (Hecht/Zander/Barsch/Wels) profitieren bei
+// klarer Vollmondnacht vom zusätzlichen Licht zum Beutemachen ("the full moon's
+// increased light levels at night can stimulate feeding in predatory fish").
+// Gilt NUR nachts, bei klarem Himmel und für augenjagende Räuber.
+const moonNightHuntBonus = (phase, hour, isNight, cloudCover, fishName) => {
+  if (!isNight) return 0;
+  if (cloudCover > 50) return 0;            // bewölkt: kein Mondlicht
+  const nearFull = Math.abs(phase - 14.76);
+  if (nearFull > 3) return 0;               // nur um Vollmond
+  if (['Hecht','Zander','Barsch','Wels','Rapfen'].includes(fishName)) {
+    return cloudCover < 25 ? 7 : 4;
+  }
   return 0;
 };
 
