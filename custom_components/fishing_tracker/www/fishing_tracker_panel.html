@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.73 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.75 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -2103,8 +2103,19 @@ function estimateFishDepth(fishName) {
   else if (waterTemp < 9)  { shift += 0.7; reasons.push(['\u2744\ufe0f','K\u00fchles Wasser \u2192 tiefer', 0.7]); }
   else if (waterTemp > 24) { shift += 1.3; reasons.push(['\ud83e\udd75','Sehr warm \u2192 k\u00fchle Tiefe / O\u2082-reiche Str\u00f6mung', 1.3]); }
   else if (waterTemp >= 12 && waterTemp <= 20) { shift -= 0.4; reasons.push(['\ud83c\udf21\ufe0f','Komforttemperatur \u2192 aktiv, auch flach', 0.4]); }
-  // D\u00e4mmerung: Fresszug ins Flache
-  if (sunElev > -8 && sunElev < 8) { shift -= 0.8; reasons.push(['\ud83c\udfaf','D\u00e4mmerungs-Fresszug ins Flache', 0.8]); }
+  // Dämmerung: Bewegung ins Flache – ABER bei klarem Wasser/Himmel bleiben die
+  // Fische in Deckung (Schilf, Büsche, Überhänge), statt auf die offene Fläche
+  // zu ziehen. Praxisbeobachtung: an klaren, sonnigen Abenden sitzen Barsch &
+  // Hecht eng an der Uferstruktur, nicht draußen auf der Fläche.
+  if (sunElev > -8 && sunElev < 8) {
+    const clearSky = (sensors.cloudCover != null ? sensors.cloudCover : 50) < 35;
+    shift -= 0.8;
+    if (clearSky) {
+      reasons.push(['🌳','Dämmerung + klares Wasser → Deckung & Uferstruktur (nicht offene Fläche)', 0.9]);
+    } else {
+      reasons.push(['🎯','Dämmerungs-Fresszug ins Flache', 0.8]);
+    }
+  }
   // Jahreszeit
   if (month === 12 || month <= 2) { shift += 0.8; reasons.push(['\ud83d\uddd3\ufe0f','Winter \u2192 tiefe Standpl\u00e4tze', 0.8]); }
   // Nachtaktive R\u00e4uber jagen flacher
@@ -2624,9 +2635,17 @@ function ftCurrentConditions() {
   const hour = new Date().getHours();
   const isLowLight = (hour < 8 || hour >= 20 || cloud > 70);   // Dämmerung/trüb
   const isBright = (cloud < 30 && hour >= 9 && hour < 18);     // hell/sonnig
+  // Klare Dämmerung: Sonne tief, aber Himmel klar → Fische bleiben in Deckung,
+  // ziehen NICHT auf die offene Fläche (Praxisbeobachtung). Nutzt echten Sonnenstand.
+  let isClearDusk = false;
+  try {
+    const ctr = getBestCenter();
+    const elev = _AST.getSunPosition(new Date(), ctr[0], ctr[1]).altitude * 180 / Math.PI;
+    isClearDusk = (elev > -9 && elev < 8) && cloud < 35;
+  } catch(e) {}
   return {
     waterTemp: wt != null ? wt : (s.waterTemp != null ? s.waterTemp : 14),
-    cloud, wind, trend, hour, isLowLight, isBright,
+    cloud, wind, trend, hour, isLowLight, isBright, isClearDusk,
     pressure: s.pressure != null ? s.pressure : 1015,
   };
 }
@@ -2675,10 +2694,12 @@ function weatherStrategyHTML(fishName) {
     if (c.isBright) tips.push(['☀️','Helles Wasser & Sonne','Schlechte Zander-Bedingungen tagsüber – er steht tief und meidet Licht. Tief und langsam anbieten, oder auf die Dämmerung warten. In trübem Wasser (Hochwasser, Algen) geht auch tagsüber was.']);
     else if (c.isLowLight) tips.push(['🌙','Dämmerung / trüb','Top-Zeit! Zander ist der „König der Dämmerung". Bei schlechter Sicht erkennen Beutefische ihn spät – jetzt zieht er ins Flachwasser zum Jagen. Helle/UV-aktive Köder einsetzen.']);
   } else if (fishName === 'Hecht') {
-    if (c.isBright) tips.push(['☀️','Sonne & klares Wasser','Hecht steht im Schatten von Kraut, Seerosen und Strukturen und lauert. Köder gezielt an Deckung führen. Mittagshitze ist oft Flaute – Dämmerung ist besser.']);
+    if (c.isClearDusk) tips.push(['🌳','Klare Dämmerung','Bei klarem Wasser und wenig Wolken bleiben die Hechte auch jetzt eng an der Deckung – Schilfkanten, Büsche, Überhänge, Totholz. Sie ziehen NICHT auf die offene Fläche. Köder gezielt direkt an die Struktur und am Schatten entlang führen, nicht das Freiwasser abklopfen.']);
+    else if (c.isBright) tips.push(['☀️','Sonne & klares Wasser','Hecht steht im Schatten von Kraut, Seerosen und Strukturen und lauert. Köder gezielt an Deckung führen. Mittagshitze ist oft Flaute – Dämmerung ist besser.']);
     else if (c.cloud > 60) tips.push(['☁️','Bedeckt','Gute Hechtbedingungen – bei diffusem Licht jagt er auch im Freiwasser und auf Flächen, nicht nur aus der Deckung. Aktiver führen.']);
   } else if (fishName === 'Barsch') {
-    if (c.isBright) tips.push(['☀️','Sonne','Barsche nutzen ihre Tarnung und jagen sichtorientiert. In klarem Wasser tagsüber sehr gut zu fangen – natürliche Köderfarben.']);
+    if (c.isClearDusk) tips.push(['🌳','Klare Dämmerung','Bei klarem Wasser stehen die Barsche eng an der Uferstruktur (Büsche, Überhänge, Schilf, Totholz) – nicht draußen auf der Fläche. Genau diese Deckung absuchen. Reagieren sie nur mit Anfassern/Nachläufern: Köder verkleinern, natürliche Farben, Tempowechsel & Absink-Stopps zum Auslösen, ggf. Stinger gegen Kurzbisse.']);
+    else if (c.isBright) tips.push(['☀️','Sonne','Barsche nutzen ihre Tarnung und jagen sichtorientiert. In klarem Wasser tagsüber sehr gut zu fangen – natürliche Köderfarben.']);
     else if (c.isLowLight) tips.push(['🌙','Schwaches Licht','Barsche ziehen sich etwas zurück, größere Exemplare werden in der Dämmerung aber aktiv. Kontrastreiche Köder.']);
   }
 
@@ -6849,7 +6870,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.73'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.75'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8944,16 +8965,19 @@ function locForecastBannerHTML() {
     <div style="font-size:11px;color:#2ea8ff;font-weight:700">Wetter ›</div></div>`;
 }
 
-function showToast(msg, col) {
+function showToast(msg, col, duration) {
   col = col || '#2ea8ff';
+  duration = duration || 3000;
+  const isLong = msg.length > 40;
   const t = document.createElement('div');
   t.style.cssText = 'position:fixed;bottom:90px;left:50%;transform:translateX(-50%);' +
     'background:rgba(13,17,23,.97);border:1px solid ' + col + ';' +
     'color:' + col + ';padding:12px 22px;border-radius:12px;font-weight:800;' +
-    'font-size:14px;z-index:99999;white-space:nowrap;max-width:90vw;text-align:center';
+    'font-size:14px;z-index:99999;max-width:90vw;text-align:center;' +
+    (isLong ? 'white-space:normal;line-height:1.4;' : 'white-space:nowrap;');
   t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3000);
+  setTimeout(() => t.remove(), duration);
 }
 
 function getBestCenter() {
@@ -9646,7 +9670,19 @@ function saveActiveSession(sess) {
   try {
     if (sess) localStorage.setItem(FT_SESSION_KEY, JSON.stringify(sess));
     else localStorage.removeItem(FT_SESSION_KEY);
-  } catch(e) {}
+    return true;
+  } catch(e) {
+    // localStorage nicht verfügbar (Privat-Modus, gesperrt, Speicher voll).
+    // NICHT mehr stillschweigend schlucken – sonst startet die Session
+    // scheinbar, wird aber nie gespeichert und ist sofort "weg".
+    try {
+      if (typeof showToast === 'function') {
+        showToast('⚠️ Session kann nicht gespeichert werden – Browser-Speicher ist blockiert (Privat-Modus?). Bitte normalen Modus nutzen.', '#ff5555', 6000);
+      }
+    } catch(_) {}
+    console.error('Fishing Tracker: localStorage nicht verfügbar', e);
+    return false;
+  }
 }
 
 async function startSession() {
@@ -9664,6 +9700,16 @@ async function startSession() {
     lastBlankTs: null,
   };
   saveActiveSession(sess);
+  // Verifizieren, dass die Session wirklich gespeichert wurde. Auf manchen
+  // Geräten (Privat-Modus, gesperrter WebView-Speicher) scheitert das Schreiben
+  // lautlos – dann darf KEINE Erfolgsmeldung kommen.
+  const verify = getActiveSession();
+  if (!verify || verify.start !== sess.start) {
+    if (typeof showToast === 'function') {
+      showToast('⚠️ Session konnte nicht gestartet werden – der App-Speicher ist auf diesem Gerät blockiert. Tipp: HA-App-Einstellungen → nicht im Privat-Modus, Webseiten-Daten erlauben.', '#ff5555', 7000);
+    }
+    return;
+  }
   if (typeof showToast === 'function') showToast('🎣 Session gestartet — Petri Heil!', '#67d33f');
   scheduleRenderView();
 }
