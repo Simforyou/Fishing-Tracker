@@ -450,6 +450,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
         # Alle Felder außer timestamp als Updates übernehmen
         updates = {k: v for k, v in call.data.items() if k != "timestamp"}
+        # Foto nachträglich hinzufügen: photo_data → Datei speichern → photo_url setzen
+        photo_data = updates.pop("photo_data", None)
+        if photo_data and len(photo_data) > 100:
+            import base64, uuid as _uuid
+            photo_dir = Path(hass.config.path()) / "www" / "fishing_tracker" / "photos"
+            photo_dir.mkdir(parents=True, exist_ok=True)
+            photo_id = _uuid.uuid4().hex[:12]
+            photo_filename = f"catch_{photo_id}.jpg"
+            photo_path = photo_dir / photo_filename
+            try:
+                raw = photo_data.split(",", 1)[-1]
+                await hass.async_add_executor_job(
+                    lambda: photo_path.write_bytes(base64.b64decode(raw))
+                )
+                updates["photo_url"] = f"/local/fishing_tracker/photos/{photo_filename}"
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Foto (Update) konnte nicht gespeichert werden: %s", exc)
         if await store.async_update_entry(ts, updates):
             async_dispatcher_send(hass, SIGNAL_UPDATED)
 
@@ -474,6 +492,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 vol.Optional("humidity"): vol.Any(vol.Coerce(float), None),
                 vol.Optional("solar_radiation"): vol.Any(vol.Coerce(float), None),
                 vol.Optional("angelwetter_index"): vol.Any(vol.Coerce(int), None),
+                vol.Optional("photo_data"): cv.string,
             }, extra=vol.ALLOW_EXTRA))
 
     # Scan löschen
