@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.78 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.79 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -6880,7 +6880,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.78'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.79'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -10420,21 +10420,16 @@ function openCatchDetail(entry) {
   }
 
   // Buttons wieder einblenden (könnten vom Bearbeiten-Formular versteckt sein)
-  ['catchDetailPhoto', 'catchDetailReweather', 'catchDetailEdit', 'catchDetailDelete'].forEach(id => {
+  ['catchDetailReweather', 'catchDetailEdit', 'catchDetailDelete'].forEach(id => {
     const b = document.getElementById(id);
     if (b) b.style.display = '';
   });
+  const photoWrap = document.getElementById('catchDetailPhoto');
+  if (photoWrap) photoWrap.style.display = 'flex';
 
   // Foto hinzufügen/ändern – merkt sich den aktuellen Fang
   _detailPhotoCatch = full;
-  const photoBtn = document.getElementById('catchDetailPhoto');
-  if (photoBtn) {
-    photoBtn.textContent = full.photo_url ? '📷 Foto ändern' : '📷 Foto hinzufügen';
-    photoBtn.onclick = () => {
-      const inp = document.getElementById('catchDetailPhotoInput');
-      if (inp) inp.click();
-    };
-  }
+  // (Die Kamera-/Galerie-Buttons rufen onDetailPhotoSelected direkt über onclick auf)
 
   // Löschen-Button
   const delBtn = document.getElementById('catchDetailDelete');
@@ -11462,12 +11457,20 @@ document.addEventListener('click', function(ev) {
         <div id="catchDetailMap" style="height:100%"></div>
       </div>
       <div style="padding:0 16px 32px">
-        <input type="file" id="catchDetailPhotoInput" accept="image/*" capture="environment" style="display:none" onchange="onDetailPhotoSelected(this)">
-        <button id="catchDetailPhoto"
-          style="width:100%;background:rgba(255,210,63,.1);border:1px solid rgba(255,210,63,.3);
-                 color:#ffd23f;padding:14px;border-radius:12px;font-size:15px;font-weight:800;cursor:pointer;margin-bottom:10px">
-          📷 Foto hinzufügen
-        </button>
+        <input type="file" id="catchDetailPhotoCam" accept="image/*" capture="environment" style="display:none" onchange="onDetailPhotoSelected(this)">
+        <input type="file" id="catchDetailPhotoGal" accept="image/*" style="display:none" onchange="onDetailPhotoSelected(this)">
+        <div id="catchDetailPhoto" style="display:flex;gap:10px;margin-bottom:10px">
+          <button onclick="document.getElementById('catchDetailPhotoCam').click()"
+            style="flex:1;background:rgba(255,210,63,.1);border:1px solid rgba(255,210,63,.3);
+                   color:#ffd23f;padding:14px;border-radius:12px;font-size:14px;font-weight:800;cursor:pointer">
+            📷 Kamera
+          </button>
+          <button onclick="document.getElementById('catchDetailPhotoGal').click()"
+            style="flex:1;background:rgba(255,210,63,.1);border:1px solid rgba(255,210,63,.3);
+                   color:#ffd23f;padding:14px;border-radius:12px;font-size:14px;font-weight:800;cursor:pointer">
+            🖼️ Galerie
+          </button>
+        </div>
         <button id="catchDetailReweather"
           style="width:100%;background:rgba(46,168,255,.1);border:1px solid rgba(46,168,255,.3);
                  color:#2ea8ff;padding:14px;border-radius:12px;font-size:15px;font-weight:800;cursor:pointer;margin-bottom:10px">
