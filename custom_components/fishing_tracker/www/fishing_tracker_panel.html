@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.79 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.80 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -6880,7 +6880,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.79'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.80'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -9859,70 +9859,100 @@ function saveSessionToHistory(record) {
   } catch(e) {}
 }
 
+let _endingSession = false;
 async function endSession() {
+  // Reentry-Schutz: Beenden dauert (Nullnummern + Wetter vom Backend) mehrere
+  // Sekunden. Ohne Sperre startet ein zweiter Klick den Vorgang parallel →
+  // Session wird doppelt gespeichert. Diese Sperre verhindert das.
+  if (_endingSession) {
+    if (typeof showToast === 'function') showToast('⏳ Auswertung läuft noch – einen Moment…');
+    return;
+  }
   const sess = getActiveSession();
   if (!sess) return;
-  const startMs = new Date(sess.start).getTime();
-  const endMs = Date.now();
-  const durationMin = Math.round((endMs - startMs) / 60000);
+  _endingSession = true;
+  // Beenden-Buttons sofort sperren (visuelles Feedback)
+  document.querySelectorAll('.quickBtn').forEach(b => {
+    if (b.textContent.includes('Beenden')) {
+      b.disabled = true;
+      b.style.opacity = '0.5';
+      b.style.pointerEvents = 'none';
+    }
+  });
 
-  if (typeof showToast === 'function') showToast('⏳ Session wird ausgewertet…');
-
-  // 15-Min-Raster durchgehen: jedes Intervall ohne Fang = Nullnummer
-  // Fang-Zeitpunkte aus der Session UND aus dem Fangbuch (falls während Session
-  // ein Fang übers normale Formular kam, ist er nicht in sess.catches)
-  const catchTimes = (sess.catches || []).map(c => new Date(c.ts).getTime());
   try {
-    const attrs = findFTSensor('history')?.attributes || {};
-    const entries = attrs.latest || attrs.entries || [];
-    entries.forEach(e => {
-      if (parseInt(e.caught || 0) >= 1) {
-        const t = new Date(e.catch_datetime || e.timestamp).getTime();
-        // Nur Fänge innerhalb des Session-Zeitraums berücksichtigen
-        if (!isNaN(t) && t >= startMs && t <= endMs) catchTimes.push(t);
-      }
-    });
-  } catch(e) {}
-  const intervalMs = FT_SESSION_INTERVAL_MIN * 60000;
-  let blanksCreated = 0, blanksFailed = 0, windowsChecked = 0;
+    const startMs = new Date(sess.start).getTime();
+    const endMs = Date.now();
+    const durationMin = Math.round((endMs - startMs) / 60000);
 
-  for (let t = startMs; t < endMs; t += intervalMs) {
-    const winStart = t, winEnd = t + intervalMs;
-    const hadCatch = catchTimes.some(ct => ct >= winStart && ct < winEnd);
-    if (!hadCatch) {
-      const midMs = winStart + intervalMs / 2;
-      if (midMs > endMs) break;
-      windowsChecked++;
-      try {
-        const ok = await createSessionBlank(new Date(midMs), sess);
-        if (ok) blanksCreated++; else blanksFailed++;
-      } catch(err) {
-        blanksFailed++;
-        console.warn('endSession: Nullnummer fehlgeschlagen', err);
+    if (typeof showToast === 'function') showToast('⏳ Session wird ausgewertet…');
+
+    // 15-Min-Raster durchgehen: jedes Intervall ohne Fang = Nullnummer
+    // Fang-Zeitpunkte aus der Session UND aus dem Fangbuch (falls während Session
+    // ein Fang übers normale Formular kam, ist er nicht in sess.catches)
+    const catchTimes = (sess.catches || []).map(c => new Date(c.ts).getTime());
+    try {
+      const attrs = findFTSensor('history')?.attributes || {};
+      const entries = attrs.latest || attrs.entries || [];
+      entries.forEach(e => {
+        if (parseInt(e.caught || 0) >= 1) {
+          const t = new Date(e.catch_datetime || e.timestamp).getTime();
+          // Nur Fänge innerhalb des Session-Zeitraums berücksichtigen
+          if (!isNaN(t) && t >= startMs && t <= endMs) catchTimes.push(t);
+        }
+      });
+    } catch(e) {}
+    const intervalMs = FT_SESSION_INTERVAL_MIN * 60000;
+    let blanksCreated = 0, blanksFailed = 0, windowsChecked = 0;
+
+    for (let t = startMs; t < endMs; t += intervalMs) {
+      const winStart = t, winEnd = t + intervalMs;
+      const hadCatch = catchTimes.some(ct => ct >= winStart && ct < winEnd);
+      if (!hadCatch) {
+        const midMs = winStart + intervalMs / 2;
+        if (midMs > endMs) break;
+        windowsChecked++;
+        try {
+          // Timeout-Schutz: wenn eine Nullnummer im Backend hängt, blockiert sie
+          // sonst die ganze Auswertung und die Session wird nie abgeschlossen.
+          const ok = await Promise.race([
+            createSessionBlank(new Date(midMs), sess),
+            new Promise(res => setTimeout(() => res('timeout'), 8000)),
+          ]);
+          if (ok === 'timeout') { blanksFailed++; console.warn('endSession: Nullnummer Timeout bei', new Date(midMs)); }
+          else if (ok) blanksCreated++;
+          else blanksFailed++;
+        } catch(err) {
+          blanksFailed++;
+          console.warn('endSession: Nullnummer fehlgeschlagen', err);
+        }
       }
     }
+    console.log(`Session-Auswertung: ${durationMin} Min, ${windowsChecked} leere Fenster, ${blanksCreated} Nullnummern erstellt, ${blanksFailed} fehlgeschlagen`);
+
+    // Strecke berechnen + Session archivieren
+    const distM = trackDistanceM(sess.track);
+    const record = {
+      start: sess.start,
+      end: new Date(endMs).toISOString(),
+      durationMin,
+      distanceM: Math.round(distM),
+      water: sess.water,
+      catches: sess.catches || [],
+      track: sess.track || [],
+      blanksCreated,
+    };
+    saveSessionToHistory(record);
+    saveActiveSession(null);
+    stopGpsWatch();  // GPS-Aufzeichnung beenden (spart Akku)
+
+    // Zusammenfassung anzeigen
+    showSessionSummary(record);
+    setTimeout(() => scheduleRenderView(), 500);
+  } finally {
+    // Sperre immer lösen, auch bei Fehler
+    _endingSession = false;
   }
-  console.log(`Session-Auswertung: ${durationMin} Min, ${windowsChecked} leere Fenster, ${blanksCreated} Nullnummern erstellt, ${blanksFailed} fehlgeschlagen`);
-
-  // Strecke berechnen + Session archivieren
-  const distM = trackDistanceM(sess.track);
-  const record = {
-    start: sess.start,
-    end: new Date(endMs).toISOString(),
-    durationMin,
-    distanceM: Math.round(distM),
-    water: sess.water,
-    catches: sess.catches || [],
-    track: sess.track || [],
-    blanksCreated,
-  };
-  saveSessionToHistory(record);
-  saveActiveSession(null);
-  stopGpsWatch();  // GPS-Aufzeichnung beenden (spart Akku)
-
-  // Zusammenfassung anzeigen
-  showSessionSummary(record);
-  setTimeout(() => scheduleRenderView(), 500);
 }
 
 // Session-Zusammenfassung mit Route-Karte anzeigen
