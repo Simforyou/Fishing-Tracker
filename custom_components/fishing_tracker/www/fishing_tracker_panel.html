@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.82 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.87 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1621,6 +1621,60 @@ const SPAWN_MONTHS = {
   Döbel:    [5, 6],   Rapfen:   [5, 6],   Forelle:  [11, 1],
   Ukelei:   [5, 6],
   Wels:     [5, 6],   Güster:   [5, 6],   Grundel:  [3, 5],
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// SAISONALE FRESSLUST pro Art — 12-Monats-Kurve (Index 0=Jan … 11=Dez).
+// Bildet den biologischen Jahresrhythmus ab, der ÜBER die reine Wassertemperatur
+// hinausgeht: Laichzyklus, Vor-/Nachlaich-Fressen, Eierstockentwicklung,
+// Winterruhe, Fettreserven-Aufbau. Moderate Faktoren (0.65–1.2), damit die
+// Biologie einfließt, ohne Tagesbedingungen zu übersteuern.
+//
+// Quellen: Fischfindertest (Hecht/Zander Saison), JAEGER, outdoorverliebt
+//   (Karpfen/Zander Jahreszeiten), asveider (Hecht 60% Nahrung März/April),
+//   FISCH&FANG Beißzeiten, Barsch-Alarm Saisonkalender.
+// ─────────────────────────────────────────────────────────────────────────
+const SEASONAL_ACTIVITY = {
+  //          Jan   Feb   Mär   Apr   Mai   Jun   Jul   Aug   Sep   Okt   Nov   Dez
+  // Hecht: Post-Laich-Boom Mär/Apr (60% Jahresnahrung!), Okt-Peak (Eierstock),
+  // Jan/Feb Vorlaich-Anstieg, Hochsommer träge, Winter selten.
+  Hecht:    [0.85, 0.95, 1.20, 1.20, 1.05, 0.85, 0.72, 0.72, 1.00, 1.15, 1.05, 0.85],
+  // Zander: Frühjahrs-Fressphase direkt nach Laich (JAEGER: "erste Top-Fressphase"),
+  // Herbst-Goldzeit Okt/Nov (aggressiv, auch tagsüber), Sommer solide (nachts/tief),
+  // Winter mäßig aber möglich (Faulenzer). Ganzjährig fangbar.
+  Zander:   [0.88, 0.88, 0.95, 1.05, 0.95, 0.98, 1.00, 1.02, 1.10, 1.20, 1.12, 0.95],
+  // Barsch: ausgesprochener Allrounder. Herbst bester (Fressen für Winter),
+  // Sommer GUT (nur Tageszeit verschoben, nicht schwächer), Frühjahr aktiv,
+  // Winter langsam aber fangbar. Insgesamt flache Kurve (wenig saisonabhängig).
+  Barsch:   [0.90, 0.90, 1.00, 1.05, 1.00, 1.02, 1.05, 1.05, 1.10, 1.18, 1.05, 0.92],
+  // Karpfen: April Top ("extrem hungrig"), Herbst kapital, Sommer gut aber
+  // >24°C Abfall, Winter fast tot.
+  Karpfen:  [0.65, 0.68, 0.85, 1.18, 1.12, 1.05, 1.00, 1.00, 1.12, 1.10, 0.85, 0.68],
+  // Schleie: ausgesprochener Sommerfisch, Frühjahr/Sommer top, Winter inaktiv.
+  Schleie:  [0.65, 0.65, 0.80, 1.05, 1.18, 1.15, 1.08, 1.05, 0.95, 0.82, 0.70, 0.65],
+  // Brasse: Frühjahr/Frühsommer stark, Sommer gut, Winter träge.
+  Brasse:   [0.72, 0.72, 0.90, 1.10, 1.15, 1.10, 1.02, 1.00, 0.98, 0.88, 0.78, 0.72],
+  // Rotauge: sehr ganzjährig, leichter Frühjahr/Herbst-Vorteil.
+  Rotauge:  [0.85, 0.85, 0.95, 1.08, 1.10, 1.05, 1.00, 1.00, 1.05, 1.05, 0.92, 0.85],
+  // Rotfeder: wärmeliebend, klarer Sommerfisch.
+  Rotfeder: [0.70, 0.70, 0.82, 1.00, 1.12, 1.15, 1.12, 1.08, 0.98, 0.85, 0.75, 0.70],
+  // Döbel: ganzjährig aktiv (auch Winter fangbar), Frühsommer/Sommer stark.
+  Döbel:    [0.85, 0.85, 0.95, 1.05, 1.10, 1.10, 1.05, 1.05, 1.02, 0.95, 0.88, 0.85],
+  // Rapfen: ausgesprochener Hochsommer-Jäger (Jun-Aug), sonst deutlich schwächer.
+  Rapfen:   [0.68, 0.68, 0.80, 0.92, 1.05, 1.18, 1.20, 1.15, 1.00, 0.85, 0.72, 0.68],
+  // Aal: warme Jahreszeit nachtaktiv (Mai-Sep), Winter praktisch inaktiv (Winterruhe).
+  Aal:      [0.55, 0.55, 0.65, 0.88, 1.10, 1.18, 1.20, 1.15, 1.02, 0.80, 0.62, 0.55],
+  // Forelle: Kaltwasser, Frühjahr/Herbst top, Hochsommer schwächer (Wärme),
+  // laicht Winter (Nov-Jan → gedämpft).
+  Forelle:  [0.78, 0.85, 1.05, 1.15, 1.10, 0.95, 0.82, 0.82, 1.05, 1.10, 0.85, 0.75],
+  // Wels: ausgesprochen wärmeliebend, Hochsommer absolute Top-Zeit, Winter tot.
+  Wels:     [0.50, 0.50, 0.62, 0.85, 1.10, 1.18, 1.22, 1.20, 1.02, 0.78, 0.58, 0.50],
+  // Güster: wie Brasse, wärmeorientiert.
+  Güster:   [0.72, 0.72, 0.88, 1.05, 1.15, 1.12, 1.05, 1.02, 0.98, 0.88, 0.78, 0.72],
+  // Ukelei: Oberflächenfisch, warme Jahreszeit aktiv.
+  Ukelei:   [0.78, 0.78, 0.90, 1.05, 1.12, 1.12, 1.08, 1.05, 1.00, 0.90, 0.82, 0.78],
+  // Grundel: anpassungsfähig, Sommer stark.
+  Grundel:  [0.80, 0.80, 0.90, 1.02, 1.10, 1.12, 1.10, 1.08, 1.02, 0.92, 0.85, 0.80],
 };
 
 // Tiefenpräferenz pro Fischart [min_m, max_m]
@@ -5495,6 +5549,9 @@ function renderView() {
       const ctr = getBestCenter();
       if (ctr) fetchRiverDischarge(ctr[0], ctr[1]).catch(()=>{ _riverFetchStarted = false; });
     }
+    // Manuelle Gewässerzustand-Einstellung sofort anwenden (unabhängig davon,
+    // ob die Abfluss-API schon geladen hat — der manuelle Wert hat Vorrang)
+    if (getManualWaterState() !== 'auto') applyManualWaterStateToRiverData();
   } catch(e) {}
 
   // Try to get live HA data
@@ -5890,6 +5947,15 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
             })()}">${pressure}</div></div>
           </div>
           ${_wl ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:12px"><span style="color:var(--txt-muted)">📏 Pegelstand</span><span style="font-weight:700">${pegelTxt}</span></div>` : ''}
+          ${(_riverData && ((_riverData.droughtLevel > 0) || _riverData.stressType === 'flood')) ? (() => {
+            const isFlood = _riverData.stressType === 'flood';
+            const sev = isFlood ? 2 : _riverData.droughtLevel;
+            const txt = isFlood
+              ? 'Trübes, reißendes Wasser → Sichtjagd erschwert. Beißchancen gedämpft, besonders bei Sichtjägern (Barsch, Rapfen, Döbel). Wels, Aal und Barbe (Geruchsjäger) kommen besser klar.'
+              : 'Wenig Wasseraustausch → stehendes, warmes, sauerstoffärmeres Wasser. Beißchancen gedämpft, besonders bei Fließwasser-Arten. Weißfische (Karpfen, Schleie) kommen besser klar.';
+            const icon = isFlood ? '🌊' : (_riverData.droughtLevel>=3?'🥵':'⚠️');
+            return `<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:rgba(255,157,24,${0.08 + sev*0.04});border:1px solid rgba(255,157,24,${0.25 + sev*0.1});font-size:11px;line-height:1.4"><span style="font-weight:800;color:#ff9d18">${icon} ${_riverData.droughtLabel}${_riverData.manualOverride?' <span style="opacity:.6;font-weight:600">(manuell)</span>':''}</span><br><span style="color:rgba(255,255,255,.6)">${txt}</span></div>`;
+          })() : ''}
         </div>`;
       })()}
       ${multiFishDayChartHTML()}
@@ -6997,8 +7063,27 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
         </div>
       </div>
       <div class="panel" style="margin-top:10px">
+        <div class="sec">🌊 Gewässerzustand</div>
+        <div style="font-size:12px;color:var(--txt-muted);margin-bottom:10px;line-height:1.5">Bei anhaltendem Niedrigwasser/Dürre steht das Wasser, erwärmt sich und wird sauerstoffärmer – das dämpft die Beißchancen (Weißfische kommen besser klar als Fließwasser-Arten). Die Automatik nutzt Abflussdaten, aber für kleine Flüsse bist du als Ortskundiger genauer. Deine Wahl überschreibt die Automatik.</div>
+        ${(() => {
+          const cur = getManualWaterState();
+          const order = ['auto','hoch','normal','wenig','stehend','veralgt'];
+          const icons = { auto:'🔄', hoch:'🌊', normal:'💧', wenig:'🟡', stehend:'🟠', veralgt:'🥵' };
+          return '<div style="display:flex;flex-direction:column;gap:7px">' + order.map(key => {
+            const lvl = FT_WATERSTATE_LEVELS[key];
+            const active = cur === key;
+            return `<button onclick="setManualWaterState('${key}')" style="width:100%;text-align:left;display:flex;align-items:center;gap:10px;background:${active?'linear-gradient(145deg,#0a3d2e,#0d5540)':'var(--kpi-bg)'};border:1px solid ${active?'rgba(63,185,80,.5)':'var(--border)'};color:var(--txt-main);padding:12px 14px;border-radius:10px;font-size:13px;font-weight:${active?'800':'600'};cursor:pointer;font-family:inherit">
+              <span style="font-size:17px">${icons[key]}</span>
+              <span style="flex:1">${lvl.label}</span>
+              ${active?'<span style="color:#3fb950;font-size:12px">✓</span>':''}
+            </button>`;
+          }).join('') + '</div>';
+        })()}
+        ${(_riverData && getManualWaterState()==='auto' && _riverDroughtData) ? `<div style="margin-top:10px;font-size:11px;color:var(--txt-muted);background:var(--kpi-bg);border-radius:8px;padding:9px">Automatik-Messung: aktueller Abfluss ${Math.round(_riverDroughtData.relToMedian*100)}% des 90-Tage-Normalwerts, ${_riverDroughtData.lowDays} von 21 Tagen im Niedrigbereich${_riverDroughtData.droughtLevel>0?' → '+_riverData.droughtLabel:' → normal'}.</div>` : ''}
+      </div>
+      <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.82'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.87'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7575,6 +7660,43 @@ function photoperiodFactor(date, lat, lon) {
 // ═══════════════════════════════════════════════════════════════════════════
 let _riverData = null;       // { discharge, trend, pct, status }
 let _riverFetchTime = 0;
+let _riverDroughtData = null;    // { relToMedian, lowDays, droughtLevel, stressFactor }
+let _riverDroughtInFlight = false;
+
+// ── Manuelle Gewässerzustand-Einstellung (überschreibt Automatik) ────────────
+// Der ortskundige Angler kann den tatsächlichen Zustand setzen — schlägt jedes
+// globale Abfluss-Modell (GloFAS ist für kleine Flüsse wie Vechte/Dinkel grob).
+// Stufen mit zugehörigem stressFactor (analog zur Automatik):
+const FT_WATERSTATE_KEY = 'ft_water_state_manual';
+const FT_WATERSTATE_LEVELS = {
+  auto:    { label: 'Automatisch', stressFactor: null, droughtLevel: null, droughtLabel: null, type: null },
+  hoch:    { label: 'Hochwasser / zu starke Strömung (trüb, reißend)', stressFactor: 0.70, droughtLevel: 0, droughtLabel: 'Hochwasser / starke Strömung', type: 'flood' },
+  normal:  { label: 'Normal (fließt sauber, guter Austausch)', stressFactor: 1.0,  droughtLevel: 0, droughtLabel: null, type: null },
+  wenig:   { label: 'Wenig Austausch (Strömung schwach)', stressFactor: 0.88, droughtLevel: 1, droughtLabel: 'Wenig Wasseraustausch', type: 'drought' },
+  stehend: { label: 'Stehend (kaum Strömung, erwärmt sich)', stressFactor: 0.75, droughtLevel: 2, droughtLabel: 'Stehendes Wasser', type: 'drought' },
+  veralgt: { label: 'Stehend & veralgt/verkrautet', stressFactor: 0.62, droughtLevel: 3, droughtLabel: 'Stehend & veralgt', type: 'drought' },
+};
+function getManualWaterState() {
+  try { return localStorage.getItem(FT_WATERSTATE_KEY) || 'auto'; } catch(e) { return 'auto'; }
+}
+function setManualWaterState(key) {
+  try { localStorage.setItem(FT_WATERSTATE_KEY, key); } catch(e) {}
+  // Sofort in die aktiven River-Daten übernehmen, damit Scores gleich stimmen
+  applyManualWaterStateToRiverData();
+  scheduleRenderView();
+}
+function applyManualWaterStateToRiverData() {
+  const key = getManualWaterState();
+  if (key === 'auto') return; // Automatik greift (in fetchRiverDroughtLevel gesetzt)
+  const lvl = FT_WATERSTATE_LEVELS[key];
+  if (!lvl) return;
+  if (!_riverData) _riverData = { status: 'manual', statusLabel: 'Manuell', isHigh: false, isLow: lvl.droughtLevel >= 2 };
+  _riverData.stressFactor = lvl.stressFactor;
+  _riverData.droughtLevel = lvl.droughtLevel;
+  _riverData.droughtLabel = lvl.droughtLabel;
+  _riverData.stressType = lvl.type;   // 'flood' | 'drought' | null
+  _riverData.manualOverride = true;
+}
 
 async function fetchRiverDischarge(lat, lon) {
   // Cache: 3 Stunden
@@ -7611,10 +7733,79 @@ async function fetchRiverDischarge(lat, lon) {
       discharge: today, trend: trendPct, relToAvg,
       status, statusLabel, forecast: tomorrow,
       isHigh: relToAvg > 40, isLow: relToAvg < -30,
+      // Dürre-Werte werden asynchron nachgeladen (langer Referenzzeitraum)
+      droughtLevel: 0, droughtLabel: null, stressFactor: 1.0,
     };
     _riverFetchTime = Date.now();
+    // Langzeit-Dürre-Analyse im Hintergrund anstoßen (blockiert nicht)
+    fetchRiverDroughtLevel(lat, lon);
     return _riverData;
   } catch(e) { return null; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// LANGZEIT-DÜRRE-ERKENNUNG (Gewässerzustand)
+// Das kurze 14-Tage-Fenster oben kann eine WOCHENLANGE Dürre nicht erkennen:
+// Ist der Abfluss seit Wochen niedrig, ist der 14-Tage-Schnitt selbst schon
+// niedrig, und "heute vs. 14-Tage-Schnitt" schlägt nie an. Daher hier ein
+// SEPARATER Abruf mit 90 Tagen Historie: Wie steht der aktuelle Abfluss im
+// Vergleich zum langfristigen Niveau? Anhaltende Niedrigwasserlage =
+// stehendes, sich erwärmendes, sauerstoffärmeres, oft veralgtes Wasser →
+// dämpft die Beißchance aller Arten (unterschiedlich stark).
+async function fetchRiverDroughtLevel(lat, lon) {
+  if (_riverDroughtInFlight) return;
+  if (_riverDroughtData && Date.now() - _riverDroughtData.t < 6*60*60*1000) return; // 6h Cache
+  _riverDroughtInFlight = true;
+  try {
+    const end = new Date(); end.setDate(end.getDate() - 1);
+    const start = new Date(); start.setDate(start.getDate() - 92);
+    const fmt = dd => dd.toISOString().slice(0, 10);
+    const url = `https://flood-api.open-meteo.com/v1/flood?latitude=${lat}&longitude=${lon}` +
+                `&daily=river_discharge&start_date=${fmt(start)}&end_date=${fmt(end)}`;
+    const r = await fetch(url);
+    if (!r.ok) { _riverDroughtInFlight = false; return; }
+    const d = await r.json();
+    const vals = (d.daily?.river_discharge || []).filter(v => v != null);
+    if (vals.length < 30) { _riverDroughtInFlight = false; return; }
+
+    // Median der letzten ~90 Tage als robuste Referenz (unempfindlich ggü. Spitzen)
+    const sorted = [...vals].sort((a,b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    // Aktuelles Niveau = Mittel der letzten 5 Tage
+    const recent = vals.slice(-5);
+    const recentAvg = recent.reduce((a,b)=>a+b,0) / recent.length;
+    // Wie tief unter dem 90-Tage-Median? (0 = am Median, 1 = auf ~30% davon)
+    const relToMedian = median > 0 ? (recentAvg / median) : 1;
+
+    // Wie viele der letzten 21 Tage lagen unter 60% des Medians?
+    // (Dauer der Niedrigwasserlage — ein einzelner Tag zählt nicht als Dürre)
+    const last21 = vals.slice(-21);
+    const lowDays = last21.filter(v => v < median * 0.6).length;
+
+    // Dürre-Level 0..3
+    let droughtLevel = 0, droughtLabel = null, stressFactor = 1.0;
+    if (relToMedian < 0.45 && lowDays >= 14) {
+      droughtLevel = 3; droughtLabel = 'Extreme Niedrigwasserlage'; stressFactor = 0.62;
+    } else if (relToMedian < 0.6 && lowDays >= 10) {
+      droughtLevel = 2; droughtLabel = 'Anhaltendes Niedrigwasser'; stressFactor = 0.75;
+    } else if (relToMedian < 0.75 && lowDays >= 7) {
+      droughtLevel = 1; droughtLabel = 'Leichtes Niedrigwasser'; stressFactor = 0.88;
+    }
+
+    _riverDroughtData = { t: Date.now(), relToMedian, lowDays, droughtLevel, droughtLabel, stressFactor, median, recentAvg };
+    // In die aktuellen River-Daten übernehmen
+    if (_riverData) {
+      _riverData.droughtLevel = droughtLevel;
+      _riverData.droughtLabel = droughtLabel;
+      _riverData.stressFactor = stressFactor;
+    }
+    // Manuelle Einstellung überschreibt Automatik (falls gesetzt)
+    applyManualWaterStateToRiverData();
+    _riverDroughtInFlight = false;
+    scheduleRenderView();
+  } catch(e) {
+    _riverDroughtInFlight = false;
+  }
 }
 
 // Kaltfront-Erkennung aus Wettervorhersage
@@ -7955,22 +8146,24 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   // Unterhalb Min oder über krit. Max = starke Reduktion; im Perfektbereich = 1.0
   const TEMP_RANGES = {
     // [min_aktiv, opt_von, opt_bis, perf_von, perf_bis, krit_max]
-    Zander:   [6,  12, 31, 20, 28, 33],
-    Barsch:   [4,   6, 28, 20, 25, 30],
-    Hecht:    [4,   9, 28, 20, 26, 30],  // Hecht: perfekt 20-26, über 28 Stress
-    Karpfen:  [8,  15, 32, 26, 31, 34],
-    Schleie:  [8,  15, 26, 20, 26, 28],
-    Brasse:   [4,   8, 28, 20, 26, 30],
-    Rotauge:  [6,  12, 25, 18, 24, 27],
-    Rotfeder: [8,  14, 30, 20, 28, 32],
-    Döbel:    [4,   8, 28, 18, 26, 30],
-    Aal:      [4,   8, 30, 20, 25, 32],
-    Forelle:  [2,   4, 19, 13, 17, 21],
-    Rapfen:   [4,   8, 26, 16, 22, 28],
-    Wels:     [8,  12, 28, 22, 28, 30],
-    Güster:   [4,   8, 28, 20, 26, 30],
-    Grundel:  [4,   8, 24, 16, 22, 26],
-    Ukelei:   [6,  12, 28, 18, 24, 30],
+    // Korrigiert nach Fachrecherche (2026-07): fast alle Arten waren zu warm
+    // eingestellt, dadurch standen im Hochsommer praktisch alle auf Maximum.
+    Zander:   [4,   8, 25, 12, 19, 27],  // Beiß-Optimum 12-19°C; über 20°C tief+nachtaktiv, schwer fangbar (JAEGER); Wachstum bis 30 aber Fangbarkeit sinkt
+    Barsch:   [3,   6, 27, 14, 23, 30],  // wärmetoleranter Allrounder, aktiv 21-24°C, erst über 24°C tagsüber tiefer (outdoorverliebt/JAEGER)
+    Hecht:    [3,   6, 21, 10, 17, 24],  // Kaltwasser: perfekt 10-17°C, über 19-20°C träge
+    Karpfen:  [8,  14, 31, 20, 28, 34],  // wärmeliebend, ab 14-16 aktiv, über 28 in Schatten
+    Schleie:  [8,  14, 27, 18, 24, 29],  // ausgesprochen wärmeliebend, Sommerfisch
+    Brasse:   [4,   8, 26, 14, 22, 29],  // gemäßigt, ab 10 aktiv, 15+ gut
+    Rotauge:  [4,   8, 25, 14, 22, 27],  // gemäßigt tolerant
+    Rotfeder: [8,  12, 29, 18, 26, 31],  // wärmeliebend, oberflächennah
+    Döbel:    [4,   7, 27, 14, 22, 29],  // Fließwasser, tolerant
+    Aal:      [6,  10, 29, 18, 25, 31],  // wärmeliebend nachtaktiv, unter 12 kaum
+    Forelle:  [2,   4, 18, 10, 16, 20],  // Kaltwasser, sauerstoffbedürftig
+    Rapfen:   [4,   8, 27, 16, 24, 29],  // wärmeres Oberflächenwasser
+    Wels:     [8,  14, 29, 22, 28, 31],  // ausgesprochen wärmeliebend, ab 20 aktiv
+    Güster:   [4,   8, 26, 16, 24, 29],  // wie Brasse, gemäßigt-warm
+    Grundel:  [4,   8, 26, 16, 24, 28],  // anpassungsfähig
+    Ukelei:   [6,  10, 27, 16, 24, 29],  // warmes Oberflächenwasser
   };
   const tr = TEMP_RANGES[fishName] || [4, 8, 28, 16, 24, 30];
   const [tMin, tOptLo, tOptHi, tPerfLo, tPerfHi, tKritMax] = tr;
@@ -7995,14 +8188,23 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     tempFactor = 0.1;           // Unter Minimum: fast inaktiv
   }
 
-  // ── 3. Laichzeit ──────────────────────────────────────────────────────────
+  // ── 3. Saisonale Fresslust (biologischer Jahresrhythmus) ──────────────────
+  // Ersetzt den früheren groben spawnMod durch eine differenzierte 12-Monats-
+  // Kurve pro Art (Laichzyklus, Vor-/Nachlaich-Fressen, Winterruhe etc.).
+  // Die Laichzeit-Dämpfung ist in der Kurve bereits enthalten. Zusätzlich noch
+  // eine leichte akute Laich-Dämpfung im Kernlaichmonat (Fische am Laichplatz
+  // fressen kurzzeitig kaum), damit der Effekt nicht verloren geht.
   let spawnMod = 1.0;
-  if (SPAWN[fishName]) {
+  const seasonCurve = SEASONAL_ACTIVITY[fishName];
+  if (seasonCurve) {
+    spawnMod = seasonCurve[date.getMonth()] || 1.0;
+  }
+  // Akute Laichdämpfung: im Laichzeitraum fressen viele Arten kurzzeitig kaum
+  if (SPAWN[fishName] && SPAWN[fishName].length === 2) {
     const [sm, em] = SPAWN[fishName];
-    const inSpawn = month >= sm && month <= em;
-    const preSpawn = month === sm - 1 || (sm === 1 && month === 12);
-    if (inSpawn) spawnMod = 0.55;
-    if (preSpawn) spawnMod = 1.25;
+    const inSpawn = (sm <= em) ? (month >= sm && month <= em)
+                               : (month >= sm || month <= em); // Jahreswechsel (Forelle)
+    if (inSpawn) spawnMod *= 0.75;
   }
 
   // ── 4. Solunar (ECHTE astronomische Berechnung) ──────────────────────────
@@ -8244,9 +8446,50 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
                 photoBonus + personalBonus;
 
   // Gesamtscore
-  const _raw = Math.round(
+  let _raw = Math.round(
     bioNow * tempFactor * spawnMod * lightMult * o2Mult * pressureMult + bonus
   );
+
+  // ── Gewässerzustand-Dämpfer (Langzeit-Dürre ODER Hochwasser) ─────────────
+  // Anhaltende Niedrigwasserlage = stehendes, warmes, sauerstoffärmeres Wasser.
+  // Hochwasser/starke Strömung = trüb, reißend, Sichtjagd erschwert.
+  // Beide dämpfen — aber TREFFEN UNTERSCHIEDLICHE Arten:
+  //   Dürre  → Fließwasser-/Sauerstofffische (Forelle, Rapfen, Döbel) am meisten,
+  //            Weißfische (Karpfen, Schleie, Wels) tolerant.
+  //   Hochwasser → Sichtjäger (Barsch, Rapfen, Döbel, Hecht) am meisten,
+  //            strömungstolerante Grund-/Geruchsjäger (Wels, Aal, Barbe, Brasse)
+  //            und Karpfen kommen besser klar.
+  if (_riverData && _riverData.stressFactor != null && _riverData.stressFactor < 1.0) {
+    const sf = _riverData.stressFactor;
+    const stressType = _riverData.stressType || 'drought'; // Automatik = Dürre-Logik
+    let speciesResilience;  // 0 = voll betroffen, 1 = immun
+    if (stressType === 'flood') {
+      // Hochwasser/trüb: Geruchs-/Grundjäger + strömungsstarke Arten robust
+      if (['Wels','Aal','Barbe','Brasse'].includes(fishName)) {
+        speciesResilience = 0.7;   // jagen über Geruch/Seitenlinie, mögen trüb
+      } else if (['Karpfen','Schleie','Güster','Rotauge'].includes(fishName)) {
+        speciesResilience = 0.4;
+      } else if (['Rapfen','Döbel','Barsch','Forelle'].includes(fishName)) {
+        speciesResilience = 0.0;   // reine Sichtjäger, im Trüben chancenlos
+      } else {
+        speciesResilience = 0.2;   // Hecht/Zander/Rotfeder/Ukelei: mittel
+      }
+    } else {
+      // Dürre/Niedrigwasser (auch Automatik): wärmeliebende Stagnationstolerante
+      // kommen klar, Fließwasser-/Sauerstofffische leiden am meisten
+      if (['Karpfen','Schleie','Karausche','Wels','Giebel'].includes(fishName)) {
+        speciesResilience = 0.7;
+      } else if (['Brasse','Güster','Rotfeder','Aal'].includes(fishName)) {
+        speciesResilience = 0.45;
+      } else if (['Forelle','Rapfen','Döbel','Barbe'].includes(fishName)) {
+        speciesResilience = 0.0;
+      } else {
+        speciesResilience = 0.25;
+      }
+    }
+    const effSf = sf + (1.0 - sf) * speciesResilience;
+    _raw = Math.round(_raw * effSf);
+  }
 
   if (isNaN(_raw)) { const _b = Math.round(bioNow * tempFactor); return isNaN(_b) ? 50 : Math.min(97, Math.max(5, _b)); }
   if (options && options.raw) return _raw;
