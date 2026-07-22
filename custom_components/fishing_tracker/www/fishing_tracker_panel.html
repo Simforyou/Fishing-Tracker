@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.80 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.36.82 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -4425,7 +4425,10 @@ async function fetchOMPressureData(lat, lon) {
   try {
     const now = new Date();
     const start = new Date(now); start.setDate(start.getDate() - 3);
-    const end   = new Date(now); end.setDate(end.getDate() + 5);
+    // 14 Tage voraus (statt 5) — deckt die komplette 14-Tage-Prognose ab,
+    // damit Druckverlauf-Ereignisse (Fronten) auch für weit entfernte Tage
+    // vorausschauend erkannt werden können.
+    const end   = new Date(now); end.setDate(end.getDate() + 14);
     const fmt = d => d.toISOString().slice(0, 10);
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
       + `&hourly=pressure_msl&start_date=${fmt(start)}&end_date=${fmt(end)}&timezone=Europe%2FBerlin`;
@@ -4463,6 +4466,84 @@ function getOMPressureMain(currentP) {
   const past   = pts.slice(0, relNowIdx + 1).map(p => p.v);
   const future = pts.slice(relNowIdx + 1).map(p => p.v);
   return { past, future };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// VORAUSSCHAUENDE DRUCKVERLAUF-ANALYSE
+// Nutzt den bereits vorhandenen _omPressureCache (3 Tage zurück + 14 Tage
+// voraus, stündlich), um für eine BELIEBIGE Stunde (auch in der Zukunft,
+// für Mehrtages-Prognosen) zu bestimmen:
+//   - aktueller Druck + 3h-Trend an dieser Stunde
+//   - Stabilität (wie lange schon im Toleranzband) bis zu dieser Stunde
+//   - wie viele Stunden bis zum NÄCHSTEN starken Druckabfall (Vorsturm-Fenster)
+//   - wie viele Stunden SEIT dem letzten starken Druckabfall (Nacherholung)
+// So können artspezifische Vorsturm-Fressschübe und Nachfront-Flauten auch
+// für Tage im Voraus korrekt platziert werden, nicht nur für "jetzt".
+// ─────────────────────────────────────────────────────────────────────────
+const _trajectoryCache = {};
+function analyzePressureTrajectory(targetTimestampMs) {
+  const cacheKey = Math.round(targetTimestampMs / 3600000); // auf Stunde runden
+  if (_trajectoryCache[cacheKey]) return _trajectoryCache[cacheKey];
+
+  // Hintergrund-Fetch anstoßen falls noch nicht vorhanden (nicht blockierend)
+  try {
+    const ctr = getBestCenter();
+    if (ctr) fetchOMPressureData(ctr[0], ctr[1]);
+  } catch(e) {}
+
+  if (!_omPressureCache || !_omPressureCache.pressures || !_omPressureCache.times.length) {
+    // Kein Verlauf verfügbar — neutrales Ergebnis, alte Logik greift weiter
+    return { pressure: null, trendRate: 0, stableHours: 0,
+             hoursUntilBigDrop: null, hoursSinceBigDrop: null };
+  }
+  const { times, pressures } = _omPressureCache;
+  // Index in der Zeitreihe finden, der der Zielstunde am nächsten liegt
+  const targetHourStr = new Date(targetTimestampMs).toISOString().slice(0, 13);
+  let idx = times.findIndex(t => t.startsWith(targetHourStr));
+  if (idx < 0) {
+    // Nächstgelegenen Punkt suchen (Ziel außerhalb der geladenen Reihe)
+    idx = times.findIndex(t => new Date(t).getTime() > targetTimestampMs);
+    if (idx < 0) idx = times.length - 1;
+  }
+  const p = pressures[idx];
+  if (p == null) {
+    return { pressure: null, trendRate: 0, stableHours: 0,
+             hoursUntilBigDrop: null, hoursSinceBigDrop: null };
+  }
+
+  // 3h-Trend an der Zielstunde
+  const p3ago = pressures[Math.max(0, idx - 3)];
+  const trendRate = (p3ago != null) ? (p - p3ago) / 3 : 0;
+
+  // Stabilität: wie viele Stunden VOR der Zielstunde im ±3hPa-Band um p
+  let stableHours = 0;
+  for (let i = idx; i >= Math.max(0, idx - 168); i--) {
+    if (pressures[i] == null || Math.abs(pressures[i] - p) > 3) break;
+    stableHours = idx - i;
+  }
+
+  // Vorausschau: nächster starker Druckabfall (3h-Trend ≤ -0.8 hPa/h)
+  // innerhalb der nächsten 48h ab der Zielstunde
+  let hoursUntilBigDrop = null;
+  for (let k = 0; k <= 48 && idx + k < pressures.length; k++) {
+    const pk = pressures[idx + k], pk3 = pressures[Math.max(0, idx + k - 3)];
+    if (pk == null || pk3 == null) continue;
+    const rate = (pk - pk3) / 3;
+    if (rate <= -0.8) { hoursUntilBigDrop = k; break; }
+  }
+
+  // Rückblick: letzter starker Druckabfall in den 48h VOR der Zielstunde
+  let hoursSinceBigDrop = null;
+  for (let k = 0; k <= 48 && idx - k >= 3; k++) {
+    const pk = pressures[idx - k], pk3 = pressures[idx - k - 3];
+    if (pk == null || pk3 == null) continue;
+    const rate = (pk - pk3) / 3;
+    if (rate <= -0.8) { hoursSinceBigDrop = k; break; }
+  }
+
+  const result = { pressure: p, trendRate, stableHours, hoursUntilBigDrop, hoursSinceBigDrop };
+  _trajectoryCache[cacheKey] = result;
+  return result;
 }
 
 function getOMPressureShort(currentP) {
@@ -4587,7 +4668,7 @@ function computeStabilityHours(currentP) {
  * Quellen: Anglerpraxis-Konsens (Barsch-Alarm, Fisch&Fang, Blinker),
  *   fischapp.com/luftdruck, netzwerk-angeln.de Zander-Luftdruck-Artikel
  */
-function pressureBiteFavorability(p, trendRate, stableHours, species) {
+function pressureBiteFavorability(p, trendRate, stableHours, species, hoursUntilBigDrop, hoursSinceBigDrop) {
   // ── Schwimmblase-Typ & Druckempfindlichkeit je Art ──────────────────────
   // trendSensitivity: wie stark bestraft Trendänderung den Score (1.0 = Standard)
   // idealCenter:      optimaler absoluter Druck
@@ -4595,12 +4676,20 @@ function pressureBiteFavorability(p, trendRate, stableHours, species) {
   // lowPressurePref:  true = Art bevorzugt Tiefdruck/fallend (Hecht, Aal, Forelle)
   const SPECIES_PROFILE = {
     // PHYSOCLISTEN — hohe Trendempfindlichkeit
-    Zander:   { trendSens: 2.2, ideal: 1015, stabW: 2.0, lowPref: false, physo: false },
+    // Zander: trendSens NICHT höher als Barsch — Recherche zeigt, Zander frisst
+    // bei jedem Druck weiter, er verschiebt nur seine Jagdtiefe (folgt der Beute).
+    // Kein Beleg für höhere Leidensfähigkeit als Barsch; eher robuster, da er
+    // nachts mühelos große Tiefenwechsel vollzieht (Blinker).
+    Zander:   { trendSens: 1.5, ideal: 1015, stabW: 1.4, lowPref: false, physo: false, easyDepthShift: true },
     Barsch:   { trendSens: 1.8, ideal: 1015, stabW: 1.8, lowPref: false, physo: false },
     // PHYSOSTOMEN Raubfische — mittlere Empfindlichkeit, Tiefdruck/fallend bevorzugt
     Hecht:    { trendSens: 0.7, ideal: 1008, stabW: 0.8, lowPref: true,  physo: true  },
     Forelle:  { trendSens: 0.7, ideal: 1008, stabW: 0.7, lowPref: true,  physo: true  },
-    Aal:      { trendSens: 0.6, ideal: 1005, stabW: 0.6, lowPref: true,  physo: true  },
+    // Aal: anatomisch physostom, funktioniert aber laut Recherche eher wie ein
+    // Physoclist (Wikipedia Physoclisti) — daher höhere Empfindlichkeit als
+    // andere Physostomen, trotz physo:true (schnelle Gasabgabe theoretisch
+    // möglich, wird aber praktisch kaum genutzt).
+    Aal:      { trendSens: 1.1, ideal: 1008, stabW: 0.9, lowPref: true,  physo: true  },
     Rapfen:   { trendSens: 0.8, ideal: 1010, stabW: 0.8, lowPref: false, physo: true  },
     // PHYSOSTOMEN Friedfische — gering empfindlich, eher Hochdruck/stabil
     Karpfen:  { trendSens: 0.9, ideal: 1013, stabW: 1.0, lowPref: false, physo: true  },
@@ -4611,7 +4700,11 @@ function pressureBiteFavorability(p, trendRate, stableHours, species) {
     Döbel:    { trendSens: 0.8, ideal: 1013, stabW: 0.8, lowPref: false, physo: true  },
     Güster:   { trendSens: 0.8, ideal: 1013, stabW: 1.0, lowPref: false, physo: true  },
     Ukelei:   { trendSens: 0.7, ideal: 1015, stabW: 0.8, lowPref: false, physo: true  },
-    Wels:     { trendSens: 0.5, ideal: 1010, stabW: 0.5, lowPref: true,  physo: true  },
+    // Wels: Blinker bestätigt explizit erhöhte Aktivität bei FALLENDEM Druck
+    // (auch tagsüber) — gehört zur lowPref-Gruppe, nicht zu den
+    // Hochdruck-bevorzugenden Friedfischen. Insgesamt aber sehr robust
+    // (niedrigste trendSens/stabW aller Arten — "wenig beeindruckt").
+    Wels:     { trendSens: 0.4, ideal: 1008, stabW: 0.4, lowPref: true,  physo: true  },
     Grundel:  { trendSens: 0.4, ideal: 1010, stabW: 0.4, lowPref: false, physo: true  },
   };
   const prof = SPECIES_PROFILE[species] || { trendSens: 1.0, ideal: 1013, stabW: 1.0, lowPref: false, physo: true };
@@ -4657,13 +4750,38 @@ function pressureBiteFavorability(p, trendRate, stableHours, species) {
 
   // ── 4. Flachgewässer-Malus für Physoclisten ───────────────────────────────
   // Dinkel/Vechte sind flach → Zander/Barsch können Druck nicht durch
-  // Tiefenwechsel ausgleichen → Effekt stärker als in tiefen Seen
+  // Tiefenwechsel ausgleichen → Effekt stärker als in tiefen Seen.
+  // AUSNAHME Zander: vollzieht laut Recherche nachts mühelos Tiefenwechsel,
+  // die weit größer sind als jeder druckbedingte Bedarf (Blinker) —
+  // bekommt daher keinen Flachwasser-Malus.
   let shallowMalus = 0;
-  if (!prof.physo && Math.abs(trendRate) > 0.5) {
+  if (!prof.physo && !prof.easyDepthShift && Math.abs(trendRate) > 0.5) {
     shallowMalus = -8; // Flachgewässer-Verstärkung
   }
 
-  return Math.max(0, Math.min(100, levelScore + trendBonus + stabilityBonus + shallowMalus));
+  // ── 5. Vorausschauender Vorsturm-Fressschub & Nachfront-Erholung ─────────
+  // Forschungsbasis: 2-4h vor starkem Druckabfall oft kurzer, expliziter
+  // Fressschub (Hecht, Barsch, Rapfen laut mehreren Quellen besonders;
+  // Wels laut Blinker ebenfalls bei fallendem Druck aktiver). Danach folgt
+  // eine Erholungsphase unterschiedlicher Länge — Physoclisten (Barsch)
+  // länger, Physostomen kürzer, Zander praktisch keine (folgt nur der
+  // Beute weiter, hört laut Recherche nicht auf zu fressen).
+  let preStormBoost = 0;
+  if (hoursUntilBigDrop != null && hoursUntilBigDrop <= 8) {
+    const dist = hoursUntilBigDrop - 3; // Zentrum des Fressschubs: 3h vorher
+    const boostStrength = (!prof.physo || ['Rapfen','Wels','Hecht'].includes(species)) ? 24 : 12;
+    preStormBoost = boostStrength * Math.exp(-Math.pow(dist / 2.5, 2));
+  }
+  let postFrontDip = 0;
+  if (hoursSinceBigDrop != null) {
+    const recoveryHours = prof.easyDepthShift ? 6 : (5 + ts * 14);
+    if (hoursSinceBigDrop < recoveryHours) {
+      const dipStrength = prof.easyDepthShift ? 4 : (10 + ts * 8);
+      postFrontDip = -dipStrength * (1 - hoursSinceBigDrop / recoveryHours);
+    }
+  }
+
+  return Math.max(0, Math.min(100, levelScore + trendBonus + stabilityBonus + shallowMalus + preStormBoost + postFrontDip));
 }
 
 /**
@@ -6880,7 +6998,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.80'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.36.82'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8062,8 +8180,29 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   // = weniger Licht + aufsteigende Beutefische → kurze aktive Fressphase davor.
   // Daher: enge Spannweite um 1.0 (0.82–1.12) statt 0.5–1.2, plus klarer
   // Trend-Bonus bei fallendem Druck.
+  //
+  // Vorausschauende Trajektorie-Analyse: liefert Vorsturm-/Nachfront-Fenster
+  // für die ZIELSTUNDE (auch Tage in der Zukunft, für Mehrtages-Prognosen).
+  // Dient außerdem als Fallback-Trend für Forecast-Stunden ohne liveData,
+  // die bisher immer pressureTrend=0 hatten (Mehrtages-Prognosen waren
+  // dadurch komplett druck-blind).
+  let hoursUntilBigDrop = null, hoursSinceBigDrop = null;
+  try {
+    const targetDate = new Date(date);
+    targetDate.setHours(hour, 0, 0, 0);
+    const traj = analyzePressureTrajectory(targetDate.getTime());
+    if (traj.pressure != null) {
+      hoursUntilBigDrop = traj.hoursUntilBigDrop;
+      hoursSinceBigDrop = traj.hoursSinceBigDrop;
+      if (!liveData) {
+        pressure = traj.pressure;
+        pressureTrend = traj.trendRate;
+      }
+    }
+  } catch(e) {}
+
   const _pStable = computeStabilityHours(pressure);
-  const _pScore  = pressureBiteFavorability(pressure, pressureTrend, _pStable, fishName);
+  const _pScore  = pressureBiteFavorability(pressure, pressureTrend, _pStable, fishName, hoursUntilBigDrop, hoursSinceBigDrop);
   let pressureMult = 0.82 + (_pScore / 100) * 0.30;   // 0.82 … 1.12
   // Fallender Druck (Front naht): kurzfristiger Aktivitäts-Schub, v.a. Räuber
   if (pressureTrend < -0.6) {
@@ -9757,6 +9896,37 @@ function getBestLivePosition() {
   return (typeof getBestCenter === 'function') ? getBestCenter() : null;
 }
 
+// iOS/Android pausieren watchPosition komplett, sobald der Bildschirm sperrt
+// oder die App in den Hintergrund geht (Plattform-Beschränkung, nicht umgehbar).
+// Fährt man in dieser Zeit zu einem neuen Spot, fehlt die Strecke dorthin
+// komplett — der neue Ort wurde nie aufgezeichnet. Als Abhilfe: sobald die App
+// wieder sichtbar wird, sofort einen frischen GPS-Fix holen und als
+// gekennzeichneten Sprungpunkt in die Spur schreiben. So taucht der neue
+// Standort wenigstens als Punkt auf, auch wenn der Weg dorthin fehlt.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (getActiveSession() === null) return;  // keine laufende Session, nichts zu tun
+  if (!navigator.geolocation) return;
+  try {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        _lastGpsFix = {
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+          acc: pos.coords.accuracy,
+          ts: Date.now(),
+        };
+        // isJump=true: erzwingt das Speichern auch wenn Zeit/Distanz-Schwelle
+        // nicht erreicht ist, und markiert den Punkt als möglichen Ortswechsel
+        // (z.B. Autofahrt), damit er nicht in die Gehstrecke einfließt.
+        recordSessionTrackPoint(true);
+      },
+      (err) => console.warn('Visibility-GPS-Fix fehlgeschlagen:', err.message),
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+  } catch(e) {}
+});
+
 async function startSession() {
   // GPS + Gewässer erfassen
   let lat = null, lon = null;
@@ -9789,7 +9959,10 @@ async function startSession() {
 }
 
 // GPS-Punkt zur Session-Spur hinzufügen (von watchPosition + Render-Zyklus aufgerufen)
-function recordSessionTrackPoint() {
+// isJump=true: erzwingt das Speichern (auch ohne genug Bewegung/Zeit seit dem
+// letzten Punkt) und markiert ihn – kommt vom visibilitychange-Handler, wenn
+// die App nach Hintergrund-Pause wieder sichtbar wird (möglicher Ortswechsel).
+function recordSessionTrackPoint(isJump) {
   const sess = getActiveSession();
   if (!sess) return;
   // Echten GPS-Fix bevorzugen, sonst HA-Standort als Fallback
@@ -9800,13 +9973,15 @@ function recordSessionTrackPoint() {
   const last = sess.track[sess.track.length - 1];
   // Punkt speichern wenn Position sich geändert hat (>5m) oder >2 Min vergangen
   const now = Date.now();
-  if (last) {
+  if (last && !isJump) {
     const dLat = Math.abs(last.lat - lat), dLon = Math.abs(last.lon - lon);
     const movedFar = dLat > 0.00005 || dLon > 0.00008;  // ~5-6m
     const timeSince = now - new Date(last.ts).getTime();
     if (!movedFar && timeSince < 2 * 60000) return;
   }
-  sess.track.push({ ts: new Date().toISOString(), lat, lon });
+  const point = { ts: new Date().toISOString(), lat, lon };
+  if (isJump) point.afterBackground = true;  // Markierung für Distanzberechnung
+  sess.track.push(point);
   // Spur begrenzen (max 1000 Punkte)
   if (sess.track.length > 1000) sess.track = sess.track.slice(-1000);
   saveActiveSession(sess);
@@ -9839,7 +10014,15 @@ function trackDistanceM(track) {
   if (!track || track.length < 2) return 0;
   let total = 0;
   for (let i = 1; i < track.length; i++) {
-    total += haversineM(track[i-1].lat, track[i-1].lon, track[i].lat, track[i].lon);
+    const segM = haversineM(track[i-1].lat, track[i-1].lon, track[i].lat, track[i].lon);
+    // Sprung nach Hintergrund-Pause (z.B. Autofahrt zu neuem Spot) NICHT als
+    // "gelaufene Strecke" zählen – das ist kein Fußweg am Ufer. Zusätzlich
+    // jeder Einzelschritt >2km, der ohne Markierung auftaucht (z.B. GPS-
+    // Ausreißer), wird ebenfalls nicht mitgezählt, um die Kennzahl ehrlich zu halten.
+    const isMarkedJump = track[i].afterBackground === true;
+    const isImplausibleJump = segM > 2000;
+    if (isMarkedJump || isImplausibleJump) continue;
+    total += segM;
   }
   return total;
 }
@@ -9966,6 +10149,7 @@ function showSessionSummary(record) {
   }
 
   const distKm = (record.distanceM / 1000);
+  const jumpCount = (record.track || []).filter(p => p.afterBackground).length;
   const distStr = distKm >= 1 ? distKm.toFixed(2) + ' km' : record.distanceM + ' m';
   const hrs = Math.floor(record.durationMin / 60);
   const durStr = hrs > 0 ? `${hrs}h ${record.durationMin % 60}min` : `${record.durationMin} min`;
@@ -10008,6 +10192,7 @@ function showSessionSummary(record) {
       ${nCatch > 0 ? `<div style="margin-top:12px;font-size:13px;color:var(--txt-sub);text-align:center">${fishSummary}</div>` : ''}
     </div>
     <div style="font-size:12px;font-weight:700;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin:4px 4px 8px">🗺️ Deine Route</div>
+    ${jumpCount > 0 ? `<div style="font-size:11px;color:#ffd23f;margin:0 4px 8px;line-height:1.4">🚗 ${jumpCount} Ortswechsel erkannt (gestrichelt auf der Karte) – die Strecke dorthin wurde nicht mitgezählt, da das Handy dabei vermutlich gesperrt war.</div>` : ''}
     <div id="sessionRouteMap" style="height:300px;border-radius:12px;overflow:hidden;margin-bottom:14px;background:rgba(255,255,255,.03)"></div>
   `;
 
@@ -10028,8 +10213,33 @@ function showSessionSummary(record) {
       _sessionSummaryMap = L.map('sessionRouteMap', { zoomControl: true, attributionControl: false });
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(_sessionSummaryMap);
 
-      // Route-Linie
-      const routeLine = L.polyline(latlngs, { color: '#2ea8ff', weight: 4, opacity: 0.8 }).addTo(_sessionSummaryMap);
+      // Route in Segmente teilen: an markierten Sprüngen (Ortswechsel nach
+      // Hintergrund-Pause, z.B. Autofahrt) NICHT durchziehen, sonst zieht eine
+      // lange gerade Linie quer übers Bild und verzerrt den Kartenausschnitt.
+      // Stattdessen: getrennte Linien-Segmente + gestrichelte Verbindung.
+      const segments = [[latlngs[0]]];
+      const jumpConnections = [];
+      for (let i = 1; i < track.length; i++) {
+        if (track[i].afterBackground) {
+          jumpConnections.push([latlngs[i-1], latlngs[i]]);
+          segments.push([latlngs[i]]);
+        } else {
+          segments[segments.length - 1].push(latlngs[i]);
+        }
+      }
+
+      // Normale Segmente durchgezogen
+      segments.forEach(seg => {
+        if (seg.length > 1) L.polyline(seg, { color: '#2ea8ff', weight: 4, opacity: 0.8 }).addTo(_sessionSummaryMap);
+      });
+      // Sprünge (Ortswechsel) gestrichelt + eigene Farbe, damit klar ist:
+      // hier wurde gefahren/pausiert, das ist kein Fußweg
+      jumpConnections.forEach(seg => {
+        L.polyline(seg, { color: '#ffd23f', weight: 2, opacity: 0.6, dashArray: '6,8' }).addTo(_sessionSummaryMap)
+          .bindPopup('🚗 Ortswechsel (nicht als Gehstrecke gezählt)');
+      });
+      // Gesamt-Bounds für den Kartenausschnitt (alle Punkte, auch Sprünge)
+      const routeLine = L.polyline(latlngs, { opacity: 0 }).addTo(_sessionSummaryMap);
 
       // Start-Marker (grün)
       L.circleMarker(latlngs[0], { radius: 8, fillColor: '#67d33f', color: '#fff', weight: 2, fillOpacity: 1 })
