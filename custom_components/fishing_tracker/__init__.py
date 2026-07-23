@@ -83,7 +83,7 @@ SERVICE_ASK_AI_SCHEMA = vol.Schema({
     vol.Required("api_key"):    cv.string,
     vol.Optional("context",     default=""): cv.string,   # App-Daten als Text
     vol.Optional("history",     default=""): cv.string,   # bisheriger Chatverlauf (JSON)
-    vol.Optional("model",       default="claude-haiku-4-5"): cv.string,
+    vol.Optional("model",       default="claude-haiku-4-5-20251001"): cv.string,
     vol.Optional("request_id",  default=""): cv.string,   # zum Zuordnen der Antwort
 })
 
@@ -409,7 +409,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api_key    = call.data["api_key"]
         context    = call.data.get("context", "")
         history_js = call.data.get("history", "")
-        model      = call.data.get("model", "claude-haiku-4-5")
+        model      = call.data.get("model", "claude-haiku-4-5-20251001")
         req_id     = call.data.get("request_id", "")
 
         # System-Prompt: macht Claude zum Angel-Assistenten, der die App-Daten kennt.

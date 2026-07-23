@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.37.1 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.37.2 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -5774,7 +5774,7 @@ async function aiSend() {
       api_key: apiKey,
       context: context,
       history: JSON.stringify(apiHistory),
-      model: 'claude-haiku-4-5',
+      model: 'claude-haiku-4-5-20251001',
       request_id: _aiPendingReqId,
     });
     // Antwort kommt asynchron über den Sensor → aiPollForAnswer prüft
@@ -5790,10 +5790,21 @@ async function aiSend() {
 
 // Pollt den Sensor nach der Antwort (Backend legt sie asynchron ab)
 async function aiPollForAnswer(attempt) {
-  if (attempt > 60) {  // nach ~60s aufgeben
+  if (attempt > 90) {  // nach ~90s aufgeben (Cloudflare kann langsam sein)
     _aiWaiting = false;
     const h = getAiHistory();
-    h.push({ role: 'assistant', text: '❌ Zeitüberschreitung – keine Antwort erhalten. Prüfe API-Schlüssel und Guthaben.', ts: Date.now() });
+    // Diagnose: liegt überhaupt ein Ergebnis vor (evtl. mit anderer ID)?
+    let diag = 'keine Antwort erhalten';
+    try {
+      const anyRes = findFTSensor('map_data')?.attributes?.ai_chat_result;
+      if (anyRes) {
+        if (anyRes.error) diag = 'Backend meldet: ' + anyRes.error;
+        else if (anyRes.request_id && anyRes.request_id !== _aiPendingReqId) diag = 'Antwort-Zuordnung fehlgeschlagen (alte Anfrage)';
+      } else {
+        diag = 'Der ask_ai-Service liefert nichts zurück – läuft das Backend? (HA-Neustart nach Update nötig)';
+      }
+    } catch(e) {}
+    h.push({ role: 'assistant', text: '❌ Zeitüberschreitung – ' + diag + '.', ts: Date.now() });
     saveAiHistory(h);
     renderView();
     return;
@@ -5801,7 +5812,7 @@ async function aiPollForAnswer(attempt) {
   try {
     // Frische Sensor-Daten holen (sonst liest findFTSensor den alten Cache)
     if (typeof connectHA === 'function') { try { await connectHA(); } catch(e) {} }
-    const res = findFTSensor('history')?.attributes?.ai_chat_result;
+    const res = findFTSensor('map_data')?.attributes?.ai_chat_result;
     if (res && res.request_id === _aiPendingReqId) {
       _aiWaiting = false;
       _aiPendingReqId = null;
@@ -7370,7 +7381,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.37.1'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.37.2'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
