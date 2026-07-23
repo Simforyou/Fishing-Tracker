@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.37.2 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.37.3 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -225,6 +225,9 @@ function recentlyInteracted(ms) { return (Date.now() - _lastInteraction) < (ms |
 // normal, weil sie die Flags vorher zurücksetzen.
 function isInputContextOpen() {
   try {
+    // KI-Chat-Tab: Auto-Render würde den Chat immer wieder nach oben scrollen.
+    // Der Chat rendert bei neuen Nachrichten gezielt selbst — kein 30s-Refresh nötig.
+    if (typeof currentView !== 'undefined' && currentView === 'ai') return true;
     if (typeof catchFormActive !== 'undefined' && catchFormActive) return true;
     if (typeof _editingCatchFull !== 'undefined' && _editingCatchFull) return true;
     if (typeof _waterPickerOpen !== 'undefined' && _waterPickerOpen) return true;
@@ -7381,7 +7384,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.37.2'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.37.3'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
