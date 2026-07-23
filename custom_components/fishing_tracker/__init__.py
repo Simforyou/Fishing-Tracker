@@ -75,6 +75,18 @@ SERVICE_DELETE_SCHEMA = vol.Schema({
     vol.Required("timestamp"): cv.string,
 })
 
+# KI-Chat: Frage + Kontext (Fänge/Spots/Bedingungen) an Anthropic senden.
+# Läuft über das Backend, damit der API-Schlüssel den HA-Server nie verlässt.
+SERVICE_ASK_AI = "ask_ai"
+SERVICE_ASK_AI_SCHEMA = vol.Schema({
+    vol.Required("question"):   cv.string,
+    vol.Required("api_key"):    cv.string,
+    vol.Optional("context",     default=""): cv.string,   # App-Daten als Text
+    vol.Optional("history",     default=""): cv.string,   # bisheriger Chatverlauf (JSON)
+    vol.Optional("model",       default="claude-haiku-4-5"): cv.string,
+    vol.Optional("request_id",  default=""): cv.string,   # zum Zuordnen der Antwort
+})
+
 SERVICE_LOG_SCHEMA = vol.Schema({
     vol.Optional("fish_type"): cv.string,
     vol.Optional("spot"): cv.string,
@@ -390,6 +402,82 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.data[DOMAIN][entry.entry_id]["deeper_result"] = result
         async_dispatcher_send(hass, SIGNAL_UPDATED)
 
+    async def handle_ask_ai(call: ServiceCall) -> None:
+        """KI-Chat: Frage + App-Kontext an Anthropic senden (Schlüssel bleibt am Server)."""
+        import aiohttp
+        question   = call.data["question"]
+        api_key    = call.data["api_key"]
+        context    = call.data.get("context", "")
+        history_js = call.data.get("history", "")
+        model      = call.data.get("model", "claude-haiku-4-5")
+        req_id     = call.data.get("request_id", "")
+
+        # System-Prompt: macht Claude zum Angel-Assistenten, der die App-Daten kennt.
+        system_prompt = (
+            "Du bist der Angel-Assistent in Christians App 'Fishing Tracker'. "
+            "Christian angelt an Vechte und Dinkel (Grafschaft Bentheim). "
+            "Antworte auf Deutsch, praxisnah und ehrlich. Wenn du etwas nicht "
+            "sicher weißt, sag es. Fasse dich kurz und konkret. Unten stehen "
+            "aktuelle Daten aus seiner App (Bedingungen, Beißchancen, letzte Fänge) "
+            "— nutze sie, wenn die Frage dazu passt, aber erwähne sie nicht "
+            "unnötig.\n\n"
+            "=== AKTUELLE APP-DATEN ===\n" + (context or "(keine Daten übergeben)")
+        )
+
+        # Nachrichtenverlauf aufbauen (bisherige Konversation + neue Frage)
+        messages = []
+        if history_js:
+            try:
+                prev = _json.loads(history_js)
+                if isinstance(prev, list):
+                    for m in prev[-10:]:  # max. letzte 10 Nachrichten
+                        role = m.get("role")
+                        text = m.get("text", "")
+                        if role in ("user", "assistant") and text:
+                            messages.append({"role": role, "content": text})
+            except Exception:
+                pass
+        messages.append({"role": "user", "content": question})
+
+        payload = {
+            "model": model,
+            "max_tokens": 1024,
+            "system": system_prompt,
+            "messages": messages,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        }
+
+        result = {"success": False, "error": "Unbekannter Fehler", "answer": "", "request_id": req_id}
+        try:
+            session = aiohttp.ClientSession()
+            async with session.post(
+                "https://api.anthropic.com/v1/messages",
+                json=payload, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=45),
+            ) as resp:
+                body = await resp.json()
+                if resp.status == 200:
+                    answer = "".join(
+                        c.get("text", "") for c in body.get("content", [])
+                        if c.get("type") == "text"
+                    ).strip()
+                    result = {"success": True, "error": None, "answer": answer, "request_id": req_id}
+                else:
+                    msg = body.get("error", {}).get("message", "")
+                    result["error"] = f"API Fehler {resp.status}: {msg}"
+            await session.close()
+        except Exception as exc:
+            result["error"] = str(exc)
+
+        # Ergebnis ablegen → Sensor-Update, Frontend liest es aus
+        if entry.entry_id in hass.data.get(DOMAIN, {}):
+            hass.data[DOMAIN][entry.entry_id]["ai_chat_result"] = result
+        async_dispatcher_send(hass, SIGNAL_UPDATED)
+
     async def handle_log_no_catch(call: ServiceCall) -> None:
         await async_log_entry(hass, entry, 0, dict(call.data))
 
@@ -421,6 +509,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not hass.services.has_service(DOMAIN, SERVICE_ANALYZE_DEEPER):
         hass.services.async_register(DOMAIN, SERVICE_ANALYZE_DEEPER, handle_analyze_deeper, schema=SERVICE_ANALYZE_SCHEMA)
+    if not hass.services.has_service(DOMAIN, SERVICE_ASK_AI):
+        hass.services.async_register(DOMAIN, SERVICE_ASK_AI, handle_ask_ai, schema=SERVICE_ASK_AI_SCHEMA)
 
     # Gewässer-URL wechseln (von wassertemperatur.site) — für Gewässerauswahl im Panel
     async def handle_set_water_url(call: ServiceCall) -> None:

@@ -379,12 +379,15 @@ class MapDataSensor(FishingBaseSensor):
         # Deeper: direkt aus FishingStore lesen (persistent)
         deeper = None
         deeper_scans = []
+        ai_chat = None
         try:
             domain_data = self.hass.data.get("fishing_tracker", {})
             for entry_data in domain_data.values():
                 if isinstance(entry_data, dict):
                     if "deeper_result" in entry_data:
                         deeper = entry_data["deeper_result"]
+                    if "ai_chat_result" in entry_data:
+                        ai_chat = entry_data["ai_chat_result"]
                     # Aus persistentem Store lesen
                     store = entry_data.get("store")
                     if store and hasattr(store, "deeper_scans"):
@@ -413,6 +416,7 @@ class MapDataSensor(FishingBaseSensor):
             "total_entries": len(self.store.entries),
             "deeper_last_result": deeper,
             "deeper_scans": deeper_scans,
+            "ai_chat_result": ai_chat,
             "personal_patterns": personal,
             "personal_full": self._full_patterns,
         }

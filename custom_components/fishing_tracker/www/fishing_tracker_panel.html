@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.36.87 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.37.1 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -204,6 +204,37 @@ setInterval(() => {
   document.getElementById('clock').textContent = t + ' Uhr';
 }, 1000);
 
+// ── Interaktions-Erkennung (verhindert Auto-Render mitten im Scrollen) ────────
+// Der 30-Sekunden-Auto-Refresh baut die Ansicht komplett neu auf (innerHTML).
+// Trifft das eine laufende Nutzer-Interaktion (Scrollen, Tippen), springt die
+// Scroll-Position zurück und Bedienung wird unterbrochen. Daher merken wir uns
+// den Zeitpunkt der letzten Interaktion; der Auto-Render verschiebt sich, wenn
+// gerade (oder in den letzten ~4s) interagiert wurde.
+let _lastInteraction = 0;
+function markInteraction() { _lastInteraction = Date.now(); }
+function recentlyInteracted(ms) { return (Date.now() - _lastInteraction) < (ms || 4000); }
+['scroll','touchstart','touchmove','pointerdown','wheel','keydown','input'].forEach(evt => {
+  window.addEventListener(evt, markInteraction, { passive: true, capture: true });
+});
+
+// Prüft, ob gerade ein Eingabe-Kontext offen ist, in dem ein automatischer
+// Re-Render die Eingabe zerstören würde (Fokus weg, getippter Text verloren,
+// halb ausgefülltes Formular zurückgesetzt). In diesen Fällen pausiert der
+// 30-Sekunden-Auto-Render komplett — es gibt keinen Grund, während der Eingabe
+// die Ansicht neu aufzubauen. Manuelle Renders (Speichern/Abbrechen) laufen
+// normal, weil sie die Flags vorher zurücksetzen.
+function isInputContextOpen() {
+  try {
+    if (typeof catchFormActive !== 'undefined' && catchFormActive) return true;
+    if (typeof _editingCatchFull !== 'undefined' && _editingCatchFull) return true;
+    if (typeof _waterPickerOpen !== 'undefined' && _waterPickerOpen) return true;
+    // Fokus liegt in einem Eingabefeld/Textbereich? Dann auch nicht neu rendern.
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return true;
+  } catch(e) {}
+  return false;
+}
+
 // ── Connect to HA via parent window ───────────────────────────────────────────
 let haConnection = null;
 let haStates = {};
@@ -250,6 +281,7 @@ const VIEWS = [
   ['overview', '🏠', 'Übersicht'],
   ['forecast', '📈', 'Prognosen'],
   ['species',  '🎯', 'Zielfische'],
+  ['ai',       '💬', 'KI'],
   ['spots',    '📍', 'Spots'],
   ['logbook',  '📘', 'Fangbuch'],
   ['sessions', '🎣', 'Sessions'],
@@ -4638,8 +4670,12 @@ function scheduleRenderView() {
   if (_scheduleRenderTimer) return;
   _scheduleRenderTimer = setTimeout(() => {
     _scheduleRenderTimer = null;
+    // Eingabe-Kontext offen? Render aufschieben, sonst geht die Eingabe verloren.
+    if (isInputContextOpen()) { scheduleRenderView(); return; }
+    // Nutzer scrollt/tippt gerade? Ebenfalls aufschieben (Scroll-Position).
+    if (recentlyInteracted()) { scheduleRenderView(); return; }
     try { if (typeof renderView === 'function') renderView(); } catch(e) {}
-  }, 250);
+  }, (isInputContextOpen() || recentlyInteracted()) ? 1500 : 250);
 }
 
 function triggerPressureHistoryFetch() {
@@ -5541,6 +5577,256 @@ function addChartTouch(svgId, pts, color) {
   svg.style.cursor = 'crosshair';
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// KI-CHAT (💬 KI-Tab)
+// Chat mit Claude (Anthropic) über das Backend — der API-Schlüssel bleibt am
+// HA-Server. Die App-Daten (Bedingungen, Beißchancen, letzte Fänge) werden bei
+// jeder Frage als Kontext mitgeschickt. Verlauf wird lokal gespeichert.
+// ═══════════════════════════════════════════════════════════════════════════
+const FT_AI_HISTORY_KEY = 'ft_ai_chat_history';
+const FT_AI_KEY_STORE   = 'ft_ai_api_key';
+let _aiWaiting = false;
+let _aiPendingReqId = null;
+
+function getAiHistory() {
+  try { const r = localStorage.getItem(FT_AI_HISTORY_KEY); return r ? JSON.parse(r) : []; }
+  catch(e) { return []; }
+}
+function saveAiHistory(hist) {
+  try { localStorage.setItem(FT_AI_HISTORY_KEY, JSON.stringify(hist.slice(-50))); } catch(e) {}
+}
+function getAiApiKey() {
+  try { return localStorage.getItem(FT_AI_KEY_STORE) || ''; } catch(e) { return ''; }
+}
+function setAiApiKey(k) {
+  try { localStorage.setItem(FT_AI_KEY_STORE, k); } catch(e) {}
+}
+
+// Sammelt die aktuellen App-Daten als kompakten Text-Kontext für die KI.
+function buildAiContext() {
+  const lines = [];
+  try {
+    const now = new Date();
+    lines.push('Datum/Zeit: ' + now.toLocaleString('de-DE'));
+    // Wassertemperatur
+    const wt = (typeof getEstimatedWaterTemp === 'function') ? getEstimatedWaterTemp() : null;
+    if (wt && wt.value != null) lines.push('Wassertemperatur: ' + wt.value.toFixed(1) + '°C');
+    // Wetter
+    const wx = (typeof getVerifiedWeather === 'function') ? getVerifiedWeather() : null;
+    if (wx) {
+      lines.push('Wetter: ' + (wx.cloud_coverage != null ? wx.cloud_coverage + '% Bewölkung, ' : '') +
+                 (wx.wind_speed != null ? wx.wind_speed + ' km/h Wind, ' : '') +
+                 (wx.temperature != null ? wx.temperature + '°C Luft' : ''));
+    }
+    // Luftdruck + Trend
+    const p = parseFloat(findFTSensor('pressure')?.state || 0);
+    const pt = parseFloat(findFTSensor('pressure_trend')?.state || 0);
+    if (p) lines.push('Luftdruck: ' + Math.round(p) + ' hPa (Trend ' + (pt>0?'+':'') + pt.toFixed(1) + ' hPa/h)');
+    // Gewässerzustand
+    if (typeof _riverData !== 'undefined' && _riverData && _riverData.droughtLabel) {
+      lines.push('Gewässerzustand: ' + _riverData.droughtLabel + (_riverData.manualOverride ? ' (manuell gesetzt)' : ''));
+    }
+    // Aktuelle Beißchancen aller Arten (Top-Liste)
+    if (typeof _globalFishData !== 'undefined' && typeof calcSpeciesScore === 'function') {
+      const scores = Object.keys(_globalFishData || {}).map(f => {
+        try { return { f, s: calcSpeciesScore(f) }; } catch(e) { return { f, s: 0 }; }
+      }).filter(x => x.s > 0).sort((a,b) => b.s - a.s);
+      if (scores.length) {
+        lines.push('Aktuelle Beißchancen (0-100): ' +
+          scores.map(x => x.f + ' ' + x.s).join(', '));
+      }
+    }
+    // Letzte Fänge aus dem Fangbuch
+    try {
+      const attrs = findFTSensor('history')?.attributes || {};
+      const catches = (attrs.catches || attrs.latest || []).filter(e => parseInt(e.caught||0) >= 1);
+      const recent = catches.slice(-8).reverse();
+      if (recent.length) {
+        lines.push('Letzte Fänge: ' + recent.map(c => {
+          const d = c.catch_datetime ? new Date(c.catch_datetime).toLocaleDateString('de-DE') : '?';
+          return (c.fish_type || 'Fisch') + (c.length_cm ? ' ' + c.length_cm + 'cm' : '') + ' (' + d + ')';
+        }).join(', '));
+      } else {
+        lines.push('Noch keine Fänge im Fangbuch.');
+      }
+    } catch(e) {}
+  } catch(e) {}
+  return lines.join('\n');
+}
+
+function aiChatViewHTML() {
+  const hist = getAiHistory();
+  const hasKey = !!getAiApiKey();
+
+  // Wenn kein API-Schlüssel: Einrichtungshinweis zeigen
+  if (!hasKey) {
+    return `
+      <div style="padding:16px">
+        <div class="panel" style="margin-top:10px">
+          <div class="sec">💬 KI-Assistent einrichten</div>
+          <div style="font-size:13px;color:var(--txt-sub);line-height:1.6;margin-bottom:14px">
+            Stell hier Fragen zum Angeln – allgemein oder zu deinen eigenen Daten (Fänge, Beißchancen, Bedingungen).
+            Die KI (Claude von Anthropic) läuft über deinen HA-Server, dein Schlüssel bleibt lokal gespeichert.
+          </div>
+          <div style="font-size:12px;color:var(--txt-muted);line-height:1.6;margin-bottom:12px">
+            <b>API-Schlüssel holen:</b><br>
+            1. Auf <b>console.anthropic.com</b> anmelden<br>
+            2. Unter <b>Billing</b> etwas Guthaben aufladen (ab 5 $) + Limit setzen<br>
+            3. Unter <b>API Keys</b> → <b>Create Key</b>, Schlüssel kopieren (beginnt mit sk-ant-…)
+          </div>
+          <input type="password" id="aiKeyInput" placeholder="sk-ant-..." autocomplete="off"
+            style="width:100%;box-sizing:border-box;background:var(--kpi-bg);border:1px solid var(--border);color:var(--txt-main);padding:12px;border-radius:10px;font-size:14px;font-family:monospace;margin-bottom:10px">
+          <button onclick="aiSaveKey()" style="width:100%;background:linear-gradient(145deg,#0a3d2e,#0d5540);border:1px solid rgba(63,185,80,.5);color:#fff;padding:13px;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer">
+            Schlüssel speichern & loslegen
+          </button>
+        </div>
+      </div>`;
+  }
+
+  // Chat-Verlauf rendern
+  const msgsHtml = hist.length ? hist.map(m => {
+    const isUser = m.role === 'user';
+    return `<div style="display:flex;justify-content:${isUser?'flex-end':'flex-start'};margin-bottom:10px">
+      <div style="max-width:82%;padding:10px 13px;border-radius:14px;font-size:14px;line-height:1.5;white-space:pre-wrap;
+        ${isUser
+          ? 'background:linear-gradient(145deg,#1a4d7a,#12406a);color:#fff;border-bottom-right-radius:4px'
+          : 'background:var(--kpi-bg);color:var(--txt-main);border:1px solid var(--border);border-bottom-left-radius:4px'}">
+        ${escapeHtml(m.text)}</div>
+    </div>`;
+  }).join('') : `<div style="text-align:center;color:var(--txt-muted);font-size:13px;padding:30px 10px">
+      Frag mich was übers Angeln 🎣<br><span style="font-size:11px;opacity:.7">z.B. „Warum beißt der Zander gerade schlecht?" oder „Welchen Köder für Schleie?"</span></div>`;
+
+  const waitingHtml = _aiWaiting
+    ? `<div style="display:flex;justify-content:flex-start;margin-bottom:10px"><div style="padding:10px 13px;border-radius:14px;background:var(--kpi-bg);border:1px solid var(--border);color:var(--txt-muted);font-size:13px">💭 denkt nach…</div></div>`
+    : '';
+
+  return `
+    <div style="display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:400px">
+      <div id="aiMessages" style="flex:1;overflow-y:auto;padding:16px 14px 8px">
+        ${msgsHtml}
+        ${waitingHtml}
+      </div>
+      <div style="padding:10px 12px;border-top:1px solid var(--border);background:var(--bg)">
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <textarea id="aiInput" placeholder="Frage eingeben…" rows="1"
+            style="flex:1;box-sizing:border-box;background:var(--kpi-bg);border:1px solid var(--border);color:var(--txt-main);padding:11px 13px;border-radius:12px;font-size:14px;font-family:inherit;resize:none;max-height:120px"
+            oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
+          <button onclick="aiSend()" ${_aiWaiting?'disabled':''}
+            style="background:${_aiWaiting?'var(--kpi-bg)':'linear-gradient(145deg,#0a3d2e,#0d5540)'};border:1px solid rgba(63,185,80,.5);color:#fff;width:46px;height:46px;border-radius:12px;font-size:20px;cursor:${_aiWaiting?'default':'pointer'};flex-shrink:0;display:flex;align-items:center;justify-content:center">
+            ${_aiWaiting?'⏳':'➤'}
+          </button>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;padding:0 2px">
+          <span style="font-size:10px;color:var(--txt-muted)">Claude Haiku · Daten werden mitgeschickt</span>
+          <span onclick="aiClearChat()" style="font-size:10px;color:var(--txt-muted);cursor:pointer;text-decoration:underline">Verlauf löschen</span>
+        </div>
+      </div>
+    </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function aiSaveKey() {
+  const inp = document.getElementById('aiKeyInput');
+  const k = inp ? inp.value.trim() : '';
+  if (!k || !k.startsWith('sk-ant-')) {
+    if (typeof showToast === 'function') showToast('❌ Ungültiger Schlüssel (muss mit sk-ant- beginnen)', '#ff6b6b', 4000);
+    return;
+  }
+  setAiApiKey(k);
+  if (typeof showToast === 'function') showToast('✅ Schlüssel gespeichert', '#67d33f');
+  renderView();
+}
+
+function aiClearChat() {
+  saveAiHistory([]);
+  if (typeof showToast === 'function') showToast('Verlauf gelöscht');
+  renderView();
+}
+
+async function aiSend() {
+  if (_aiWaiting) return;
+  const inp = document.getElementById('aiInput');
+  const q = inp ? inp.value.trim() : '';
+  if (!q) return;
+  const apiKey = getAiApiKey();
+  if (!apiKey) { renderView(); return; }
+
+  // Frage in Verlauf + UI
+  const hist = getAiHistory();
+  hist.push({ role: 'user', text: q, ts: Date.now() });
+  saveAiHistory(hist);
+
+  _aiWaiting = true;
+  _aiPendingReqId = 'req_' + Date.now();
+  renderView();
+  aiScrollToBottom();
+
+  // Verlauf für die API (ohne die gerade gestellte Frage, die geht separat)
+  const apiHistory = hist.slice(0, -1).map(m => ({ role: m.role, text: m.text }));
+  const context = buildAiContext();
+
+  try {
+    await callHAService('fishing_tracker', 'ask_ai', {
+      question: q,
+      api_key: apiKey,
+      context: context,
+      history: JSON.stringify(apiHistory),
+      model: 'claude-haiku-4-5',
+      request_id: _aiPendingReqId,
+    });
+    // Antwort kommt asynchron über den Sensor → aiPollForAnswer prüft
+    aiPollForAnswer(0);
+  } catch(err) {
+    _aiWaiting = false;
+    const h = getAiHistory();
+    h.push({ role: 'assistant', text: '❌ Fehler beim Senden: ' + err.message, ts: Date.now() });
+    saveAiHistory(h);
+    renderView();
+  }
+}
+
+// Pollt den Sensor nach der Antwort (Backend legt sie asynchron ab)
+async function aiPollForAnswer(attempt) {
+  if (attempt > 60) {  // nach ~60s aufgeben
+    _aiWaiting = false;
+    const h = getAiHistory();
+    h.push({ role: 'assistant', text: '❌ Zeitüberschreitung – keine Antwort erhalten. Prüfe API-Schlüssel und Guthaben.', ts: Date.now() });
+    saveAiHistory(h);
+    renderView();
+    return;
+  }
+  try {
+    // Frische Sensor-Daten holen (sonst liest findFTSensor den alten Cache)
+    if (typeof connectHA === 'function') { try { await connectHA(); } catch(e) {} }
+    const res = findFTSensor('history')?.attributes?.ai_chat_result;
+    if (res && res.request_id === _aiPendingReqId) {
+      _aiWaiting = false;
+      _aiPendingReqId = null;
+      const h = getAiHistory();
+      if (res.success && res.answer) {
+        h.push({ role: 'assistant', text: res.answer, ts: Date.now() });
+      } else {
+        h.push({ role: 'assistant', text: '❌ ' + (res.error || 'Unbekannter Fehler'), ts: Date.now() });
+      }
+      saveAiHistory(h);
+      renderView();
+      aiScrollToBottom();
+      return;
+    }
+  } catch(e) {}
+  setTimeout(() => aiPollForAnswer(attempt + 1), 1000);
+}
+
+function aiScrollToBottom() {
+  setTimeout(() => {
+    const el = document.getElementById('aiMessages');
+    if (el) el.scrollTop = el.scrollHeight;
+  }, 50);
+}
+
 function renderView() {
   // Fluss-Abfluss einmalig im Hintergrund laden (kein Auto-Re-Render → kein Interferieren mit Tab-Wechsel)
   try {
@@ -5769,6 +6055,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
   _globalFishColors = FISH_COLORS;
 
   const views = {
+    ai: () => aiChatViewHTML(),
     overview: () => `
       ${locForecastBannerHTML()}
       ${(() => {
@@ -7083,7 +7370,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.36.87'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.37.1'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7145,7 +7432,21 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:10px">Bitte Screenshot machen und melden.</div>
     </div>`;
   }
+  // Scroll-Position sichern, bevor der Inhalt komplett ersetzt wird — sonst
+  // springt die Ansicht bei jedem Re-Render nach oben. Wird direkt danach
+  // wiederhergestellt. Greift zusätzlich zur Interaktions-Sperre als Fallback.
+  const _contentEl = document.getElementById('content');
+  const _prevScrollTop = _contentEl ? _contentEl.scrollTop : 0;
+  const _prevWinScroll = window.scrollY || document.documentElement.scrollTop || 0;
+
   document.getElementById('content').innerHTML = html;
+
+  // Scroll-Position wiederherstellen (nach dem DOM-Aufbau)
+  if (_prevScrollTop > 0 && _contentEl) _contentEl.scrollTop = _prevScrollTop;
+  if (_prevWinScroll > 0) {
+    window.scrollTo(0, _prevWinScroll);
+    requestAnimationFrame(() => window.scrollTo(0, _prevWinScroll));
+  }
 
   // Add tab click handlers
   document.querySelectorAll('.fc-tab').forEach(t => {
@@ -8247,7 +8548,9 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
                   + moonNightHuntBonus(_moonPhase, hour, isNight, cloudCover, fishName);
 
   // ── 9. Saison ─────────────────────────────────────────────────────────────
-  const seasonBonus = seasonalScore(date);
+  // (Der frühere art-unabhängige seasonBonus wurde entfernt — die
+  // artspezifische SEASONAL_ACTIVITY-Kurve oben, als spawnMod-Multiplikator,
+  // bildet die Saison jetzt pro Art ab. Kein separater Saison-Bonus mehr.)
 
   // ── 10. Angelwetter-Index (Luftfeuchtigkeit, Bewölkung, Regen-Proxy) ─────
   let wxBonus = 0;
@@ -8441,9 +8744,38 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     }
   } catch(e) {}
 
-  const bonus = solunarBonus + windBonus + moonBonus + seasonBonus +
-                wxBonus + depthBonus + riverBonus + frontBonus +
-                photoBonus + personalBonus;
+  // ── Boni in zwei Kategorien statt einer großen Summe ─────────────────────
+  // KATEGORIE 1 — Umwelt-Gunst (Solunar, Wind, Mond, Wetter, Front): diese
+  // beschreiben ALLE dieselbe Sache — wie günstig die Umweltbedingungen gerade
+  // insgesamt sind. Sie sind redundant, nicht additiv: gutes Solunar UND gutes
+  // Wetter UND guter Mond heißt nicht "dreifach gut", sondern "insgesamt
+  // günstig". Daher GEWICHTETER DURCHSCHNITT statt Summe. Gewichtung nach
+  // fachlicher Bedeutung: Wetter+Front am stärksten (bestimmen die Grundstimmung),
+  // Solunar+Wind mittel, Mond am schwächsten (Effekt real schwach/überschätzt,
+  // nur kapitale Raubfische bei Nacht — siehe Recherche).
+  const _envParts = [
+    { val: solunarBonus, w: 1.0 },   // Solunar: mittel
+    { val: windBonus,    w: 0.8 },   // Wind: mittel
+    { val: moonBonus,    w: 0.4 },   // Mond: schwach
+    { val: wxBonus,      w: 1.5 },   // Wetter/Bewölkung: stark
+    { val: frontBonus,   w: 1.5 },   // Kaltfront: stark
+  ];
+  let _wSum = 0, _wTot = 0;
+  for (const p of _envParts) { _wSum += p.val * p.w; _wTot += p.w; }
+  const envFavor = _wTot > 0 ? (_wSum / _wTot) : 0;  // gewichtetes Mittel
+
+  // KATEGORIE 2 — Art-Fakten (Tiefe, Fluss, Personal, Foto): eigenständige
+  // Modifikatoren für DIESE Art in DIESER Situation, nicht redundant mit der
+  // Umweltstimmung. Kommen additiv obendrauf (können auch abziehen).
+  // HINWEIS: seasonBonus (alt, art-unabhängig) ist bewusst NICHT mehr dabei —
+  // die artspezifische SEASONAL_ACTIVITY-Kurve (als spawnMod-Multiplikator)
+  // bildet die Saison jetzt pro Art ab, viel genauer. Doppelzählung vermieden.
+  const speciesFacts = depthBonus + riverBonus + personalBonus + photoBonus;
+
+  // Umwelt-Gunst wird skaliert (sie ist ein Mittel, kein Summenwert). Faktor 2.2
+  // sorgt dafür, dass wirklich gute Bedingungen (Mittel ~+12) noch spürbar +26
+  // geben, ohne die alte Aufblähung (+44) zu wiederholen. Art-Fakten voll dazu.
+  const bonus = envFavor * 2.2 + speciesFacts;
 
   // Gesamtscore
   let _raw = Math.round(
@@ -8493,7 +8825,26 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
 
   if (isNaN(_raw)) { const _b = Math.round(bioNow * tempFactor); return isNaN(_b) ? 50 : Math.min(97, Math.max(5, _b)); }
   if (options && options.raw) return _raw;
-  return Math.min(97, Math.max(5, _raw));
+  return softCapScore(_raw);
+}
+
+// Weiche Score-Kompression statt harter Kappung bei 97.
+// Problem: Rohwerte laufen bei guten Bedingungen oft über 100-130 und wurden
+// alle hart auf 97 gekappt → viele Arten zeigten identisch 97, Differenzierung
+// ging verloren. Lösung: unter 85 bleibt der Wert unverändert (dort gibt es
+// keine Stauchung nötig); über 85 wird der Überschuss progressiv komprimiert,
+// sodass selbst ein Rohwert von 140 noch unter 97 bleibt, aber höher angezeigt
+// wird als z.B. 110. So bleiben Unterschiede zwischen starken Arten sichtbar.
+function softCapScore(raw) {
+  const v = Math.max(5, raw);
+  const KNEE = 85;    // ab hier beginnt die Kompression
+  const CEIL = 97;    // absolute Obergrenze (asymptotisch)
+  if (v <= KNEE) return Math.round(v);
+  // Überschuss über KNEE asymptotisch in den Bereich [KNEE, CEIL] stauchen
+  const over = v - KNEE;
+  const span = CEIL - KNEE;               // 12 Punkte Spielraum
+  const compressed = span * (1 - Math.exp(-over / 28));  // sanfte Sättigung
+  return Math.round(KNEE + compressed);
 }
 
 // Persönlicher Bonus aus gelernten Mustern (Spiegel von personal_learning.py)
@@ -9192,7 +9543,9 @@ async function loadSelectedLocationData(force) {
     _locForecast = { name:loc.name, lat:loc.lat, lon:loc.lon, avgDaily, agreement, sourceNames: sources.map(s=>s.name), river, loadedAt: Date.now() };
   } catch(e) { _locForecast = null; }
   _locForecastLoading = false;
-  try { renderView(); } catch(e) {}
+  // Über den interaktions-bewussten Scheduler rendern, damit ein Nachladen der
+  // Prognose nicht die Scroll-Position zurücksetzt, während der Nutzer scrollt.
+  scheduleRenderView();
   return _locForecast;
 }
 
@@ -11854,8 +12207,35 @@ async function init() {
       if (getActiveSession() && _gpsWatchId === null) startGpsWatch();
     } catch(e) {}
     try { recordSessionTrackPoint(); } catch(e) {}
-    renderView();
+    // NICHT neu rendern während der Nutzer scrollt/tippt — sonst springt die
+    // Scroll-Position zurück. Stattdessen den Render aufschieben, bis die
+    // Interaktion ~4s vorbei ist. Die HA-Daten oben sind trotzdem aktualisiert.
+    autoRenderWhenIdle();
   }, 30000);
+}
+
+// Rendert die Ansicht, sobald der Nutzer nicht mehr interagiert. Prüft alle
+// 1,5s erneut; nach spätestens ~20s wird auf jeden Fall gerendert, damit die
+// Anzeige nicht dauerhaft veraltet, falls jemand ununterbrochen scrollt.
+let _autoRenderWaiting = false;
+function autoRenderWhenIdle(attempt) {
+  attempt = attempt || 0;
+  // Eingabe-Kontext offen (Formular/Bearbeitung/Fokus im Feld)? Dann GAR NICHT
+  // automatisch neu rendern — würde die Eingabe zerstören. Später erneut prüfen.
+  if (isInputContextOpen()) {
+    if (attempt >= 40) { _autoRenderWaiting = false; return; } // nach ~60s aufgeben
+    _autoRenderWaiting = true;
+    setTimeout(() => autoRenderWhenIdle(attempt + 1), 1500);
+    return;
+  }
+  if (!recentlyInteracted() || attempt >= 13) {
+    _autoRenderWaiting = false;
+    try { renderView(); } catch(e) {}
+    return;
+  }
+  if (_autoRenderWaiting && attempt === 0) return; // schon eine Warte-Schleife aktiv
+  _autoRenderWaiting = true;
+  setTimeout(() => autoRenderWhenIdle(attempt + 1), 1500);
 }
 
 init();
