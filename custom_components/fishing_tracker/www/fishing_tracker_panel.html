@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.38.0 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.38.5 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1819,7 +1819,112 @@ function calcSpeciesScore(fishName) {
   } catch(e) { return 50; }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ALLGEMEINER ANGELWETTER-INDEX — abgeleitet aus der Artenengine
+// Früher eine eigene Formel (Basis 50 + Boni) auf eigener Skala. Dadurch
+// bedeutete derselbe Zahlenwert je nach Anzeige etwas anderes: 55 war beim
+// Artscore "gut", beim Angelwetter nur Durchschnitt. Jetzt wird der allgemeine
+// Wert aus denselben Artscores gebildet — gleiche Skala per Konstruktion,
+// nicht per Umrechnungsfaktor.
+//
+// Aggregation: Mittel der DREI BESTEN Arten. Der Mittelwert über alle wäre zu
+// pessimistisch (im Hochsommer ziehen tote Räuber alles runter), das Maximum
+// zu optimistisch (irgendeine Art geht immer). Die Top-3 bilden ab, ob es
+// überhaupt mehrere lohnende Ziele gibt.
+// ══════════════════════════════════════════════════════════════════════════
+// Gruppen nach Ernährungsweise. Rapfen ist zwar ein Karpfenartiger, jagt aber
+// Fische — gehört funktional zu den Räubern. Döbel frisst zwar auch Kleinfisch,
+// wird aber konventionell als Friedfisch geführt. Grundel ist in keiner Gruppe
+// (kleiner invasiver Grundfisch, passt in keine der beiden Angelarten).
+const FT_PREDATORS = ['Hecht', 'Zander', 'Barsch', 'Wels', 'Aal', 'Forelle', 'Rapfen'];
+const FT_PEACEFUL  = ['Karpfen', 'Schleie', 'Brasse', 'Güster', 'Rotauge', 'Rotfeder', 'Ukelei', 'Döbel'];
+
+// ── Relevante Arten: was kommt im eigenen Gewässer überhaupt vor? ───────────
+// Ohne diese Filterung ziehen Arten den Index hoch, die es lokal gar nicht gibt
+// (z.B. Forelle in der Vechte). Voreinstellung: alle Arten, die schon mal im
+// Fangbuch standen; ist das leer, alle Arten.
+const FT_RELEVANT_KEY = 'ft_relevant_species';
+function getRelevantSpecies() {
+  try {
+    const raw = localStorage.getItem(FT_RELEVANT_KEY);
+    if (raw) { const a = JSON.parse(raw); if (Array.isArray(a) && a.length) return a; }
+  } catch (e) {}
+  // Fallback: Arten aus dem Fangbuch
+  try {
+    const attrs = findFTSensor('history')?.attributes || {};
+    const list = attrs.latest || attrs.entries || [];
+    const caught = [...new Set(list.map(e => e.fish_type).filter(Boolean))];
+    if (caught.length) return caught;
+  } catch (e) {}
+  return null;  // null = keine Einschränkung
+}
+function setRelevantSpecies(arr) {
+  try { localStorage.setItem(FT_RELEVANT_KEY, JSON.stringify(arr)); } catch (e) {}
+  scheduleRenderView();
+}
+function toggleRelevantSpecies(name) {
+  const cur = getRelevantSpecies() || Object.keys(_globalFishData || {});
+  const next = cur.includes(name) ? cur.filter(f => f !== name) : [...cur, name];
+  setRelevantSpecies(next);
+}
+
+function ftSpeciesGroup(group) {
+  if (typeof _globalFishData === 'undefined' || !_globalFishData) return [];
+  const src = group === 'raub' ? FT_PREDATORS
+            : group === 'fried' ? FT_PEACEFUL
+            : FT_PREDATORS.concat(FT_PEACEFUL);
+  let avail = src.filter(f => _globalFishData[f]);
+  const rel = getRelevantSpecies();
+  if (rel) {
+    const filtered = avail.filter(f => rel.includes(f));
+    if (filtered.length) avail = filtered;   // nur einschränken, nie leeren
+  }
+  return avail;
+}
+function ftGeneralSpecies() { return ftSpeciesGroup('alle'); }
+
+// Gruppenwert für eine bestimmte Stunde (Mittel der drei besten Arten der Gruppe)
+function calcGroupDayScore(group, date, hour, liveData, fcData) {
+  const sp = ftSpeciesGroup(group);
+  if (!sp.length) return 30;
+  const m = ftTop3Mean(sp.map(f => {
+    try { return calcUnifiedDayScore(f, date, hour, liveData, fcData); } catch (e) { return NaN; }
+  }));
+  return m != null ? m : 30;
+}
+function ftTop3Mean(vals) {
+  // Mittel der drei besten. Sind weniger als drei Arten relevant, wird über
+  // alle vorhandenen gemittelt — sonst würde eine einzelne Art den Wert tragen.
+  const all = vals.filter(v => v != null && !isNaN(v));
+  const s = all.sort((a, b) => b - a).slice(0, Math.max(1, Math.min(3, all.length)));
+  return s.length ? Math.round(s.reduce((a, b) => a + b, 0) / s.length) : null;
+}
+
 function calcAngelwetterIndex() {
+  try {
+    const sp = ftGeneralSpecies();
+    if (sp.length) {
+      const m = ftTop3Mean(sp.map(f => { try { return calcSpeciesScore(f); } catch (e) { return NaN; } }));
+      if (m != null) return m;
+    }
+  } catch (e) {}
+  return calcAngelwetterIndexLegacy();
+}
+
+function calcAngelwetterDayScore(date, hour, liveData, fcData) {
+  try {
+    const sp = ftGeneralSpecies();
+    if (sp.length) {
+      const m = ftTop3Mean(sp.map(f => {
+        try { return calcUnifiedDayScore(f, date, hour, liveData, fcData); } catch (e) { return NaN; }
+      }));
+      if (m != null) return m;
+    }
+  } catch (e) {}
+  return calcAngelwetterDayScoreLegacy(date, hour, liveData, fcData);
+}
+
+function calcAngelwetterIndexLegacy() {
   // Zielfisch-Kontext für Tiefen-/Fluss-/Personal-Faktoren (Standard: gewählter Fisch)
   const fishName = (typeof selFish !== 'undefined' && selFish) ? selFish : 'Zander';
   const wx       = getVerifiedWeather();
@@ -2049,7 +2154,7 @@ function calcAngelwetterIndex() {
     pressureScore * 0.05 +
     0.05 // Tiefendaten-Restgewicht
   );
-  return Math.min(97, Math.max(10, base + depthScore + riverLiveScore + personalScore));
+  return Math.min(100, Math.max(5, base + depthScore + riverLiveScore + personalScore));
 }
 
 
@@ -2279,7 +2384,7 @@ function bestTimeWindowsStr(fishName) {
 // Luftdruck, Sonnenstand, Wind, Wolken, Wassertemp, Niederschlag, Mond.
 // Score = 50 (Basis) + universelle Wetter-/Astro-Boni. Keine Idealtemp/
 // Laichzeit/Tiefenpräferenz pro Art.
-function calcAngelwetterDayScore(date, hour, liveData, fcData) {
+function calcAngelwetterDayScoreLegacy(date, hour, liveData, fcData) {
   hour = (hour == null) ? new Date(date).getHours() : hour;
   // Werte sammeln (live oder Tagesvorhersage)
   let pressure, pressureTrend, windSpeed, cloudCover, waterTemp, solar, precipitation;
@@ -2370,7 +2475,7 @@ function calcAngelwetterDayScore(date, hour, liveData, fcData) {
 
   const score = 50 + solunarBonus + pressureBonus + lightBonus
               + windBonus + cloudBonus + waterTempBonus + precipBonus + moonBonus;
-  return Math.max(5, Math.min(97, Math.round(score)));
+  return Math.max(5, Math.min(100, Math.round(score)));
 }
 
 // ── Allgemeine Tageskurve aus der Engine (Angelwetter pro Stunde) ────────────
@@ -6131,6 +6236,8 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
           try {
             if (fishFilter === 'alle') {
               return calcAngelwetterDayScore(_now, h, _sens, null);
+            } else if (fishFilter === 'raub' || fishFilter === 'fried') {
+              return calcGroupDayScore(fishFilter, _now, h, _sens, null);
             } else {
               return calcUnifiedDayScore(fishFilter, _now, h, _sens, null);
             }
@@ -6161,9 +6268,11 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
         const qualText = curScore >= 60 ? 'sehr gute Fangchancen' : curScore >= 45 ? 'gute Fangchancen' : curScore >= 32 ? 'mittlere Fangchancen' : curScore >= 20 ? 'schwache Fangchancen' : 'sehr schwache Fangchancen';
         // Fish chips
         const allFish = ['Zander','Hecht','Barsch','Aal','Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Döbel','Rapfen','Forelle','Brachforelle','Wels','Barbe'];
-        const chipsHtml = ['alle', ...allFish].map(f => {
+        const chipsHtml = ['alle', 'raub', 'fried', ...allFish].map(f => {
           const sel = (f === fishFilter);
-          const lbl = f === 'alle' ? 'Alle Fischarten' : f;
+          const lbl = f === 'alle' ? 'Alle Fischarten'
+                    : f === 'raub' ? '\ud83e\udd88 Raubfisch'
+                    : f === 'fried' ? '\ud83d\udc1f Friedfisch' : f;
           return `<button class="ff-chip${sel?' sel':''}" data-ff-fish="${f}">${lbl}</button>`;
         }).join('');
         // 24 Balken — feste Pixel-Höhen, sonst kollabieren % in flex container
@@ -6204,6 +6313,25 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
             <div style="display:flex;align-items:flex-end;gap:1px;padding:0 2px">
               ${barsHtml}
             </div>
+            ${(() => {
+              // Aufschlüsselung Biologie/Wetter. Bei Gruppen-Auswahl die aktuell
+              // stärkste Art der Gruppe nehmen — für eine Gruppe als Ganzes gibt
+              // es keine sinnvolle gemeinsame Faktorzerlegung.
+              try {
+                let sp = fishFilter;
+                if (sp === 'alle' || sp === 'raub' || sp === 'fried') {
+                  const cand = ftSpeciesGroup(sp === 'alle' ? 'alle' : sp);
+                  if (!cand.length) return '';
+                  sp = cand.map(f => ({ f, v: calcUnifiedDayScore(f, _now, curH, _sens, null) }))
+                           .sort((a, b) => b.v - a.v)[0].f;
+                }
+                const inner = whyScoreHTML(sp, { bare: true });
+                if (!inner) return '';
+                const hint = (fishFilter === sp) ? '' :
+                  `<div style="font-size:10px;color:var(--txt-muted);margin-bottom:6px">stärkste Art gerade: ${sp}</div>`;
+                return `<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">${hint}${inner}</div>`;
+              } catch (e) { return ''; }
+            })()}
           </div>
         `;
       })()}
@@ -6429,6 +6557,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
           <div class="box"><small>🌡️ Idealtemp.</small><div class="val">${d.temp}</div></div>
         </div>
       </div>
+      ${whyScoreHTML(selFish)}
       ${fishSpotForecastHTML(selFish)}
       ${weatherStrategyHTML(selFish)}
       ${fishDepthHTML(selFish)}
@@ -7364,6 +7493,29 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
         </div>
       </div>
       <div class="panel" style="margin-top:10px">
+        <div class="sec">🐟 Arten in deinem Gewässer</div>
+        <div style="font-size:12px;color:var(--txt-muted);margin-bottom:10px;line-height:1.5">Nur angehakte Arten fließen in den Raubfisch- und Friedfisch-Index ein. Ohne Auswahl würden Arten den Wert hochziehen, die es bei dir gar nicht gibt. Die Einzelwerte in der Übersicht bleiben davon unberührt.</div>
+        ${(() => {
+          const all = Object.keys(_globalFishData || {});
+          if (!all.length) return '<div style="font-size:12px;color:var(--txt-muted)">Fischdaten noch nicht geladen.</div>';
+          const rel = getRelevantSpecies();
+          const isOn = f => !rel || rel.includes(f);
+          const grp = (title, list) => {
+            const items = list.filter(f => all.includes(f));
+            if (!items.length) return '';
+            return `<div style="font-size:11px;color:var(--txt-muted);font-weight:800;margin:8px 0 6px;letter-spacing:.4px">${title}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">` + items.map(f => {
+                const on = isOn(f);
+                return `<button onclick="toggleRelevantSpecies('${f}')" style="padding:7px 12px;border-radius:99px;font-size:12px;font-weight:${on?'800':'600'};cursor:pointer;font-family:inherit;border:1px solid ${on?'rgba(63,185,80,.5)':'var(--border)'};background:${on?'rgba(63,185,80,.15)':'var(--kpi-bg)'};color:${on?'#3fb950':'var(--txt-muted)'}">${on?'✓ ':''}${f}</button>`;
+              }).join('') + '</div>';
+          };
+          return grp('RAUBFISCH', FT_PREDATORS) + grp('FRIEDFISCH', FT_PEACEFUL)
+               + `<div style="margin-top:12px;display:flex;gap:8px">
+                    <button onclick="setRelevantSpecies(Object.keys(_globalFishData||{}))" style="flex:1;background:var(--kpi-bg);border:1px solid var(--border);color:var(--txt-sub);padding:9px;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">Alle an</button>
+                  </div>`;
+        })()}
+      </div>
+      <div class="panel" style="margin-top:10px">
         <div class="sec">🌊 Gewässerzustand</div>
         <div style="font-size:12px;color:var(--txt-muted);margin-bottom:10px;line-height:1.5">Bei anhaltendem Niedrigwasser/Dürre steht das Wasser, erwärmt sich und wird sauerstoffärmer – das dämpft die Beißchancen (Weißfische kommen besser klar als Fließwasser-Arten). Die Automatik nutzt Abflussdaten, aber für kleine Flüsse bist du als Ortskundiger genauer. Deine Wahl überschreibt die Automatik.</div>
         ${(() => {
@@ -7384,7 +7536,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.38.0'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.38.5'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7625,6 +7777,78 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
 //   ab 20  Orange   schwach
 //   < 20   Rot      sehr schwach
 // Wird die Skala geändert, müssen NUR diese Schwellen und ffQualText mit.
+// Aufschlüsselung "Warum dieser Wert" für eine Art zur aktuellen Stunde.
+// Zeigt jeden Multiplikator als Abweichung von neutral (1.0). So ist sichtbar,
+// ob ein tiefer Wert an der Biologie (Saison/Temperatur) oder am Wetter liegt —
+// gegen die Saison kann man nichts machen, auf ein Wetterfenster kann man warten.
+function whyScoreHTML(fishName, opts) {
+  let b;
+  try {
+    const now = new Date();
+    b = calcUnifiedDayScore(fishName, now, now.getHours(), collectAllSensors(), null, { breakdown: true });
+  } catch (e) { return ''; }
+  if (!b || !b.factors) return '';
+
+  const rows = b.factors
+    .filter(f => Math.abs(f.mult - 1) > 0.02)          // Neutrales weglassen
+    .sort((x, y) => Math.abs(y.mult - 1) - Math.abs(x.mult - 1))
+    .map(f => {
+      const pct = Math.round((f.mult - 1) * 100);
+      const up  = pct > 0;
+      const strong = Math.abs(pct) >= 20;
+      const col = up ? (strong ? '#3fb950' : '#a3e635') : (strong ? '#ef4444' : '#fb923c');
+      const arrow = up ? (strong ? '\u25b2\u25b2' : '\u25b2') : (strong ? '\u25bc\u25bc' : '\u25bc');
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0">
+        <div style="flex:1;font-size:12px;color:var(--txt-sub)">${f.label}</div>
+        <div style="font-size:11px;font-weight:800;color:${col};min-width:44px;text-align:right">${pct > 0 ? '+' : ''}${pct}%</div>
+        <div style="font-size:10px;color:${col};min-width:22px;text-align:right">${arrow}</div>
+      </div>`;
+    }).join('');
+
+  const bonusRow = Math.abs(b.bonus) >= 2 ? `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)">
+      <div style="flex:1;font-size:12px;color:var(--txt-sub)">Umwelt &amp; Spot (Solunar, Wind, Wetter, Tiefe)</div>
+      <div style="font-size:11px;font-weight:800;color:${b.bonus > 0 ? '#a3e635' : '#fb923c'};min-width:44px;text-align:right">${b.bonus > 0 ? '+' : ''}${b.bonus}</div>
+      <div style="font-size:10px;color:var(--txt-muted);min-width:22px;text-align:right">Pkt</div>
+    </div>` : '';
+
+  // Geteilter Balken: Biologie-Anteil vs. Wetter-Anteil
+  const BIO = '#5b8dd6', WX_UP = '#3fb950', WX_DOWN = '#e0603a';
+  const bio = Math.max(0, b.bioScore), wd = b.weatherDelta;
+  const scale = Math.max(b.score, b.bioScore, 1);
+  let barHtml;
+  if (wd >= 0) {
+    barHtml = `<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--kpi-bg)">
+        <div style="width:${(bio / scale * 100).toFixed(1)}%;background:${BIO}"></div>
+        <div style="width:${(wd / scale * 100).toFixed(1)}%;background:${WX_UP}"></div>
+      </div>`;
+  } else {
+    barHtml = `<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--kpi-bg)">
+        <div style="width:${(b.score / scale * 100).toFixed(1)}%;background:${BIO}"></div>
+        <div style="width:${(-wd / scale * 100).toFixed(1)}%;background:repeating-linear-gradient(45deg,${WX_DOWN},${WX_DOWN} 4px,rgba(0,0,0,.25) 4px,rgba(0,0,0,.25) 8px)"></div>
+      </div>`;
+  }
+  const legend = `<div style="display:flex;gap:14px;margin-top:7px;font-size:11px;flex-wrap:wrap">
+      <span style="color:var(--txt-sub)"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${BIO};margin-right:5px"></span>Biologie ${bio}</span>
+      <span style="color:var(--txt-sub)"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${wd >= 0 ? WX_UP : WX_DOWN};margin-right:5px"></span>Wetter ${wd >= 0 ? '+' : ''}${wd}</span>
+      <span style="color:var(--txt-muted)">= ${b.score}</span>
+    </div>`;
+  const verdict = Math.abs(wd) < 4
+    ? 'Das Wetter ist heute neutral – der Wert kommt fast ganz aus Biologie und Jahreszeit.'
+    : wd > 0
+      ? 'Das Wetter arbeitet für dich und hebt den biologischen Grundwert an.'
+      : 'Das Wetter drückt den Wert. Biologisch wäre heute mehr drin – auf ein besseres Fenster warten lohnt.';
+
+  const inner = `${barHtml}${legend}
+    <div style="font-size:11px;color:var(--txt-muted);margin:9px 0 4px;line-height:1.45">${verdict}</div>
+    ${rows ? `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:4px">${rows}</div>` : ''}${bonusRow}`;
+  if (opts && opts.bare) return inner;
+  return `<div class="panel" style="margin-top:10px">
+    <div class="sec">\ud83d\udd0e Warum dieser Wert</div>
+    <div style="font-size:11px;color:var(--txt-muted);margin:-4px 0 9px">Grundaktivität um diese Uhrzeit: ${b.base}</div>
+    ${inner}
+  </div>`;
+}
+
 function ffColorFor(v) {
   return v >= 60 ? '#4ade80' : v >= 45 ? '#a3e635' : v >= 32 ? '#fde047' : v >= 20 ? '#fb923c' : '#ef4444';
 }
@@ -8814,6 +9038,7 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     bioNow * tempFactor * spawnMod * lightMult * o2Mult * pressureMult + bonus
   );
 
+  let _waterDamper = 1.0;
   // ── Gewässerzustand-Dämpfer (Langzeit-Dürre ODER Hochwasser) ─────────────
   // Anhaltende Niedrigwasserlage = stehendes, warmes, sauerstoffärmeres Wasser.
   // Hochwasser/starke Strömung = trüb, reißend, Sichtjagd erschwert.
@@ -8852,12 +9077,40 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
       }
     }
     const effSf = sf + (1.0 - sf) * speciesResilience;
+    _waterDamper = effSf;
     _raw = Math.round(_raw * effSf);
   }
 
-  if (isNaN(_raw)) { const _b = Math.round(bioNow * tempFactor); return isNaN(_b) ? 50 : Math.min(97, Math.max(5, _b)); }
+  if (isNaN(_raw)) { const _b = Math.round(bioNow * tempFactor); return isNaN(_b) ? 30 : softCapScore(_b); }
   if (options && options.raw) return _raw;
-  return softCapScore(_raw);
+  const _final = softCapScore(_raw);
+  if (options && options.breakdown) {
+    // Anteile trennen: Was käme allein aus Biologie + Gewässer, wenn das Wetter
+    // neutral wäre? Die Differenz zum Endwert ist der Wetterbeitrag.
+    // Biologie = Aktivitätskurve × Wassertemperatur × Jahreszeit (× Gewässerzustand).
+    // Wetter   = Licht/Bewölkung, Sauerstoff, Luftdruck, Umwelt-Boni.
+    const _bioRaw   = bioNow * tempFactor * spawnMod * _waterDamper;
+    const _bioScore = softCapScore(_bioRaw);
+    // Jeder Multiplikator als Abweichung von 1.0 → direkt als Prozent lesbar.
+    // bonus ist additiv und wird deshalb in Rohpunkten ausgewiesen.
+    return {
+      score: _final,
+      raw: _raw,
+      base: Math.round(bioNow),          // Aktivitätskurve zu dieser Stunde
+      factors: [
+        { key: 'temp',    label: 'Wassertemperatur', mult: tempFactor },
+        { key: 'season',  label: 'Jahreszeit',       mult: spawnMod },
+        { key: 'light',   label: 'Licht / Tageszeit',mult: lightMult },
+        { key: 'o2',      label: 'Sauerstoff',       mult: o2Mult },
+        { key: 'press',   label: 'Luftdruck',        mult: pressureMult },
+        { key: 'water',   label: 'Gewässerzustand',  mult: _waterDamper },
+      ],
+      bonus: Math.round(bonus),
+      bioScore: _bioScore,
+      weatherDelta: _final - _bioScore,
+    };
+  }
+  return _final;
 }
 
 // Weiche Score-Kompression statt harter Kappung bei 97.
@@ -9119,7 +9372,7 @@ const scoreFromFc = (fc, fallback, date) => {
     if (dow === 0 || dow === 6) mod += 2;
   }
 
-  return Math.min(97, Math.max(10, Math.round((fallback || 65) + mod)));
+  return Math.min(100, Math.max(5, Math.round((fallback || 65) + mod)));  // Decke auf neue lineare Skala
 };
 
 
@@ -9401,7 +9654,14 @@ async function showLocationForecast(lat, lon, name) {
       wind_bearing: 200,
       _waterTemp: d.waterTemp,
     };
-    return calcUnifiedDayScore(topFish, d.date, 10, null, fcProxy);
+    // Nicht stur 10 Uhr: Tag UND Nacht abtasten, bester Tageswert.
+    // Feste Vormittagsstunde benachteiligt nachtaktive Arten systematisch.
+    let best = 0;
+    for (const hh of [1, 4, 7, 10, 13, 16, 19, 22]) {
+      const v = calcUnifiedDayScore(topFish, d.date, hh, null, fcProxy);
+      if (!isNaN(v) && v > best) best = v;
+    }
+    return best;
   });
 
   const dayName = (d) => ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()];
@@ -11310,7 +11570,7 @@ function openCatchDetail(entry) {
         <b style="font-size:13px">${val}</b>
        </div>` : '';
 
-  const scoreCol = s => s >= 75 ? '#67d33f' : s >= 55 ? '#ffd23f' : '#ff9d18';
+  const scoreCol = s => ffColorFor(s);
 
   content.innerHTML = `
     <!-- Foto -->
@@ -12212,7 +12472,7 @@ function openFishSheet(targetVar, onSelect, currentVal) {
       item.className = 'fish-sheet-item' + (f === getCurrent() ? ' active' : '');
       const svgIcon = (FISH_SVG && FISH_SVG[f]) || '';
       const liveScore = (() => { try { return calcSpeciesScore(f); } catch(e) { return d.score || 50; } })();
-      const sc4 = liveScore >= 80 ? '#67d33f' : liveScore >= 65 ? '#ffd23f' : '#ff9d18';
+      const sc4 = ffColorFor(liveScore);
       item.innerHTML = `
         ${svgIcon}
         <div>
