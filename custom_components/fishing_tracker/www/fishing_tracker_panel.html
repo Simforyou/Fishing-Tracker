@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.37.3 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.37.6 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -7384,7 +7384,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.37.3'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.37.6'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7688,6 +7688,10 @@ function buildForecastTab(tab) {
   const sampleH = [6, 9, 12, 15, 18, 21];
 
   const days = [];
+  const _prognoseFish = (typeof selFish !== 'undefined' && selFish) ? selFish : 'Zander';
+  // Stunden über Tag UND Nacht abtasten und den BESTEN Tageswert nehmen — sonst
+  // werden nachtaktive Arten (Zander im Sommer) systematisch zu niedrig gezeigt.
+  const _sampleHrs = [1, 4, 7, 10, 13, 16, 19, 22];
   for (let i = startOffset; i < startOffset + numDays; i++) {
     const day = new Date(_now);
     day.setHours(12, 0, 0, 0);
@@ -7695,13 +7699,16 @@ function buildForecastTab(tab) {
     const isPast = i < 0, isToday = i === 0;
     const fcDay = (i > 0) ? (_fcByDate[day.toDateString()] || null) : null;
     if (fcDay) fcDay._frontInfo = detectColdFront(fcDays, i);
-    let sum = 0, n = 0;
-    for (const h of sampleH) {
-      const v = (i <= 0) ? calcAngelwetterDayScore(day, h, _sens, null)
-                         : calcAngelwetterDayScore(day, h, null, fcDay);
-      if (!isNaN(v)) { sum += v; n++; }
+    let best = 0;
+    for (const h of _sampleHrs) {
+      // ARTSPEZIFISCHE Engine (calcUnifiedDayScore) statt der fisch-blinden
+      // Angelwetter-Bewertung — sonst zeigt die "Beißprognose Zander" für jeden
+      // Fisch dieselben Wetter-Zahlen und widerspricht dem Tagesverlauf oben.
+      const v = (i <= 0) ? calcUnifiedDayScore(_prognoseFish, day, h, _sens, null)
+                         : calcUnifiedDayScore(_prognoseFish, day, h, null, fcDay);
+      if (!isNaN(v) && v > best) best = v;
     }
-    const score = n ? Math.round(sum / n) : 50;
+    const score = best || 50;
     days.push({ name: dayNames[day.getDay()], date: day.getDate(), score, isPast, isToday });
   }
 
@@ -8850,15 +8857,26 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
 // sodass selbst ein Rohwert von 140 noch unter 97 bleibt, aber höher angezeigt
 // wird als z.B. 110. So bleiben Unterschiede zwischen starken Arten sichtbar.
 function softCapScore(raw) {
-  const v = Math.max(5, raw);
-  const KNEE = 85;    // ab hier beginnt die Kompression
-  const CEIL = 97;    // absolute Obergrenze (asymptotisch)
-  if (v <= KNEE) return Math.round(v);
-  // Überschuss über KNEE asymptotisch in den Bereich [KNEE, CEIL] stauchen
-  const over = v - KNEE;
-  const span = CEIL - KNEE;               // 12 Punkte Spielraum
-  const compressed = span * (1 - Math.exp(-over / 28));  // sanfte Sättigung
-  return Math.round(KNEE + compressed);
+  // LINEARE Skalierung über das tatsächliche Arbeitsfenster der Engine.
+  // Keine Stauchung mehr: gleiche Rohdifferenz = gleiche Anzeigedifferenz,
+  // egal wo auf der Skala. Vorher verzerrte die Kompression systematisch
+  // (unten 10 Rohpunkte = 10 Anzeigepunkte, oben nur noch 2).
+  //
+  // Fenstergrenzen aus der gemessenen Faktoren-Hüllkurve:
+  //   RAW_MIN  20 — darunter ist die Art praktisch inaktiv
+  //   RAW_MAX 175 — real erreichbares Maximum (nachtaktive Art zur besten
+  //                 Jahreszeit bei Top-Bedingungen). Das theoretische Maximum
+  //                 von ~250 ist unerreichbar: Aktivitätskurve und Nachtbonus
+  //                 schließen sich für tagaktive Arten gegenseitig aus.
+  // Folge: Tagaktive Arten (Barsch, Weißfische) kommen konstruktionsbedingt
+  // auf max ~89 — korrekt, ihnen fehlt der Nachtbonus.
+  //
+  // HINWEIS: Das ist eine konsistente Rangordnung, KEINE Wahrscheinlichkeit.
+  // Für echte Fangwahrscheinlichkeit müsste die Skala gegen das Fangbuch
+  // geeicht werden (offener Punkt).
+  const RAW_MIN = 20, RAW_MAX = 175;
+  const v = (raw - RAW_MIN) / (RAW_MAX - RAW_MIN) * 100;
+  return Math.max(0, Math.min(100, Math.round(v)));
 }
 
 // Persönlicher Bonus aus gelernten Mustern (Spiegel von personal_learning.py)
@@ -9563,12 +9581,37 @@ async function loadSelectedLocationData(force) {
   return _locForecast;
 }
 
+// Übersetzt eine Stunde in ein kurzes Tageszeit-Label
+function timeOfDayLabel(h) {
+  if (h >= 5 && h < 9)   return 'früh';
+  if (h >= 9 && h < 12)  return 'vormittags';
+  if (h >= 12 && h < 15) return 'mittags';
+  if (h >= 15 && h < 18) return 'nachm.';
+  if (h >= 18 && h < 22) return 'abends';
+  return 'nachts';
+}
+
 function locDayScores(fishName) {
   if (!_locForecast) return [];
-  return _locForecast.avgDaily.map(d => calcUnifiedDayScore(fishName, d.date, 10, null, {
-    temperature:d.waterTemp, airTemp:(d.tMax+d.tMin)/2, wind_speed:d.wind, precipitation:d.rain,
-    cloud_coverage:d.rain>2?80:d.rain>0.2?50:25, humidity:d.rain>1?85:65,
-    condition:d.rain>3?'rainy':d.rain>0.3?'cloudy':'partlycloudy', wind_bearing:200, _waterTemp:d.waterTemp }));
+  // Nicht stur 10 Uhr bewerten — das benachteiligt nachtaktive Arten wie Zander
+  // im Sommer systematisch (nachts top, aber 10 Uhr zeigt schwach) und
+  // widerspricht dem stündlichen Tagesverlauf. Stattdessen mehrere Stunden über
+  // Tag UND Nacht abtasten und den BESTEN Wert des Tages nehmen — plus die
+  // Stunde, zu der er auftritt, damit die Anzeige "wann" verraten kann.
+  const sampleHours = [1, 4, 7, 10, 13, 16, 19, 22];
+  return _locForecast.avgDaily.map(d => {
+    const cond = {
+      temperature:d.waterTemp, airTemp:(d.tMax+d.tMin)/2, wind_speed:d.wind, precipitation:d.rain,
+      cloud_coverage:d.rain>2?80:d.rain>0.2?50:25, humidity:d.rain>1?85:65,
+      condition:d.rain>3?'rainy':d.rain>0.3?'cloudy':'partlycloudy', wind_bearing:200, _waterTemp:d.waterTemp
+    };
+    let best = 0, bestH = 13;
+    for (const h of sampleHours) {
+      const v = calcUnifiedDayScore(fishName, d.date, h, null, cond);
+      if (!isNaN(v) && v > best) { best = v; bestH = h; }
+    }
+    return { score: best, hour: bestH };
+  });
 }
 
 function locForecastLoadingPanel(label) {
@@ -9583,12 +9626,14 @@ function locForecastBiteHTML(fishName) {
   if (!_locForecast) { loadSelectedLocationData(); return locForecastLoadingPanel('Beißprognose für ' + loc.name); }
   const lf = _locForecast;
   const dn = d => ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()];
-  const scores = locDayScores(fishName);
+  const scoreObjs = locDayScores(fishName);
+  const scores = scoreObjs.map(o => o.score);
   const days = lf.avgDaily.slice(0, 14);
   const today = new Date(); today.setHours(0,0,0,0);
 
   // Heutiger Score + bester Zukunftstag
   const todayScore = scores[0] != null ? scores[0] : 50;
+  const todayHour = scoreObjs[0] ? scoreObjs[0].hour : 13;
   let bestIdx = 0, bestVal = -1;
   scores.forEach((s, i) => { if (i > 0 && s > bestVal) { bestVal = s; bestIdx = i; } });
   const bestDay = days[bestIdx];
@@ -9612,6 +9657,8 @@ function locForecastBiteHTML(fishName) {
   // Übersichtliche Tagesliste darunter
   const listHtml = days.map((d, i) => {
     const v = scores[i] != null ? scores[i] : 50;
+    const bestH = scoreObjs[i] ? scoreObjs[i].hour : 13;
+    const todLabel = timeOfDayLabel(bestH);
     const isToday = i === 0;
     const isBest = i === bestIdx && i > 0;
     const dayLbl = isToday ? 'Heute' : (i === 1 ? 'Morgen' : dn(d.date) + '. ' + d.date.getDate() + '.' + (d.date.getMonth()+1) + '.');
@@ -9621,10 +9668,11 @@ function locForecastBiteHTML(fishName) {
     return `<div style="display:flex;align-items:center;gap:10px;padding:9px 8px;border-bottom:1px solid var(--border);background:${bg};border-radius:8px">
       <div style="width:42px;text-align:center;flex-shrink:0">
         <div style="font-size:17px;font-weight:900;color:${ffColorFor(v)}">${v}</div>
+        <div style="font-size:9px;color:var(--txt-muted);font-weight:700">${todLabel}</div>
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:800;color:var(--txt-main)">${dayLbl}${isBest?' <span style="font-size:10px;color:#3fb950;font-weight:700">★ Bester Tag</span>':''}</div>
-        <div style="font-size:11px;color:var(--txt-muted)">${qual} · 💧 ${wt}${d.rain > 1 ? ' · 🌧️ ' + d.rain.toFixed(1) + 'mm' : ''}${d.wind ? ' · 💨 ' + Math.round(d.wind) + ' km/h' : ''}</div>
+        <div style="font-size:11px;color:var(--txt-muted)">${qual} · beste Zeit ${todLabel} · 💧 ${wt}${d.rain > 1 ? ' · 🌧️ ' + d.rain.toFixed(1) + 'mm' : ''}${d.wind ? ' · 💨 ' + Math.round(d.wind) + ' km/h' : ''}</div>
       </div>
     </div>`;
   }).join('');
@@ -9634,8 +9682,8 @@ function locForecastBiteHTML(fishName) {
     <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
       <div style="font-size:42px;font-weight:950;color:${ffColorFor(todayScore)};line-height:1;letter-spacing:-1px">${todayScore}</div>
       <div style="flex:1">
-        <div style="font-size:13px;font-weight:850;color:#fff">Heute: ${todayScore>=75?'sehr gute':todayScore>=60?'gute':todayScore>=45?'mittlere':'schwache'} Chancen</div>
-        ${bestDay ? `<div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:3px">Bester Tag: ${dn(bestDay.date)}. ${bestDay.date.getDate()}.${bestDay.date.getMonth()+1}. · ${bestVal}</div>` : ''}
+        <div style="font-size:13px;font-weight:850;color:#fff">Heute: ${todayScore>=75?'sehr gute':todayScore>=60?'gute':todayScore>=45?'mittlere':'schwache'} Chancen <span style="font-weight:600;color:rgba(255,255,255,.5)">· beste Zeit ${timeOfDayLabel(todayHour)}</span></div>
+        ${bestDay ? `<div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:3px">Bester Tag: ${dn(bestDay.date)}. ${bestDay.date.getDate()}.${bestDay.date.getMonth()+1}. · ${bestVal} (${timeOfDayLabel(scoreObjs[bestIdx] ? scoreObjs[bestIdx].hour : 13)})</div>` : ''}
       </div>
     </div>
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:6px;margin-bottom:4px">
