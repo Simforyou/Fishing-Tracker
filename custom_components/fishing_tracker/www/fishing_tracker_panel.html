@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.37.6 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.38.0 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -543,7 +543,7 @@ let currentFcTab = 'overview';
 let wizState = {fish:null,turb:null,light:null,depth:null};
 let _wizFish = null;
 
-const sc = v => parseInt(v) >= 80 ? '#67d33f' : parseInt(v) >= 60 ? '#ffd23f' : '#ff9d18';
+const sc = v => ffColorFor(parseInt(v));
 
 // ── Spot-aware Forecast: Daten folgen dem gewählten Standort ────────────
 // Filtert Wetter-Quellen nach Distanz, ergänzt Open-Meteo HTTP-API für exakte Spot-Koordinaten.
@@ -1168,7 +1168,7 @@ function baitCard(name, sub) {
 // ── Köder-Wizard Logik (korrigiert) ──────────────────────────────────────────
 function wizardResult(w) {
   const {fish, turb, light, depth} = w;
-  const sc = v => parseInt(v)>=80?'#67d33f':parseInt(v)>=60?'#ffd23f':'#ff9d18';
+  const sc = v => ffColorFor(parseInt(v));
 
   // Farbsehen je Fischart
   const sight = {
@@ -2446,7 +2446,7 @@ function multiFishDayChartHTML() {
     curve.forEach((v, h) => { if (v > peakV) { peakV = v; peakH = h; } });
     // Mehrere gute Fenster: lokale Maxima die ≥80% des Peaks (mind. 50) erreichen
     const goodHours = new Set();
-    const thresh = Math.max(peakV * 0.80, 50);
+    const thresh = Math.max(peakV * 0.80, 30);  // Untergrenze auf neue lineare Skala geeicht (vorher 50 = alte Skala)
     for (let h = 0; h < 24; h++) {
       const v = curve[h];
       if (v < thresh) continue;
@@ -2477,12 +2477,12 @@ function dayChartBodyHTML() {
   if (!_dayChartData) return '';
   const { rows, nowH } = _dayChartData;
   const fmt = (h) => String(h).padStart(2, '0');
-  const scoreColor = (v) => v>=75?'#3fb344':v>=55?'#9cc02e':v>=40?'#e0a92e':v>=25?'#d97b3a':'#9a4a3a';
+  const scoreColor = (v) => ffColorFor(v);
   const showH = _dayChartScrubH;
 
   const rowsHTML = rows.map(r => {
     const cells = r.curve.map((v, h) => {
-      const ratio = v / 97;
+      const ratio = v / 100;
       const inGood = r.goodHours.has(h);
       const isNow = h === nowH;
       const isScrub = showH !== null && h === showH;
@@ -2540,7 +2540,7 @@ function attachDayChartScrub() {
     // Schnelles Update: nur Balkenfarben + Werte direkt im DOM ändern statt innerHTML neu zu bauen
     if (!_dayChartData) return;
     const { rows, nowH } = _dayChartData;
-    const scoreColor = (v) => v>=75?'#3fb344':v>=55?'#9cc02e':v>=40?'#e0a92e':v>=25?'#d97b3a':'#9a4a3a';
+    const scoreColor = (v) => ffColorFor(v);
     const fmt = (h) => String(h).padStart(2, '0');
     const showH = _dayChartScrubH;
 
@@ -2552,7 +2552,7 @@ function attachDayChartScrub() {
       r.curve.forEach((v, h) => {
         const bar = bars[h];
         if (!bar) return;
-        const ratio = v / 97;
+        const ratio = v / 100;
         const inGood = r.goodHours.has(h);
         const isNow = h === nowH;
         const isScrub = showH !== null && h === showH;
@@ -2861,7 +2861,7 @@ function openFishSpotMap(fishName) {
   if (!ov) return;
 
   const d = _globalFishData[fishName] || null;
-  const sc2 = v => v >= 75 ? '#67d33f' : v >= 55 ? '#ffd23f' : '#ff9d18';
+  const sc2 = v => ffColorFor(v);
   const waterT = (getEstimatedWaterTemp()?.value || 13);
 
   // Komplexer Artscore mit allen Faktoren
@@ -2999,7 +2999,7 @@ function openFishSpotMap(fishName) {
       '<div style="display:flex;gap:3px">' +
       trip.slice().sort((a,b)=>a.dayOffset-b.dayOffset).map(d => {
         const lbl = d.dayOffset === 0 ? 'Heute' : dayNames[d.date.getDay()];
-        const dcol = d.score >= 75 ? '#3fb950' : d.score >= 55 ? '#ffd23f' : '#ff9d18';
+        const dcol = ffColorFor(d.score);
         const isBest = d.dayOffset === best.dayOffset;
         return '<div style="flex:1;text-align:center;padding:5px 2px;border-radius:6px;background:' + (isBest?'rgba(63,185,80,.15)':'transparent') + '">' +
           '<div style="font-size:9px;color:var(--txt-muted)">' + lbl + '</div>' +
@@ -6157,8 +6157,8 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
           }
         }
         // Einheitliche Farbschwellen (5 Stufen)
-        const colorFor = v => v >= 75 ? '#4ade80' : v >= 60 ? '#a3e635' : v >= 45 ? '#fde047' : v >= 30 ? '#fb923c' : '#ef4444';
-        const qualText = curScore >= 75 ? 'sehr gute Fangchancen' : curScore >= 60 ? 'gute Fangchancen' : curScore >= 45 ? 'mittlere Fangchancen' : curScore >= 30 ? 'schlechte Fangchancen' : 'sehr schlechte Fangchancen';
+        const colorFor = v => ffColorFor(v);
+        const qualText = curScore >= 60 ? 'sehr gute Fangchancen' : curScore >= 45 ? 'gute Fangchancen' : curScore >= 32 ? 'mittlere Fangchancen' : curScore >= 20 ? 'schwache Fangchancen' : 'sehr schwache Fangchancen';
         // Fish chips
         const allFish = ['Zander','Hecht','Barsch','Aal','Karpfen','Schleie','Brasse','Rotauge','Rotfeder','Döbel','Rapfen','Forelle','Brachforelle','Wels','Barbe'];
         const chipsHtml = ['alle', ...allFish].map(f => {
@@ -6243,7 +6243,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
                 if (isNaN(p)) return '#fff';
                 const stable = (typeof computeStabilityHours === 'function') ? computeStabilityHours(p) : 0;
                 const score = pressureBiteFavorability(p, 0, stable);
-                return score >= 60 ? '#4ade80' : score >= 35 ? '#fde047' : '#ef4444';
+                return ffColorFor(score);
               } catch(e) { return '#fff'; }
             })()}">${pressure}</div></div>
           </div>
@@ -6322,7 +6322,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
 
             const best = scored[0];
             if (!best) return '<div class="sec">🗺️ Top Spot</div><div style="color:var(--txt-muted);font-size:13px;padding:8px 0">Noch keine Fänge gespeichert</div>';
-            const sc2 = v => v >= 75 ? '#67d33f' : v >= 55 ? '#ffd23f' : '#ff9d18';
+            const sc2 = v => ffColorFor(v);
             let out = '<div class="sec">🗺️ Empfohlener Spot</div>';
             out += '<div style="font-size:17px;font-weight:900;color:var(--txt-main);margin-bottom:4px">📍 ' + best.spot + '</div>';
             out += '<div style="font-size:28px;font-weight:950;color:' + sc2(best.combined) + '">' + best.combined + '%</div>';
@@ -6485,8 +6485,8 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
             const future = hours48.map((v, i) => ({ i, v })).filter(x => x.i >= curH);
             const peak = future.reduce((a,b) => b.v > a.v ? b : a, future[0]);
             topIdx = peak.i; topVal = peak.v;
-            const colorFor = v => v >= 75 ? '#4ade80' : v >= 60 ? '#a3e635' : v >= 45 ? '#fde047' : v >= 30 ? '#fb923c' : '#ef4444';
-            const qualText = curScore >= 75 ? 'sehr gute Fangchancen' : curScore >= 60 ? 'gute Fangchancen' : curScore >= 45 ? 'mittlere Fangchancen' : curScore >= 30 ? 'schlechte Fangchancen' : 'sehr schlechte Fangchancen';
+            const colorFor = v => ffColorFor(v);
+            const qualText = curScore >= 60 ? 'sehr gute Fangchancen' : curScore >= 45 ? 'gute Fangchancen' : curScore >= 32 ? 'mittlere Fangchancen' : curScore >= 20 ? 'schwache Fangchancen' : 'sehr schwache Fangchancen';
             // Label für beste Zeit (Heute/Morgen)
             const topH = topIdx % 24;
             const topDayLbl = topIdx < 24 ? 'Heute' : 'Morgen';
@@ -7384,7 +7384,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.37.6'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.38.0'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7614,11 +7614,22 @@ const d14 = (_d14forChart && _d14forChart.length) ? _d14forChart : WEEK.concat(W
 }
 
 // Einheitliche Farbschwellen wie in der Übersicht (FANGFAKTOR™)
+// ── EINZIGE Quelle für Score-Farben ──────────────────────────────────────────
+// Alle Ansichten (Übersicht-Balken, Zielfische, Prognosen, Karten, Fangbuch)
+// rufen diese Funktion auf. Vorher gab es vier verschiedene Paletten mit
+// unterschiedlicher Stufenzahl — derselbe Wert sah je nach Tab anders aus.
+// Schwellen sind auf die lineare Skala (Roh/175*100) geeicht:
+//   ab 60  Grün     sehr gut
+//   ab 45  Limette  gut
+//   ab 32  Gelb     normal/mittel
+//   ab 20  Orange   schwach
+//   < 20   Rot      sehr schwach
+// Wird die Skala geändert, müssen NUR diese Schwellen und ffQualText mit.
 function ffColorFor(v) {
-  return v >= 75 ? '#4ade80' : v >= 60 ? '#a3e635' : v >= 45 ? '#fde047' : v >= 30 ? '#fb923c' : '#ef4444';
+  return v >= 60 ? '#4ade80' : v >= 45 ? '#a3e635' : v >= 32 ? '#fde047' : v >= 20 ? '#fb923c' : '#ef4444';
 }
 function ffQualText(v) {
-  return v >= 75 ? 'sehr gute Fangchancen' : v >= 60 ? 'gute Fangchancen' : v >= 45 ? 'mittlere Fangchancen' : v >= 30 ? 'schlechte Fangchancen' : 'sehr schlechte Fangchancen';
+  return v >= 60 ? 'sehr gute Fangchancen' : v >= 45 ? 'gute Fangchancen' : v >= 32 ? 'mittlere Fangchancen' : v >= 20 ? 'schwache Fangchancen' : 'sehr schwache Fangchancen';
 }
 
 function buildForecastTab(tab) {
@@ -8874,9 +8885,10 @@ function softCapScore(raw) {
   // HINWEIS: Das ist eine konsistente Rangordnung, KEINE Wahrscheinlichkeit.
   // Für echte Fangwahrscheinlichkeit müsste die Skala gegen das Fangbuch
   // geeicht werden (offener Punkt).
-  const RAW_MIN = 20, RAW_MAX = 175;
-  const v = (raw - RAW_MIN) / (RAW_MAX - RAW_MIN) * 100;
-  return Math.max(0, Math.min(100, Math.round(v)));
+  // Reine Proportionalität (1:1), kein Offset, keine Stauchung: gleiche
+  // Rohdifferenz = gleiche Anzeigedifferenz, über die ganze Skala.
+  const RAW_MAX = 175;
+  return Math.max(0, Math.min(100, Math.round(raw / RAW_MAX * 100)));
 }
 
 // Persönlicher Bonus aus gelernten Mustern (Spiegel von personal_learning.py)
@@ -9393,7 +9405,7 @@ async function showLocationForecast(lat, lon, name) {
   });
 
   const dayName = (d) => ['So','Mo','Di','Mi','Do','Fr','Sa'][d.getDay()];
-  const scoreCol = (v) => v>=75?'#3fb950':v>=55?'#ffd23f':'#ff9d18';
+  const scoreCol = (v) => ffColorFor(v);
 
   res.innerHTML =
     '<div style="background:var(--kpi-bg,#21262d);border:1px solid var(--border,#30363d);border-radius:12px;padding:14px;margin-bottom:12px">' +
@@ -9662,7 +9674,7 @@ function locForecastBiteHTML(fishName) {
     const isToday = i === 0;
     const isBest = i === bestIdx && i > 0;
     const dayLbl = isToday ? 'Heute' : (i === 1 ? 'Morgen' : dn(d.date) + '. ' + d.date.getDate() + '.' + (d.date.getMonth()+1) + '.');
-    const qual = v >= 75 ? 'sehr gut' : v >= 60 ? 'gut' : v >= 45 ? 'mittel' : v >= 30 ? 'schwach' : 'schlecht';
+    const qual = v >= 60 ? 'sehr gut' : v >= 45 ? 'gut' : v >= 32 ? 'mittel' : v >= 20 ? 'schwach' : 'schlecht';
     const wt = d.waterTemp != null ? d.waterTemp.toFixed(1) + '°C' : '–';
     const bg = isToday ? 'rgba(46,168,255,.08)' : isBest ? 'rgba(63,185,80,.08)' : 'transparent';
     return `<div style="display:flex;align-items:center;gap:10px;padding:9px 8px;border-bottom:1px solid var(--border);background:${bg};border-radius:8px">
@@ -10300,6 +10312,137 @@ function setAnalysisFilter(f) {
   scheduleRenderView();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// RÜCKWIRKENDE NEUBEWERTUNG + SKALEN-EICHUNG
+// Jeder Fang und jede Nullnummer hat die Bedingungen mitgespeichert (Wasser-
+// temperatur, Luftdruck + Trend, Wind, Bewölkung, Feuchte, Strahlung). Damit
+// lässt sich der Score mit der AKTUELLEN Engine nachrechnen. Das ist besser,
+// als den Score beim Fang einzufrieren: das Modell entwickelt sich weiter,
+// die Bedingungen bleiben gültig.
+// ══════════════════════════════════════════════════════════════════════════
+const _entryScoreCache = {};
+function ftEntryScore(e, species) {
+  const sp = species || e.fish_type || e.target_fish;
+  if (!sp || typeof _globalFishData === 'undefined' || !_globalFishData[sp]) return null;
+  const tsStr = e.catch_datetime || e.timestamp;
+  if (!tsStr) return null;
+  const key = tsStr + '|' + sp;
+  if (_entryScoreCache[key] !== undefined) return _entryScoreCache[key];
+
+  let out = null;
+  try {
+    const d = new Date(tsStr);
+    if (isNaN(d.getTime())) { _entryScoreCache[key] = null; return null; }
+    // Sonnenstand für den historischen Zeitpunkt/Ort berechnen
+    let sunElev = -5;
+    try {
+      const ctr = (e.latitude && e.longitude)
+        ? [parseFloat(e.latitude), parseFloat(e.longitude)] : getBestCenter();
+      if (ctr && typeof _AST !== 'undefined' && _AST.getSunPosition) {
+        sunElev = _AST.getSunPosition(d, ctr[0], ctr[1]).altitude * 180 / Math.PI;
+      }
+    } catch(err) {}
+    const num = (v, dflt) => { const n = parseFloat(v); return isNaN(n) ? dflt : n; };
+    const live = {
+      pressure:      num(e.pressure, 1013),
+      solar:         num(e.solar_radiation, 0),
+      windDir:       num(e.wind_bearing, 180),
+      cloudCover:    num(e.cloud_coverage, 50),
+      humidity:      num(e.humidity, 70),
+      windSpeed:     num(e.wind_speed, 10),
+      waterTemp:     num(e.water_temp, 13),
+      pressureTrend: num(e.pressure_trend, 0),
+      sunElevation:  sunElev,
+      deeperDepths:  null,
+      sol: {},
+    };
+    // Gewässerzustand-Dämpfer neutralisieren — der heutige manuelle Wert darf
+    // nicht rückwirkend in alte Tage hineinwirken (dafür gibt es keine Historie).
+    const savedRiver = _riverData;
+    try {
+      _riverData = null;
+      out = calcUnifiedDayScore(sp, d, d.getHours(), live, null);
+    } finally { _riverData = savedRiver; }
+    if (isNaN(out)) out = null;
+  } catch(err) { out = null; }
+  _entryScoreCache[key] = out;
+  return out;
+}
+
+// Eichung: Wie oft hat es je Score-Klasse tatsächlich geklappt?
+function buildCalibrationHTML() {
+  let all = [];
+  try { all = getAnalysisEntries(); } catch(e) { return ''; }
+  if (!all.length) return '';
+
+  // Art bestimmen: aktiver Filter, sonst die meistgefangene Art
+  let sp = _analysisFishFilter;
+  if (sp === 'all') {
+    const c = {};
+    all.forEach(e => { if (e.isCatch && e.fish_type) c[e.fish_type] = (c[e.fish_type] || 0) + 1; });
+    sp = Object.keys(c).sort((a, b) => c[b] - c[a])[0] || null;
+  }
+  if (!sp || !_globalFishData[sp]) return '';
+
+  const B = [
+    { lo: 0,  hi: 20,  l: '0–19'  },
+    { lo: 20, hi: 35,  l: '20–34' },
+    { lo: 35, hi: 50,  l: '35–49' },
+    { lo: 50, hi: 65,  l: '50–64' },
+    { lo: 65, hi: 999, l: '65+'   },
+  ].map(b => Object.assign({}, b, { hits: 0, total: 0 }));
+
+  let used = 0;
+  for (const e of all) {
+    const isHit  = e.isCatch && e.fish_type === sp;
+    const isMiss = !e.isCatch;                 // Nullnummer zählt für jede Art
+    if (!isHit && !isMiss) continue;           // Fänge anderer Arten ignorieren
+    const s = ftEntryScore(e, sp);
+    if (s == null) continue;
+    const b = B.find(x => s >= x.lo && s < x.hi);
+    if (!b) continue;
+    b.total++; if (isHit) b.hits++; used++;
+  }
+
+  const head = `<div class="sec">🎯 Skalen-Eichung · ${sp}</div>`;
+  if (used < 8) {
+    return `<div class="panel" style="margin-bottom:12px">${head}
+      <div style="font-size:12px;color:var(--txt-muted);line-height:1.55">Erst ${used} auswertbare Einträge. Für eine belastbare Aussage braucht es mehrere Dutzend Sessions – und vor allem auch Nullnummern, sonst fehlt der Nenner.</div></div>`;
+  }
+
+  const rows = B.map(b => {
+    const q = b.total ? Math.round(b.hits / b.total * 100) : 0;
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <div style="width:52px;font-size:11px;color:var(--txt-muted);font-weight:700">${b.l}</div>
+      <div style="flex:1;height:16px;background:var(--kpi-bg);border-radius:8px;overflow:hidden">
+        <div style="width:${b.total ? Math.max(2, q) : 0}%;height:100%;background:${ffColorFor(q)}"></div>
+      </div>
+      <div style="width:80px;text-align:right;font-size:11px;color:var(--txt-sub)">${b.total ? q + '% · ' + b.hits + '/' + b.total : '–'}</div>
+    </div>`;
+  }).join('');
+
+  // Steigt die Trefferquote mit dem Score? Unterste vs. oberste besetzte Klasse
+  const pop = B.filter(b => b.total >= 3);
+  let verdict = 'Noch zu dünn besetzt für ein Urteil.';
+  if (pop.length >= 2) {
+    const lo = pop[0], hi = pop[pop.length - 1];
+    const qLo = lo.hits / lo.total * 100, qHi = hi.hits / hi.total * 100;
+    const diff = Math.round(qHi - qLo);
+    verdict = diff >= 15
+      ? `Die Trefferquote steigt mit dem Score (${lo.l} → ${hi.l}: +${diff} Prozentpunkte). Das Modell trennt.`
+      : diff <= -15
+        ? `Die Trefferquote SINKT mit steigendem Score (${diff} Prozentpunkte). Das Modell liegt für ${sp} falsch herum.`
+        : `Kaum Unterschied zwischen ${lo.l} und ${hi.l} (${diff >= 0 ? '+' : ''}${diff} Prozentpunkte). Das Modell trennt hier noch nicht.`;
+  }
+
+  return `<div class="panel" style="margin-bottom:12px">${head}
+    <div style="font-size:11px;color:var(--txt-muted);margin:-4px 0 10px;line-height:1.5">Alle Fänge und Nullnummern mit der heutigen Engine neu bewertet. Trefferquote je Score-Klasse:</div>
+    ${rows}
+    <div style="margin-top:10px;padding:9px 10px;border-radius:8px;background:var(--kpi-bg);font-size:11px;color:var(--txt-sub);line-height:1.5">${verdict}</div>
+    <div style="margin-top:8px;font-size:10px;color:var(--txt-muted);line-height:1.45">${used} Einträge ausgewertet. Der Gewässerzustand-Dämpfer ist dabei neutralisiert (keine Historie). Fänge anderer Arten zählen nicht als Nullnummer.</div>
+  </div>`;
+}
+
 function buildAnalysisView() {
   const allEntries = getAnalysisEntries();
 
@@ -10448,6 +10591,7 @@ function buildAnalysisView() {
         <div><div style="font-size:24px;font-weight:900;color:#2ea8ff">${total > 0 ? Math.round(totalC/total*100) : 0}%</div><div style="font-size:11px;color:var(--txt-muted)">Erfolgsquote</div></div>
       </div>
     </div>
+    ${buildCalibrationHTML()}
     ${scoreCompare}
     <div style="font-size:12px;font-weight:700;color:var(--txt-muted);text-transform:uppercase;letter-spacing:.5px;margin:4px 4px 10px">Erfolgsquote pro Bedingung</div>
     <div style="font-size:11px;color:var(--txt-muted);margin:0 4px 10px">🐟 = Fänge · ∅ = Nullnummern · % = Trefferquote im Bereich</div>
@@ -11185,15 +11329,22 @@ function openCatchDetail(entry) {
       ${full.notes ? `<div style="font-size:12px;color:rgba(255,255,255,.4);margin-top:6px;font-style:italic">📝 ${full.notes}</div>` : ''}
     </div>
 
-    <!-- Angelwetter-Index -->
-    ${full.angelwetter_index ? `
-    <div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px;display:flex;align-items:center;gap:16px">
-      <div style="font-size:40px;font-weight:950;color:${scoreCol(full.angelwetter_index)}">${full.angelwetter_index}%</div>
-      <div>
-        <div style="font-size:14px;font-weight:800">Angelwetter Index</div>
-        <div style="font-size:12px;color:rgba(255,255,255,.5)">zum Zeitpunkt des Fangs</div>
-      </div>
-    </div>` : ''}
+    <!-- Angelwetter-Index + rückwirkend neu bewerteter Score -->
+    ${(() => {
+      const reScore = (typeof ftEntryScore === 'function') ? ftEntryScore(full) : null;
+      if (!full.angelwetter_index && reScore == null) return '';
+      return `<div style="background:var(--kpi-bg);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px;display:flex;align-items:center;gap:16px">
+        ${reScore != null ? `<div style="text-align:center">
+          <div style="font-size:40px;font-weight:950;color:${ffColorFor(reScore)};line-height:1">${reScore}</div>
+          <div style="font-size:9px;color:var(--txt-muted);font-weight:700;letter-spacing:.5px">HEUTIGES MODELL</div>
+        </div>` : ''}
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:800">${reScore != null ? (full.fish_type || 'Fang') + ' · neu bewertet' : 'Angelwetter Index'}</div>
+          <div style="font-size:12px;color:rgba(255,255,255,.5)">aus den gespeicherten Bedingungen dieses Fangs</div>
+          ${full.angelwetter_index ? `<div style="font-size:11px;color:var(--txt-muted);margin-top:4px">damals gespeichert: ${full.angelwetter_index}%</div>` : ''}
+        </div>
+      </div>`;
+    })()}
 
     <!-- Solunar zur Fangzeit -->
     ${(() => {
