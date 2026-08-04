@@ -450,9 +450,15 @@ class AngelwetterIndexSensor(FishingBaseSensor):
         month = now.month
 
         # ── 35% Wassertemperatur ─────────────────────────────────────────────
+        # Wassertemperatur: zuerst der eigene NLWKN-Sensor der Integration,
+        # dann eine evtl. vorhandene externe Quelle. KEIN Rückfall auf
+        # sensor.haftenkamp_temperatur — das ist die LUFT-temperatur und
+        # führte zu systematisch falschen Werten (im Sommer viel zu warm).
+        # Fehlt die Wassertemperatur, greift unten der neutrale Vorgabewert.
         water_t = (
-            self._get("sensor.wassertemperatur_gewaesser")
-            or self._get("sensor.haftenkamp_temperatur")
+            self._get("sensor.fishing_tracker_nlwkn_water_temp")
+            or self._get("sensor.wassertemperatur_gewaesser")
+            or self._get("sensor.fishing_tracker_estimated_water_temperature")
         )
         if water_t is not None:
             wt = water_t

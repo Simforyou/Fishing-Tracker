@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.39.2 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.39.4 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -7536,7 +7536,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.39.2'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.39.4'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7806,7 +7806,7 @@ function whyScoreHTML(fishName, opts) {
     }).join('');
 
   const bonusRow = Math.abs(b.spotDelta || 0) >= 2 ? `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)">
-      <div style="flex:1;font-size:12px;color:var(--txt-sub)">Spot &amp; Erfahrung (Tiefe, Fluss, gelernte Muster)</div>
+      <div style="flex:1;font-size:12px;color:var(--txt-sub)">Spot (Tiefe, Fluss, gelernte Muster)</div>
       <div style="font-size:11px;font-weight:800;color:${b.spotDelta > 0 ? '#a3e635' : '#fb923c'};min-width:44px;text-align:right">${b.spotDelta > 0 ? '+' : ''}${b.spotDelta}</div>
       <div style="font-size:10px;color:var(--txt-muted);min-width:22px;text-align:right">Pkt</div>
     </div>` : '';
@@ -8966,7 +8966,17 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     }
     // Stärke des Tagesgangs wächst mit Wärme (mehr Zehrung, knapperes O2)
     const warmth = Math.min(1, (waterTemp - 16) / 10); // 16°C→0, 26°C→1
-    o2effective += o2Phase * (0.8 + warmth * 1.2);      // ±0.8 bis ±2.0 mg/l
+    let o2Swing = 0.8 + warmth * 1.2;                   // ±0.8 bis ±2.0 mg/l
+    // In stehendem, veralgtem Wasser ist der Tagesgang VIEL extremer: die
+    // Algenmasse produziert nachmittags Übersättigung und zehrt nachts stark.
+    // Morgens kann O2 dann kritisch werden, während der Nachmittag übersättigt.
+    try {
+      const dl = (_riverData && _riverData.droughtLevel) || 0;
+      if (dl >= 3)      o2Swing *= 2.2;
+      else if (dl === 2) o2Swing *= 1.7;
+      else if (dl === 1) o2Swing *= 1.3;
+    } catch (e) {}
+    o2effective += o2Phase * o2Swing;
   }
   if (o2effective < 5) {
     o2Mult = ['Forelle','Rapfen','Döbel'].includes(fishName) ? 0.30 : 0.50;
@@ -9070,12 +9080,14 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   // HINWEIS: seasonBonus (alt, art-unabhängig) ist bewusst NICHT mehr dabei —
   // die artspezifische SEASONAL_ACTIVITY-Kurve (als spawnMod-Multiplikator)
   // bildet die Saison jetzt pro Art ab, viel genauer. Doppelzählung vermieden.
-  const speciesFacts = depthBonus + riverBonus + personalBonus + photoBonus;
+  // Photoperiode (Tageslängen-Trend) ist Biologie, kein Spot-Merkmal — sie wird
+  // deshalb separat geführt und im Breakdown dem Biologie-Anteil zugeschlagen.
+  const speciesFacts = depthBonus + riverBonus + personalBonus;
 
   // Umwelt-Gunst wird skaliert (sie ist ein Mittel, kein Summenwert). Faktor 2.2
   // sorgt dafür, dass wirklich gute Bedingungen (Mittel ~+12) noch spürbar +26
   // geben, ohne die alte Aufblähung (+44) zu wiederholen. Art-Fakten voll dazu.
-  const bonus = envFavor * 2.2 + speciesFacts;
+  const bonus = envFavor * 2.2 + speciesFacts + photoBonus;
 
   // Gesamtscore
   let _raw = Math.round(
@@ -9140,8 +9152,8 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     // Vorher steckten Tiefe/Fluss/Personal fälschlich im Wetter-Anteil.
     const _bioCore  = bioNow * tempFactor * spawnMod * lightMult * o2Mult;
     const _envPts   = envFavor * 2.2;
-    const _bioScore = softCapScore(_bioCore * _waterDamper);
-    const _bioWx    = softCapScore((_bioCore * pressureMult + _envPts) * _waterDamper);
+    const _bioScore = softCapScore((_bioCore + photoBonus) * _waterDamper);
+    const _bioWx    = softCapScore((_bioCore * pressureMult + photoBonus + _envPts) * _waterDamper);
     // Jeder Multiplikator als Abweichung von 1.0 → direkt als Prozent lesbar.
     // bonus ist additiv und wird deshalb in Rohpunkten ausgewiesen.
     return {

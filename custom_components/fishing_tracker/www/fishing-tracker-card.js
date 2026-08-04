@@ -27,7 +27,25 @@ class FishingTrackerCard extends HTMLElement {
   set hass(hass) { this._hass = hass; this.update(); }
   getCardSize() { return 7; }
 
-  _s(suffix) { return this._hass?.states?.[`sensor.${this.config.prefix}_${suffix}`]; }
+  // Sensor auflösen. Nicht nur exakte ID prüfen: wird die Integration neu
+  // installiert, hängt Home Assistant an bereits vergebene Entity-IDs einen
+  // Zähler an (sensor.fishing_tracker_angelwetter_index_2). Die Karte fand
+  // dann gar nichts mehr und zeigte überall Striche.
+  _s(suffix) {
+    const st = this._hass?.states;
+    if (!st) return undefined;
+    const exact = `sensor.${this.config.prefix}_${suffix}`;
+    if (st[exact]) return st[exact];
+    const re = new RegExp(`^sensor\\.${this.config.prefix}_${suffix}(_\\d+)?$`);
+    for (const id in st) if (re.test(id)) return st[id];
+    return undefined;
+  }
+
+  // Diagnose: welche Entities der Integration existieren tatsächlich?
+  _foundEntities() {
+    const st = this._hass?.states || {};
+    return Object.keys(st).filter(id => id.startsWith(`sensor.${this.config.prefix}_`));
+  }
   _num(v, f = null) { const n = parseFloat(v); return isNaN(n) ? f : n; }
   _colorFor(v) {
     return v >= 75 ? "#4ade80" : v >= 60 ? "#a3e635" : v >= 45 ? "#fde047" : v >= 30 ? "#fb923c" : "#ef4444";
@@ -265,7 +283,10 @@ class FishingTrackerCard extends HTMLElement {
         });
       });
     } else {
-      rankEl.innerHTML = `<div class="empty">Noch kein Ranking verfügbar.<br>Sensor: sensor.${this.config.prefix}_species_ranking</div>`;
+      const found = this._foundEntities();
+      rankEl.innerHTML = found.length
+        ? `<div class="empty">Noch kein Ranking verfügbar.<br><small>Sensor sensor.${this.config.prefix}_species_ranking liefert keine Daten.</small></div>`
+        : `<div class="empty">Keine Fishing-Tracker-Sensoren gefunden.<br><small>Erwartetes Präfix: <b>${this.config.prefix}</b>. Prüfe in den Entwicklerwerkzeugen, wie deine Entities wirklich heißen, und setze ggf. <code>prefix:</code> in der Kartenkonfiguration.</small></div>`;
     }
   }
 }
