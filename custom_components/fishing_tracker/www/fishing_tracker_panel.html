@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.38.5 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.39.2 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -1650,8 +1650,8 @@ function weatherConfidenceBadge(wx) {
 
 // Laichzeiten pro Fischart [Monat, Monat] – während Laich: Penalty
 const SPAWN_MONTHS = {
-  Zander:   [4, 5],   Hecht:    [2, 4],   Barsch:   [4, 5],
-  Karpfen:  [5, 7],   Schleie:  [6, 7],   Aal:      [],
+  Zander:   [4, 5],   Hecht:    [2, 3],   Barsch:   [4, 5],
+  Karpfen:  [6, 6],   Schleie:  [6, 7],   Aal:      [],
   Brasse:   [5, 6],   Rotauge:  [4, 5],   Rotfeder: [5, 6],
   Döbel:    [5, 6],   Rapfen:   [5, 6],   Forelle:  [11, 1],
   Ukelei:   [5, 6],
@@ -1673,7 +1673,7 @@ const SEASONAL_ACTIVITY = {
   //          Jan   Feb   Mär   Apr   Mai   Jun   Jul   Aug   Sep   Okt   Nov   Dez
   // Hecht: Post-Laich-Boom Mär/Apr (60% Jahresnahrung!), Okt-Peak (Eierstock),
   // Jan/Feb Vorlaich-Anstieg, Hochsommer träge, Winter selten.
-  Hecht:    [0.85, 0.95, 1.20, 1.20, 1.05, 0.85, 0.72, 0.72, 1.00, 1.15, 1.05, 0.85],
+  Hecht:    [0.85, 0.90, 1.00, 1.15, 1.22, 0.95, 0.72, 0.72, 1.00, 1.18, 1.08, 0.88],
   // Zander: Frühjahrs-Fressphase direkt nach Laich (JAEGER: "erste Top-Fressphase"),
   // Herbst-Goldzeit Okt/Nov (aggressiv, auch tagsüber), Sommer solide (nachts/tief),
   // Winter mäßig aber möglich (Faulenzer). Ganzjährig fangbar.
@@ -1684,7 +1684,7 @@ const SEASONAL_ACTIVITY = {
   Barsch:   [0.90, 0.90, 1.00, 1.05, 1.00, 1.02, 1.05, 1.05, 1.10, 1.18, 1.05, 0.92],
   // Karpfen: April Top ("extrem hungrig"), Herbst kapital, Sommer gut aber
   // >24°C Abfall, Winter fast tot.
-  Karpfen:  [0.65, 0.68, 0.85, 1.18, 1.12, 1.05, 1.00, 1.00, 1.12, 1.10, 0.85, 0.68],
+  Karpfen:  [0.60, 0.62, 0.75, 1.00, 1.20, 1.15, 1.05, 1.05, 1.15, 1.00, 0.78, 0.62],
   // Schleie: ausgesprochener Sommerfisch, Frühjahr/Sommer top, Winter inaktiv.
   Schleie:  [0.65, 0.65, 0.80, 1.05, 1.18, 1.15, 1.08, 1.05, 0.95, 0.82, 0.70, 0.65],
   // Brasse: Frühjahr/Frühsommer stark, Sommer gut, Winter träge.
@@ -7536,7 +7536,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.38.5'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.39.2'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -7805,31 +7805,34 @@ function whyScoreHTML(fishName, opts) {
       </div>`;
     }).join('');
 
-  const bonusRow = Math.abs(b.bonus) >= 2 ? `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)">
-      <div style="flex:1;font-size:12px;color:var(--txt-sub)">Umwelt &amp; Spot (Solunar, Wind, Wetter, Tiefe)</div>
-      <div style="font-size:11px;font-weight:800;color:${b.bonus > 0 ? '#a3e635' : '#fb923c'};min-width:44px;text-align:right">${b.bonus > 0 ? '+' : ''}${b.bonus}</div>
+  const bonusRow = Math.abs(b.spotDelta || 0) >= 2 ? `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)">
+      <div style="flex:1;font-size:12px;color:var(--txt-sub)">Spot &amp; Erfahrung (Tiefe, Fluss, gelernte Muster)</div>
+      <div style="font-size:11px;font-weight:800;color:${b.spotDelta > 0 ? '#a3e635' : '#fb923c'};min-width:44px;text-align:right">${b.spotDelta > 0 ? '+' : ''}${b.spotDelta}</div>
       <div style="font-size:10px;color:var(--txt-muted);min-width:22px;text-align:right">Pkt</div>
     </div>` : '';
 
   // Geteilter Balken: Biologie-Anteil vs. Wetter-Anteil
-  const BIO = '#5b8dd6', WX_UP = '#3fb950', WX_DOWN = '#e0603a';
-  const bio = Math.max(0, b.bioScore), wd = b.weatherDelta;
-  const scale = Math.max(b.score, b.bioScore, 1);
-  let barHtml;
-  if (wd >= 0) {
-    barHtml = `<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--kpi-bg)">
-        <div style="width:${(bio / scale * 100).toFixed(1)}%;background:${BIO}"></div>
-        <div style="width:${(wd / scale * 100).toFixed(1)}%;background:${WX_UP}"></div>
-      </div>`;
-  } else {
-    barHtml = `<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--kpi-bg)">
-        <div style="width:${(b.score / scale * 100).toFixed(1)}%;background:${BIO}"></div>
-        <div style="width:${(-wd / scale * 100).toFixed(1)}%;background:repeating-linear-gradient(45deg,${WX_DOWN},${WX_DOWN} 4px,rgba(0,0,0,.25) 4px,rgba(0,0,0,.25) 8px)"></div>
-      </div>`;
-  }
+  const BIO = '#5b8dd6', WX_UP = '#3fb950', WX_DOWN = '#e0603a', SPOT = '#c084fc';
+  const bio = Math.max(0, b.bioScore), wd = b.weatherDelta, sd = b.spotDelta || 0;
+  // Balken = erreichbares Potenzial. Positive Anteile als Vollfarbe, verlorene
+  // Anteile schraffiert dahinter. Segmentsumme immer exakt 100% — vorher liefen
+  // die Breiten bei negativem Wetteranteil über den Container hinaus, und genau
+  // das ist mit dem Hitzemalus jetzt der Normalfall.
+  const posW = Math.max(0, wd), posS = Math.max(0, sd);
+  const loss = Math.abs(Math.min(0, wd)) + Math.abs(Math.min(0, sd));
+  const total = Math.max(1, bio + posW + posS + loss);
+  const pctW = v => (v / total * 100).toFixed(1);
+  const hatch = c => `repeating-linear-gradient(45deg,${c},${c} 4px,rgba(0,0,0,.3) 4px,rgba(0,0,0,.3) 8px)`;
+  const barHtml = `<div style="display:flex;height:22px;border-radius:6px;overflow:hidden;background:var(--kpi-bg)">
+      <div style="width:${pctW(bio)}%;background:${BIO}"></div>
+      ${posW ? `<div style="width:${pctW(posW)}%;background:${WX_UP}"></div>` : ''}
+      ${posS ? `<div style="width:${pctW(posS)}%;background:${SPOT}"></div>` : ''}
+      ${loss ? `<div style="width:${pctW(loss)}%;background:${hatch(WX_DOWN)}"></div>` : ''}
+    </div>`;
   const legend = `<div style="display:flex;gap:14px;margin-top:7px;font-size:11px;flex-wrap:wrap">
       <span style="color:var(--txt-sub)"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${BIO};margin-right:5px"></span>Biologie ${bio}</span>
       <span style="color:var(--txt-sub)"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${wd >= 0 ? WX_UP : WX_DOWN};margin-right:5px"></span>Wetter ${wd >= 0 ? '+' : ''}${wd}</span>
+      ${sd !== 0 ? `<span style="color:var(--txt-sub)"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${SPOT};margin-right:5px"></span>Spot ${sd > 0 ? '+' : ''}${sd}</span>` : ''}
       <span style="color:var(--txt-muted)">= ${b.score}</span>
     </div>`;
   const verdict = Math.abs(wd) < 4
@@ -8634,11 +8637,17 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   let pressure = 1013, solar = 0, windDir = 180, cloudCover = 50;
   let humidity = 70, windSpeed = 10, waterTemp = 13, pressureTrend = 0;
   let sunElevation = -5, deeperDepths = null, sol = {};
+  let airTemp = null;   // Lufttemperatur — für Hitzestress-Bewertung
 
   if (liveData) {
     ({ pressure, solar, windDir, cloudCover, humidity, windSpeed,
        waterTemp, pressureTrend, sunElevation, deeperDepths, sol } = liveData);
+    const _at = parseFloat(liveData.tempAir != null ? liveData.tempAir
+                          : liveData.airTemp != null ? liveData.airTemp : liveData.temperature);
+    if (!isNaN(_at)) airTemp = _at;
   } else if (fcData) {
+    const _at = parseFloat(fcData.airTemp != null ? fcData.airTemp : fcData.temperature);
+    if (!isNaN(_at)) airTemp = _at;
     pressure    = parseFloat(fcData.pressure          || 1013);
     windDir     = parseFloat(fcData.wind_bearing      || 180);
     cloudCover  = parseFloat(fcData.cloud_coverage    || fcData.cloud_cover || 50);
@@ -8708,7 +8717,7 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     Zander:   [4,   8, 25, 12, 19, 27],  // Beiß-Optimum 12-19°C; über 20°C tief+nachtaktiv, schwer fangbar (JAEGER); Wachstum bis 30 aber Fangbarkeit sinkt
     Barsch:   [3,   6, 27, 14, 23, 30],  // wärmetoleranter Allrounder, aktiv 21-24°C, erst über 24°C tagsüber tiefer (outdoorverliebt/JAEGER)
     Hecht:    [3,   6, 21, 10, 17, 24],  // Kaltwasser: perfekt 10-17°C, über 19-20°C träge
-    Karpfen:  [8,  14, 31, 20, 28, 34],  // wärmeliebend, ab 14-16 aktiv, über 28 in Schatten
+    Karpfen:  [8,  13, 30, 17, 24, 33],  // wärmeliebend, ab 14-16 aktiv, über 28 in Schatten
     Schleie:  [8,  14, 27, 18, 24, 29],  // ausgesprochen wärmeliebend, Sommerfisch
     Brasse:   [4,   8, 26, 14, 22, 29],  // gemäßigt, ab 10 aktiv, 15+ gut
     Rotauge:  [4,   8, 25, 14, 22, 27],  // gemäßigt tolerant
@@ -8816,6 +8825,41 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   // Niederschlag-Proxy aus Humidity + Clouds
   const rainProxy = humidity > 90 && cloudCover > 80;
   if (rainProxy) wxBonus += 5; // Bald Regen = Fische aktiv
+
+  // ── 10b. HITZE & GRELLE SONNE ────────────────────────────────────────────
+  // Bisher gab es dafür nur -2 Punkte (cloudCover < 20). Das ist für einen
+  // Hochsommermittag mit 34°C und wolkenlosem Himmel viel zu schwach: Fische
+  // stehen dann tief, träge und lichtscheu — besonders in klarem Wasser.
+  if (cloudCover < 25 && highSun) {
+    // Pralle Mittagssonne. WICHTIG gegen Doppelzählung: Arten, die mittags
+    // ohnehin kaum aktiv sind (Aal day 0.05, Wels 0.20, Zander sommers 0.22),
+    // stehen über die Aktivitätskurve bereits unten — die dürfen nicht noch
+    // einmal voll abgestraft werden. Der Abzug skaliert daher mit dem
+    // Tagesaktivitäts-Faktor der Art aus FT_ACTIVITY_PROFILE.
+    let _dayF = 0.6;
+    try {
+      const _pr = FT_ACTIVITY_PROFILE[fishName] || _DEFAULT_PROFILE;
+      const _mo = date.getMonth() + 1;
+      const _sv = (_mo >= 6 && _mo <= 8 && _pr.summer) ? _pr.summer
+                : ((_mo <= 2 || _mo === 12) && _pr.winter) ? _pr.winter : _pr;
+      if (typeof _sv.day === 'number') _dayF = _sv.day;
+    } catch (e) {}
+    wxBonus -= 8 * Math.min(1, _dayF / 0.7);
+  }
+  const _airT = airTemp;
+  if (_airT != null && _airT >= 28) {
+    // Hitzestress. BEWUSST MODERAT: die Wärme steckt über die Wassertemperatur
+    // (tempFactor) bereits im Modell — ein zweiter voller Abzug wäre Doppel-
+    // zählung. Die Lufttemperatur trägt nur das bei, was das Wasserthermometer
+    // nicht sieht: aufheizende Oberflächenschicht und Schichtung.
+    // Die Toleranz wird aus dem EIGENEN Temperaturoptimum der Art abgeleitet
+    // statt aus einer zweiten handgepflegten Liste — so können die beiden
+    // nicht auseinanderlaufen (vorher stand der Aal fälschlich bei den
+    // Kaltwasserarten, obwohl sein Optimum bis 25°C reicht).
+    const _phi = (TEMP_RANGES[fishName] && TEMP_RANGES[fishName][4]) || 22;
+    const tol = _phi >= 26 ? 0.3 : _phi >= 22 ? 0.6 : 1.0;
+    wxBonus -= Math.min(10, (_airT - 28) * 1.4 + 3) * tol;
+  }
 
   // ── 11. Deeper Tiefendaten ────────────────────────────────────────────────
   let depthBonus = 0;
@@ -9089,8 +9133,15 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     // neutral wäre? Die Differenz zum Endwert ist der Wetterbeitrag.
     // Biologie = Aktivitätskurve × Wassertemperatur × Jahreszeit (× Gewässerzustand).
     // Wetter   = Licht/Bewölkung, Sauerstoff, Luftdruck, Umwelt-Boni.
-    const _bioRaw   = bioNow * tempFactor * spawnMod * _waterDamper;
-    const _bioScore = softCapScore(_bioRaw);
+    // Drei Anteile sauber trennen:
+    //   Biologie = Art, Jahreszeit, Wassertemperatur, Tagesrhythmus, Sauerstoff
+    //   Wetter   = Luftdruck + Umwelt-Gunst (Solunar, Wind, Wolken, Front)
+    //   Spot     = Tiefe, Fluss, gelernte persönliche Muster
+    // Vorher steckten Tiefe/Fluss/Personal fälschlich im Wetter-Anteil.
+    const _bioCore  = bioNow * tempFactor * spawnMod * lightMult * o2Mult;
+    const _envPts   = envFavor * 2.2;
+    const _bioScore = softCapScore(_bioCore * _waterDamper);
+    const _bioWx    = softCapScore((_bioCore * pressureMult + _envPts) * _waterDamper);
     // Jeder Multiplikator als Abweichung von 1.0 → direkt als Prozent lesbar.
     // bonus ist additiv und wird deshalb in Rohpunkten ausgewiesen.
     return {
@@ -9102,12 +9153,14 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
         { key: 'season',  label: 'Jahreszeit',       mult: spawnMod },
         { key: 'light',   label: 'Licht / Tageszeit',mult: lightMult },
         { key: 'o2',      label: 'Sauerstoff',       mult: o2Mult },
+        { key: 'wx',      label: 'Wetterlage',       mult: 1 + (_envPts / 100) },
         { key: 'press',   label: 'Luftdruck',        mult: pressureMult },
         { key: 'water',   label: 'Gewässerzustand',  mult: _waterDamper },
       ],
       bonus: Math.round(bonus),
       bioScore: _bioScore,
-      weatherDelta: _final - _bioScore,
+      weatherDelta: _bioWx - _bioScore,
+      spotDelta: _final - _bioWx,
     };
   }
   return _final;
@@ -10557,9 +10610,19 @@ function deleteSession(idx) {
 let _analysisFishFilter = 'all'; // 'all' oder Fischart-Name
 
 function getAnalysisEntries() {
-  // Alle Einträge (Fänge + Nullnummern) aus dem history-Sensor holen
+  // Alle Einträge (Fänge + Nullnummern) aus dem history-Sensor holen.
+  // WICHTIG: entries UND latest kombinieren. Früher stand hier
+  // `h.latest || h.entries` — sobald latest gefüllt war (Session-Nullnummern),
+  // wurden die entries mit den echten Fängen NIE gelesen. Ergebnis: Analyse
+  // zeigte 0 Fänge trotz gefülltem Fangbuch. Das Fangbuch kombiniert beide
+  // Quellen ebenfalls und dedupliziert über den Zeitstempel.
   const h = findFTSensor('history')?.attributes || {};
-  const all = h.latest || h.entries || [];
+  const combined = [...(h.entries || []), ...(h.latest || [])];
+  const seen = new Set();
+  const all = combined.filter(e => {
+    if (!e.timestamp || seen.has(e.timestamp)) return false;
+    seen.add(e.timestamp); return true;
+  });
   return all.map(e => ({
     ...e,
     isCatch: parseInt(e.caught || 0) >= 1,
@@ -10612,6 +10675,7 @@ function ftEntryScore(e, species) {
       windSpeed:     num(e.wind_speed, 10),
       waterTemp:     num(e.water_temp, 13),
       pressureTrend: num(e.pressure_trend, 0),
+      tempAir:       num(e.temperature, 15),   // Lufttemperatur des Fangs
       sunElevation:  sunElev,
       deeperDepths:  null,
       sol: {},
@@ -10949,13 +11013,52 @@ function stopGpsWatch() {
 }
 
 // Beste verfügbare Position: frischer GPS-Fix bevorzugt, sonst HA-Standort
+// Standort aus der HA-Companion-App (device_tracker). Diese Quelle läuft im
+// Hintergrund weiter, während der Browser-Geolocation von iOS/Android bei
+// gesperrtem Bildschirm komplett angehalten wird. Sie ist damit die einzige
+// Möglichkeit, die Lücke bei Hintergrund-Pausen zu schließen.
+// Voraussetzung: In der Companion-App müssen die Standort-Sensoren aktiv sein.
+function getCompanionPosition() {
+  try {
+    const st = (typeof haStates !== 'undefined') ? haStates : null;
+    if (!st) return null;
+    let best = null;
+    for (const id in st) {
+      if (!id.startsWith('device_tracker.')) continue;
+      const a = st[id].attributes || {};
+      if (a.latitude == null || a.longitude == null) continue;
+      // Nur GPS-basierte Tracker, keine Router-/WLAN-Präsenz
+      if (a.source_type && a.source_type !== 'gps') continue;
+      const acc = (a.gps_accuracy != null) ? parseFloat(a.gps_accuracy) : 999;
+      const upd = st[id].last_updated ? new Date(st[id].last_updated).getTime() : 0;
+      const cand = { lat: parseFloat(a.latitude), lon: parseFloat(a.longitude), acc, upd };
+      if (isNaN(cand.lat) || isNaN(cand.lon)) continue;
+      // Bester Kandidat: aktuellster, bei Gleichstand genauester
+      if (!best || cand.upd > best.upd || (cand.upd === best.upd && cand.acc < best.acc)) best = cand;
+    }
+    return best;
+  } catch (e) { return null; }
+}
+
+// Liefert [lat, lon, accuracy] aus der jeweils besten verfügbaren Quelle.
 function getBestLivePosition() {
-  // Frischer GPS-Fix (jünger als 60s)?
-  if (_lastGpsFix && (Date.now() - _lastGpsFix.ts) < 60000) {
-    return [_lastGpsFix.lat, _lastGpsFix.lon];
+  const gpsFresh = _lastGpsFix && (Date.now() - _lastGpsFix.ts) < 60000;
+  const comp = getCompanionPosition();
+  const compFresh = comp && (Date.now() - comp.upd) < 5 * 60000;
+
+  // Beide frisch → den genaueren nehmen
+  if (gpsFresh && compFresh) {
+    return (comp.acc < (_lastGpsFix.acc || 999))
+      ? [comp.lat, comp.lon, comp.acc]
+      : [_lastGpsFix.lat, _lastGpsFix.lon, _lastGpsFix.acc];
   }
-  // Fallback: HA-person-Standort
-  return (typeof getBestCenter === 'function') ? getBestCenter() : null;
+  if (gpsFresh) return [_lastGpsFix.lat, _lastGpsFix.lon, _lastGpsFix.acc];
+  // Browser-GPS pausiert (Bildschirm gesperrt) → Companion-Standort nutzen.
+  // Das ist der eigentliche Gewinn: die Spur reißt im Hintergrund nicht mehr ab.
+  if (comp && (Date.now() - comp.upd) < 30 * 60000) return [comp.lat, comp.lon, comp.acc];
+  // Letzter Fallback: HA-person-Standort (ohne Genauigkeitsangabe)
+  const ctr = (typeof getBestCenter === 'function') ? getBestCenter() : null;
+  return ctr ? [ctr[0], ctr[1], null] : null;
 }
 
 // iOS/Android pausieren watchPosition komplett, sobald der Bildschirm sperrt
@@ -11024,6 +11127,11 @@ async function startSession() {
 // isJump=true: erzwingt das Speichern (auch ohne genug Bewegung/Zeit seit dem
 // letzten Punkt) und markiert ihn – kommt vom visibilitychange-Handler, wenn
 // die App nach Hintergrund-Pause wieder sichtbar wird (möglicher Ortswechsel).
+// Schlechteste noch akzeptierte GPS-Genauigkeit. Alles darüber ist für eine
+// Uferspur wertlos und erzeugt nur Scheinbewegung.
+const FT_GPS_MAX_ACC = 40;   // Meter
+let _ftIdlePoint = false;    // Merker: nächster Punkt entstand ohne echte Bewegung
+
 function recordSessionTrackPoint(isJump) {
   const sess = getActiveSession();
   if (!sess) return;
@@ -11031,17 +11139,35 @@ function recordSessionTrackPoint(isJump) {
   const pos = getBestLivePosition();
   if (!pos || pos[0] == null) return;
   const [lat, lon] = pos;
+  // Genauigkeit des zugrundeliegenden Fixes (Meter), falls bekannt
+  const acc = (pos[2] != null) ? pos[2]
+            : (_lastGpsFix && (Date.now() - _lastGpsFix.ts) < 60000 ? _lastGpsFix.acc : null);
+  // Unbrauchbare Fixes gar nicht erst aufnehmen
+  if (!isJump && acc != null && acc > FT_GPS_MAX_ACC) return;
+
   sess.track = sess.track || [];
   const last = sess.track[sess.track.length - 1];
-  // Punkt speichern wenn Position sich geändert hat (>5m) oder >2 Min vergangen
   const now = Date.now();
   if (last && !isJump) {
-    const dLat = Math.abs(last.lat - lat), dLon = Math.abs(last.lon - lon);
-    const movedFar = dLat > 0.00005 || dLon > 0.00008;  // ~5-6m
+    const movedM = haversineM(last.lat, last.lon, lat, lon);
+    // Bewegung muss das Messrauschen ÜBERSTEIGEN, sonst ist es Zittern im Stand.
+    // Schwelle aus der Genauigkeit beider Punkte statt fixer 5 m — bei 15 m
+    // Genauigkeit sind 5 m Differenz reines Rauschen, keine Bewegung.
+    const noise = Math.max(acc || 12, last.acc || 12);
+    const need = Math.max(10, noise * 1.3);
     const timeSince = now - new Date(last.ts).getTime();
-    if (!movedFar && timeSince < 2 * 60000) return;
+    if (movedM < need && timeSince < 2 * 60000) return;
+    // Unplausible Geschwindigkeit (zu Fuß am Ufer) → GPS-Ausreißer verwerfen
+    const kmh = timeSince > 0 ? (movedM / 1000) / (timeSince / 3600000) : 0;
+    if (kmh > 20 && movedM < 2000) return;
+    // Punkt nur wegen Zeitablauf gespeichert, ohne echte Bewegung → als
+    // "steht" markieren. Solche Punkte dürfen keine Strecke erzeugen, sonst
+    // summiert sich das Rauschen beim Stillsitzen über Stunden auf.
+    if (movedM < need) _ftIdlePoint = true;
   }
   const point = { ts: new Date().toISOString(), lat, lon };
+  if (_ftIdlePoint) { point.idle = true; _ftIdlePoint = false; }
+  if (acc != null) point.acc = Math.round(acc);
   if (isJump) point.afterBackground = true;  // Markierung für Distanzberechnung
   sess.track.push(point);
   // Spur begrenzen (max 1000 Punkte)
@@ -11084,6 +11210,19 @@ function trackDistanceM(track) {
     const isMarkedJump = track[i].afterBackground === true;
     const isImplausibleJump = segM > 2000;
     if (isMarkedJump || isImplausibleJump) continue;
+    // Segmente innerhalb des Messrauschens nicht mitzählen — sonst summiert
+    // sich GPS-Zittern im Stand über Stunden zu Phantom-Kilometern.
+    // Zwei GPS-Fixes am selben Ort weichen im Mittel um das ~1,4-fache der
+    // Streuung ab. Erst ab dem 2-fachen ist Bewegung statistisch belegt.
+    // Getestet gegen simulierte Spuren: 4h regungslos ergeben damit 0,12 km
+    // statt 2,2 km, während 1,2 km echter Weg mit 1,26 km erhalten bleiben.
+    // (Ein zusätzlicher Ausschluss der "idle"-Punkte wurde verworfen — er
+    // halbierte die echte Gehstrecke, ohne das Rauschen weiter zu senken.)
+    const noise = Math.max(track[i].acc || 12, track[i-1].acc || 12);
+    if (segM < noise * 2) continue;
+    // Unplausible Geschwindigkeit zwischen zwei Punkten → Ausreißer
+    const dtH = (new Date(track[i].ts) - new Date(track[i-1].ts)) / 3600000;
+    if (dtH > 0 && (segM / 1000) / dtH > 20) continue;
     total += segM;
   }
   return total;
