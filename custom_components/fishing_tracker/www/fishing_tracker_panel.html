@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.39.4 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.39.5 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -4688,7 +4688,7 @@ function analyzePressureTrajectory(targetTimestampMs) {
   if (!_omPressureCache || !_omPressureCache.pressures || !_omPressureCache.times.length) {
     // Kein Verlauf verfügbar — neutrales Ergebnis, alte Logik greift weiter
     return { pressure: null, trendRate: 0, stableHours: 0,
-             hoursUntilBigDrop: null, hoursSinceBigDrop: null };
+             hoursUntilBigDrop: null, hoursSinceBigDrop: null, change24h: null };
   }
   const { times, pressures } = _omPressureCache;
   // Index in der Zeitreihe finden, der der Zielstunde am nächsten liegt
@@ -4702,7 +4702,7 @@ function analyzePressureTrajectory(targetTimestampMs) {
   const p = pressures[idx];
   if (p == null) {
     return { pressure: null, trendRate: 0, stableHours: 0,
-             hoursUntilBigDrop: null, hoursSinceBigDrop: null };
+             hoursUntilBigDrop: null, hoursSinceBigDrop: null, change24h: null };
   }
 
   // 3h-Trend an der Zielstunde
@@ -4735,7 +4735,14 @@ function analyzePressureTrajectory(targetTimestampMs) {
     if (rate <= -0.8) { hoursSinceBigDrop = k; break; }
   }
 
-  const result = { pressure: p, trendRate, stableHours, hoursUntilBigDrop, hoursSinceBigDrop };
+  // Druckänderung über die letzten 24 Stunden. Der 3h-Trend allein sieht ein
+  // Plateau nach starkem Anstieg als "stabil" — die Fische sind dann aber noch
+  // mitten in der Umstellung. Quellen: Anpassung dauert Stunden bis Tage.
+  let change24h = null;
+  const i24 = idx - 24;
+  if (i24 >= 0 && pressures[i24] != null) change24h = p - pressures[i24];
+
+  const result = { pressure: p, trendRate, stableHours, hoursUntilBigDrop, hoursSinceBigDrop, change24h };
   _trajectoryCache[cacheKey] = result;
   return result;
 }
@@ -4866,7 +4873,7 @@ function computeStabilityHours(currentP) {
  * Quellen: Anglerpraxis-Konsens (Barsch-Alarm, Fisch&Fang, Blinker),
  *   fischapp.com/luftdruck, netzwerk-angeln.de Zander-Luftdruck-Artikel
  */
-function pressureBiteFavorability(p, trendRate, stableHours, species, hoursUntilBigDrop, hoursSinceBigDrop) {
+function pressureBiteFavorability(p, trendRate, stableHours, species, hoursUntilBigDrop, hoursSinceBigDrop, change24h) {
   // ── Schwimmblase-Typ & Druckempfindlichkeit je Art ──────────────────────
   // trendSensitivity: wie stark bestraft Trendänderung den Score (1.0 = Standard)
   // idealCenter:      optimaler absoluter Druck
@@ -4979,7 +4986,28 @@ function pressureBiteFavorability(p, trendRate, stableHours, species, hoursUntil
     }
   }
 
-  return Math.max(0, Math.min(100, levelScore + trendBonus + stabilityBonus + shallowMalus + preStormBoost + postFrontDip));
+  // ── 6. Umstellungsphase nach Druckwechsel ────────────────────────────────
+  // Entscheidend ist nicht der absolute Wert, sondern die jüngste Änderung.
+  // Nach einem kräftigen Wechsel brauchen Fische Stunden bis Tage, um sich
+  // einzustellen — in dieser Phase stehen sie oft sichtbar da, fressen aber
+  // nicht. Der 3h-Trend erkennt das nicht, weil das Plateau "stabil" aussieht.
+  let adjustMal = 0;
+  if (change24h != null) {
+    const mag = Math.abs(change24h);
+    if (mag >= 5) {
+      adjustMal = -Math.min(26, (mag - 4) * 2.6);
+      // Physoclisten (Zander, Barsch) gleichen langsamer aus als Physostomen
+      adjustMal *= prof.physo ? 0.85 : 1.15;
+    }
+  }
+  // ── 7. Extremer Hochdruck ────────────────────────────────────────────────
+  // Über ~1025 hPa raten erfahrene Angler geschlossen ab. Darunter ist die
+  // Quellenlage uneinheitlich, deshalb bleibt der Bereich 1015-1025 unbestraft.
+  let highMal = 0;
+  if (p > 1025) highMal = -Math.min(20, (p - 1025) * 2.5);
+
+  return Math.max(0, Math.min(100, levelScore + trendBonus + stabilityBonus
+    + shallowMalus + preStormBoost + postFrontDip + adjustMal + highMal));
 }
 
 /**
@@ -5540,7 +5568,15 @@ function drawPressureChart(id, pastPts, futurePts, base) {
       ? (futurePts[1] != null ? futurePts[1] - v : 0)
       : (futurePts[i] - futurePts[i-1]);
     const _chartSpecies = (typeof selFish !== 'undefined' && selFish) ? selFish : null;
-    const score = pressureBiteFavorability(clamp(v), trendRate / 2, stableHours, _chartSpecies);
+    // Druckänderung der letzten 24h auch im Chart berücksichtigen — sonst
+    // zeigt es Grün, während die Beißchance wegen der Umstellungsphase gedämpft ist.
+    let _ch24 = null;
+    try {
+      const allPts = pastPts.concat(futurePts);
+      const gi = nowIdx + i;                    // Index im Gesamtverlauf
+      if (gi - 24 >= 0 && allPts[gi - 24] != null) _ch24 = v - allPts[gi - 24];
+    } catch (e) {}
+    const score = pressureBiteFavorability(clamp(v), trendRate / 2, stableHours, _chartSpecies, null, null, _ch24);
     const col = pressureBiteColor(score);
     return `<circle cx="${cx}" cy="${cy}" r="6" fill="${col}" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>`;
   }).join('');
@@ -7536,7 +7572,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.39.4'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.39.5'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -9001,7 +9037,7 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   // Dient außerdem als Fallback-Trend für Forecast-Stunden ohne liveData,
   // die bisher immer pressureTrend=0 hatten (Mehrtages-Prognosen waren
   // dadurch komplett druck-blind).
-  let hoursUntilBigDrop = null, hoursSinceBigDrop = null;
+  let hoursUntilBigDrop = null, hoursSinceBigDrop = null, _change24h = null;
   try {
     const targetDate = new Date(date);
     targetDate.setHours(hour, 0, 0, 0);
@@ -9009,6 +9045,7 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
     if (traj.pressure != null) {
       hoursUntilBigDrop = traj.hoursUntilBigDrop;
       hoursSinceBigDrop = traj.hoursSinceBigDrop;
+      _change24h = traj.change24h;
       if (!liveData) {
         pressure = traj.pressure;
         pressureTrend = traj.trendRate;
@@ -9017,7 +9054,7 @@ function calcUnifiedDayScore(fishName, date, targetHour, liveData, fcData, optio
   } catch(e) {}
 
   const _pStable = computeStabilityHours(pressure);
-  const _pScore  = pressureBiteFavorability(pressure, pressureTrend, _pStable, fishName, hoursUntilBigDrop, hoursSinceBigDrop);
+  const _pScore  = pressureBiteFavorability(pressure, pressureTrend, _pStable, fishName, hoursUntilBigDrop, hoursSinceBigDrop, _change24h);
   let pressureMult = 0.82 + (_pScore / 100) * 0.30;   // 0.82 … 1.12
   // Fallender Druck (Front naht): kurzfristiger Aktivitäts-Schub, v.a. Räuber
   if (pressureTrend < -0.6) {
