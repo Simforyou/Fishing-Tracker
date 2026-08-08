@@ -93,7 +93,7 @@
     <div class="ft-logo">🎣</div>
     <div class="ft-title-box">
       <div class="ft-title">Fishing Tracker</div>
-      <div class="ft-sub" id="ft-version-sub">v2.39.5 · Premium Intelligence</div>
+      <div class="ft-sub" id="ft-version-sub">v2.39.6 · Premium Intelligence</div>
     </div>
     <div class="ft-live">
       <div class="dot"></div>
@@ -696,8 +696,8 @@ async function selectWaterBody(slug, name) {
   try { _waterTempHistoryAsync = null; _waterTempHistoryInFlight = false; window._wtDebugLogged = false; } catch(e){}
   // Kurz warten bis Backend gescrapt hat, dann neu rendern
   if (typeof showToast === 'function') showToast('Gewässer: ' + name + ' — lädt…');
-  setTimeout(() => { scheduleRenderView(); }, 2500);
-  setTimeout(() => { scheduleRenderView(); }, 6000);
+  setTimeout(() => { scheduleRenderView({ force: true }); }, 2500);
+  setTimeout(() => { scheduleRenderView({ force: true }); }, 6000);
 }
 
 function waterPickerHTML() {
@@ -1860,7 +1860,7 @@ function getRelevantSpecies() {
 }
 function setRelevantSpecies(arr) {
   try { localStorage.setItem(FT_RELEVANT_KEY, JSON.stringify(arr)); } catch (e) {}
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 function toggleRelevantSpecies(name) {
   const cur = getRelevantSpecies() || Object.keys(_globalFishData || {});
@@ -4781,13 +4781,24 @@ let _drawChartHashes = {};
 
 // Debounced renderView: max 1 Re-Render alle 250ms, sammelt mehrere async-completions
 let _scheduleRenderTimer = null;
-function scheduleRenderView() {
+// Neuzeichnen anfordern.
+//   scheduleRenderView()                -> Hintergrund-Aktualisierung. Wartet,
+//       solange der Nutzer scrollt/tippt oder ein Formular offen ist.
+//   scheduleRenderView({ force: true }) -> AUSGELÖST DURCH EINE NUTZERAKTION
+//       (Klick auf Filter, Aufklappen, Auswahl). Muss sofort wirken.
+// Diese Trennung ist nötig: Ein Klick markiert selbst eine Interaktion, wodurch
+// die Warteschleife sich endlos selbst verlängerte — Aufklappen im Fangbuch,
+// Filter und Auswahlen reagierten dadurch verzögert oder gar nicht.
+function scheduleRenderView(opts) {
+  if (opts && opts.force) {
+    if (_scheduleRenderTimer) { clearTimeout(_scheduleRenderTimer); _scheduleRenderTimer = null; }
+    try { if (typeof renderView === 'function') renderView(); } catch(e) {}
+    return;
+  }
   if (_scheduleRenderTimer) return;
   _scheduleRenderTimer = setTimeout(() => {
     _scheduleRenderTimer = null;
-    // Eingabe-Kontext offen? Render aufschieben, sonst geht die Eingabe verloren.
     if (isInputContextOpen()) { scheduleRenderView(); return; }
-    // Nutzer scrollt/tippt gerade? Ebenfalls aufschieben (Scroll-Position).
     if (recentlyInteracted()) { scheduleRenderView(); return; }
     try { if (typeof renderView === 'function') renderView(); } catch(e) {}
   }, (isInputContextOpen() || recentlyInteracted()) ? 1500 : 250);
@@ -7572,7 +7583,7 @@ const tops = generalDayCurve().map((v,h) => ({h:String(h).padStart(2,'0')+':00',
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">⚙️ System</div>
-        ${[['Version', 'v2.39.5'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
+        ${[['Version', 'v2.39.6'],['Sensoren aktiv', Object.keys(haStates).filter(k=>k.startsWith('sensor.')).length.toString()]].map(([l,v])=>`<div class="set-row"><span>${l}</span><code class="set-code">${v}</code></div>`).join('')}
       </div>
       <div class="panel" style="margin-top:10px">
         <div class="sec">📍 Orts-Prognose</div>
@@ -8279,7 +8290,7 @@ function setManualWaterState(key) {
   try { localStorage.setItem(FT_WATERSTATE_KEY, key); } catch(e) {}
   // Sofort in die aktiven River-Daten übernehmen, damit Scores gleich stimmen
   applyManualWaterStateToRiverData();
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 function applyManualWaterStateToRiverData() {
   const key = getManualWaterState();
@@ -10214,13 +10225,13 @@ function saveLogbookState(st) {
 }
 function setLogbookFilter(val) {
   const st = getLogbookState(); st.filter = val; saveLogbookState(st);
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 function setLogbookAnglerFilter(name) {
   const st = getLogbookState();
   st.anglerFilter = (st.anglerFilter === name) ? '' : name;  // Toggle
   saveLogbookState(st);
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 function toggleLogbookYear(year) {
   const st = getLogbookState();
@@ -10228,7 +10239,7 @@ function toggleLogbookYear(year) {
   const i = st.openYears.indexOf(year);
   if (i >= 0) st.openYears.splice(i, 1); else st.openYears.push(year);
   saveLogbookState(st);
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 function toggleLogbookMonth(key) {
   const st = getLogbookState();
@@ -10236,7 +10247,7 @@ function toggleLogbookMonth(key) {
   const i = st.openMonths.indexOf(key);
   if (i >= 0) st.openMonths.splice(i, 1); else st.openMonths.push(key);
   saveLogbookState(st);
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 
 // Fallback-/Logo-Bild (klassische Unterwasserszene) — liegt unter /local/
@@ -10649,7 +10660,7 @@ function deleteSession(idx) {
     hist.splice(idx, 1);
     localStorage.setItem(FT_SESSION_HISTORY_KEY, JSON.stringify(hist));
     if (typeof showToast === 'function') showToast('Session gelöscht', '#ff9d18');
-    scheduleRenderView();
+    scheduleRenderView({ force: true });
   } catch(e) {}
 }
 
@@ -10681,7 +10692,7 @@ function getAnalysisEntries() {
 
 function setAnalysisFilter(f) {
   _analysisFishFilter = f;
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -11169,7 +11180,7 @@ async function startSession() {
   if (typeof showToast === 'function') showToast('🎣 Session gestartet — Petri Heil!', '#67d33f');
   // Echtes Geräte-GPS starten für präzise Streckenaufzeichnung
   startGpsWatch();
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 
 // GPS-Punkt zur Session-Spur hinzufügen (von watchPosition + Render-Zyklus aufgerufen)
@@ -11521,7 +11532,7 @@ function closeSessionSummary() {
   const overlay = document.getElementById('sessionSummaryOverlay');
   if (overlay) overlay.style.display = 'none';
   if (_sessionSummaryMap) { try { _sessionSummaryMap.remove(); } catch(e){} _sessionSummaryMap = null; }
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 
 // Erzeugt eine Nullnummer mit historischem Wetter für einen bestimmten Zeitpunkt
@@ -11631,7 +11642,7 @@ async function quickSessionCatch(fishType, lengthCm) {
   }
 
   if (ok && typeof showToast === 'function') showToast('🐟 ' + fishType + (lengthCm ? ' · ' + lengthCm + 'cm' : '') + ' gespeichert!', '#67d33f');
-  scheduleRenderView();
+  scheduleRenderView({ force: true });
 }
 
 // Schnell-Erfassungs-Dialog (Fischart-Buttons + optionale Länge)
